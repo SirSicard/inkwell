@@ -151,12 +151,19 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       Records a meeting from this machine: the mic (with Bluetooth output, the built-in one
  *       unless "meetings.headset_mic" is on) and the far end ("app", when the start answers a
  *       "meeting.detected" offer: that app; otherwise everything this machine plays). Both
- *       optional. "meeting.started" (with the title, the app's name and the mic), then the live
- *       events. Only when the user asks: detection offers, it never starts a recording.
+ *       optional. "meeting.started" (with the title, the app's name, the mic and
+ *       "delete_until_unix_ms"), then the live events. Only when the user asks, or for an app the
+ *       user chose Always for (below), which starts here the same way, with "auto" in
+ *       "meeting.started": the shell shows every recording from that event.
  *   {"cmd":"meeting.stop"}
  *       Ends the recording; the final pass follows ("meeting.stopped" ... "meeting.finished").
  *       A meeting started for an app also ends by itself 15 s after that app lets go of the
  *       microphone.
+ *   {"cmd":"meeting.discard"}
+ *       "Stop and delete", within a minute of a start made here (until "delete_until_unix_ms"):
+ *       the recording ends, no final pass runs, and the record and its audio are deleted as if
+ *       never made ("meeting.stopped", then "meeting.discarded"). Later it is refused with code
+ *       "delete_window_over": stop it, then delete it from the library.
  *   {"cmd":"meeting.dismiss","app":"<app id>"}
  *       "Not this one": the offer ends ("meeting.detection_ended" with "dismissed") and that app
  *       is not offered again until it releases the microphone.
@@ -170,9 +177,23 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       once the shell's own engines are registered, so a recovered meeting gets them too. Sent
  *       while a recovery runs, it is never refused: that recovery goes one more round (asks
  *       during a round count as one), ending with its own "meetings.recovered".
- *   Detection follows the "meetings.detect" setting (on unless turned off): "meeting.detection"
- *   says whether it listens, "meeting.detected" offers an app that has held the microphone for
- *   3 s, "meeting.detection_ended" takes the offer back.
+ *   {"cmd":"meetings.calls.list","id":"<ref>"}
+ *       "meetings.calls": the default call policy and every app seen holding the microphone for a
+ *       call, or chosen for (at most 64), with its policy and whether it was chosen.
+ *   {"cmd":"meetings.calls.set","app":"<app id>","policy":"always|ask|never|default","id":"<ref>"}
+ *       One app's call policy, by the identity detection reports (never its name): always (its
+ *       calls are recorded at once, visibly), ask (offered), never (neither), or default (follow
+ *       the default again). Saved and applied at once: an offered app set to never is withdrawn
+ *       ("meeting.detection_ended", dismissed), a held app set to ask is offered. An app offered
+ *       and set to always stays offered: send meeting.start for it ("Always for this app").
+ *       Answers "meetings.calls" with the "id" as "ref".
+ *   Detection listens while any app could be offered or recorded (the default call policy,
+ *   "meetings.calls.default", is not never, or an app is chosen always or ask): "meeting.detection"
+ *   says whether it listens. An app that has held the microphone for 3 s is offered
+ *   ("meeting.detected"; "meeting.detection_ended" takes the offer back) when its policy is ask,
+ *   recorded when it is always (offered instead, with a "message", when that start fails, or
+ *   after the user stopped a recording by hand during this call), and left alone when it is
+ *   never. Unasked "meetings.calls" says the list changed (a new app seen, the default set).
  *
  *   The screens' commands run on their own thread, in order among themselves, so a model update
  *   holding the commands above never delays them. Each answers with the event named, or
@@ -246,7 +267,9 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       that consent in the same write, answering "consent.state" too; an edit key set without a
  *       consent edits nothing),
  *       "dictation.enabled" (on|off: the shell's own switch, read before it sends
- *       dictation.enable), "meetings.detect" (on|off), "meetings.headset_mic" (on|off),
+ *       dictation.enable), "meetings.calls.default" (ask|always|never: the call policy for apps
+ *       not chosen for; ask unless set), "meetings.detect" (on|off: the old "Offer to record
+ *       calls", answered for the default: off is never, on over never is ask), "meetings.headset_mic" (on|off),
  *       "meetings.llm" (on|off: a meeting's summary and Ask; as for dictation.polish, setting.set
  *       takes only off, which also withdraws their consent, and consent.allow turns it on),
  *       "llm.local_only" (on|off: on unless turned off, and on when unreadable; while on, a

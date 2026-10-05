@@ -628,24 +628,15 @@ impl Core {
         let asking = Asking::start(shared.clone(), runs.clone())?;
         let tester = crate::cloud::Tester::start(shared.clone())?;
         shared.events.emit(events::ready());
-        // Detection follows the user's setting (on unless turned off); what it finds is offered
-        // only once the shell is listening, after `core.ready`.
-        // Its first state is always said (`meeting.detection`), so the shell follows the core's
-        // state, never the setting it shows.
-        let detect = match shared.store.setting(crate::control::DETECT_KEY) {
-            Ok(v) => Msg::Detect {
-                on: v.as_deref() != Some("off"),
-                why_off: None,
-            },
-            Err(e) => {
-                log::warn!("the detection setting could not be read ({e}); detection stays off");
-                Msg::Detect {
-                    on: false,
-                    why_off: Some(format!("couldn't read the detection setting: {e}")),
-                }
-            }
-        };
-        control.send(detect).map_err(io::Error::other)?;
+        // Detection follows the call policies (crate::calls): it listens while any app could be
+        // offered or recorded, which with no choices made is the old switch, on unless turned off
+        // (migrated into the default here, once). What it finds is offered only once the shell is
+        // listening, after `core.ready`. Its first state is always said (`meeting.detection`), so
+        // the shell follows the core's state, never the setting it shows.
+        crate::calls::migrate(shared.store.as_ref());
+        control
+            .send(Msg::Calls { announce: false })
+            .map_err(io::Error::other)?;
         // The launch's retention sweep, off every thread a screen or a meeting waits on.
         let retention = Sweeper::start(shared.clone())?;
         let _ = shared.sweeps.set(Mutex::new(retention.sender()));
@@ -980,8 +971,9 @@ fn read_meeting_command(json: &str) -> Result<Option<MeetingCommand>, String> {
     };
     let fields: &[&str] = match name {
         "meeting.start" => &["app", "title"],
-        "meeting.stop" | "meetings.recover" => &[],
+        "meeting.stop" | "meeting.discard" | "meetings.recover" | "meetings.calls.list" => &[],
         "meeting.dismiss" => &["app"],
+        "meetings.calls.set" => &["app", "policy"],
         "meeting.ask" => &["question"],
         _ => return Ok(None),
     };
@@ -1010,6 +1002,20 @@ fn read_meeting_command(json: &str) -> Result<Option<MeetingCommand>, String> {
             title: text("title")?,
         }),
         "meeting.stop" => MeetingCommand::Control(Msg::Stop { id }),
+        "meeting.discard" => MeetingCommand::Control(Msg::Discard { id }),
+        "meetings.calls.list" => MeetingCommand::Control(Msg::CallsList { id }),
+        "meetings.calls.set" => {
+            // An identity is checked as given, never trimmed: it must be the one detection
+            // reports.
+            let app = match v.get("app") {
+                Some(Value::String(s)) => s.clone(),
+                _ => return Err(format!("{name}: needs a string \"app\"")),
+            };
+            crate::calls::check_app(&app).map_err(|e| format!("{name}: {e}"))?;
+            let policy = crate::calls::parse_choice(&needed("policy")?)
+                .map_err(|e| format!("{name}: {e}"))?;
+            MeetingCommand::Control(Msg::CallsSet { id, app, policy })
+        }
         "meeting.dismiss" => MeetingCommand::Control(Msg::Dismiss {
             id,
             app: needed("app")?,

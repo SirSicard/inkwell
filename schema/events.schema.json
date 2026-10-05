@@ -113,6 +113,12 @@
       "$ref": "#/$defs/MeetingDetection"
     },
     {
+      "$ref": "#/$defs/MeetingsCalls"
+    },
+    {
+      "$ref": "#/$defs/MeetingDiscarded"
+    },
+    {
       "$ref": "#/$defs/MeetingAnswered"
     },
     {
@@ -324,9 +330,10 @@
     },
     "FailureCode": {
       "type": "string",
-      "description": "A command.failed a shell acts on: list_unreadable (a snippets.save or voice_commands.save refused because the stored list cannot be read; send it again with replace_unreadable to start over).",
+      "description": "A command.failed a shell acts on: list_unreadable (a snippets.save or voice_commands.save refused because the stored list cannot be read; send it again with replace_unreadable to start over); delete_window_over (a meeting.discard after the meeting's first minute: only Stop is left, and the record can be deleted from the library once it is finished).",
       "enum": [
-        "list_unreadable"
+        "list_unreadable",
+        "delete_window_over"
       ]
     },
     "Refusal": {
@@ -1356,7 +1363,7 @@
     },
     "MeetingStarted": {
       "type": "object",
-      "description": "A meeting's record exists and its capture is being transcribed live. Names what the shell shows of it: its title, its app and its mic, when known.",
+      "description": "A meeting's record exists and its capture is being transcribed live. Names what the shell shows of it: its title, its app and its mic, when known. Sent for every meeting, however it started (Record, the consent Drop's offer, or an app's Always policy): the shell shows the recording indicator from this event, so a call recorded by its policy shows exactly as one the user started.",
       "properties": {
         "type": {
           "const": "meeting.started"
@@ -1392,6 +1399,14 @@
         "far_end": {
           "$ref": "#/$defs/FarEnd",
           "description": "What it records as the other side."
+        },
+        "auto": {
+          "type": "boolean",
+          "description": "True when the app's call policy (Always) started it, without a tap: the shell says so where the recording shows, keeps the reminder to tell the others, and offers Stop and Stop and delete. Absent for a start the user made."
+        },
+        "delete_until_unix_ms": {
+          "type": "integer",
+          "description": "Until this moment, Unix ms (a minute after the start), meeting.discard (Stop and delete) may delete this meeting as if it had never been made; after it only Stop is offered (meeting.discard is refused with delete_window_over). Absent for a meeting that cannot be deleted so (a replay)."
         }
       },
       "required": [
@@ -1435,7 +1450,7 @@
     },
     "MeetingDetected": {
       "type": "object",
-      "description": "An app has held the microphone long enough to be a call, and no meeting is being recorded: the shell offers to record it (the consent Drop), and records only if the user says so (meeting.start with this app).",
+      "description": "An app has held the microphone long enough to be a call, and no meeting is being recorded: the shell offers to record it (the consent Drop), and records only if the user says so (meeting.start with this app). Its policy is Ask (meetings.calls), or Always with a start that failed (message says why) or with a recording the user stopped by hand during this call. The Drop can also set the app's policy (meetings.calls.set): Always (then meeting.start) or Never.",
       "properties": {
         "type": {
           "const": "meeting.detected"
@@ -1447,6 +1462,10 @@
         "app_name": {
           "type": "string",
           "description": "Its name, as the shell shows it."
+        },
+        "message": {
+          "type": "string",
+          "description": "Why it is offered rather than recorded, when its policy is Always and the recording could not start by itself (the platform's error). Never content."
         }
       },
       "required": [
@@ -1458,7 +1477,7 @@
     },
     "MeetingDetectionEnded": {
       "type": "object",
-      "description": "The offer to record an app is over before it was taken: the app released the microphone, or the user said not this one (meeting.dismiss).",
+      "description": "The offer to record an app is over before it was taken: the app released the microphone, or the user said not this one (meeting.dismiss), or its policy became Never (meetings.calls.set).",
       "properties": {
         "type": {
           "const": "meeting.detection_ended"
@@ -1469,7 +1488,7 @@
         },
         "dismissed": {
           "type": "boolean",
-          "description": "Whether the user dismissed it (rather than the app releasing the microphone)."
+          "description": "Whether the user dismissed it, by Not this one or Never (rather than the app releasing the microphone)."
         }
       },
       "required": [
@@ -1481,7 +1500,7 @@
     },
     "MeetingDetection": {
       "type": "object",
-      "description": "Whether the core is listening for calls now: sent once at start whatever the state (off included, with a message when the setting could not be read), then when detection starts, stops (the meetings.detect setting), fails to start, or stops on its own (the platform stopped answering). The shell shows this state, not the setting.",
+      "description": "Whether the core is listening for calls now: sent once at start whatever the state (off included, with a message when the default call policy could not be read), then when detection starts, stops (the call policies: it listens while any app could be offered or recorded, so a default of Never with no app chosen for is off), fails to start, or stops on its own (the platform stopped answering). The shell shows this state, not the setting.",
       "properties": {
         "type": {
           "const": "meeting.detection"
@@ -1498,6 +1517,110 @@
       "required": [
         "type",
         "listening"
+      ],
+      "additionalProperties": false
+    },
+    "CallPolicy": {
+      "type": "string",
+      "description": "What happens when an app holds the microphone for a call: always (recorded at once, visibly, as by Record), ask (the consent Drop offers it) or never (neither).",
+      "enum": [
+        "always",
+        "ask",
+        "never"
+      ]
+    },
+    "CallApp": {
+      "type": "object",
+      "description": "An app in the call policies' list: one detection has seen hold the microphone for a call, or one the user chose for. Never shown by its identity: a shell names it and shows its icon from the identity, as for a mode's apps.",
+      "properties": {
+        "app": {
+          "type": "string",
+          "description": "Its identity, as detection reports it: a bundle id on the Mac, the executable (or the package's app id) on Windows."
+        },
+        "app_name": {
+          "type": "string",
+          "description": "Its name as detection last saw it; absent for an app chosen for that has not been seen."
+        },
+        "policy": {
+          "$ref": "#/$defs/CallPolicy",
+          "description": "What happens for it now: the user's choice, else the default (Always is Ask while the stored list could not be read)."
+        },
+        "chosen": {
+          "type": "boolean",
+          "description": "Whether the user chose its policy; false while it follows the default."
+        },
+        "seen_unix_ms": {
+          "type": "integer",
+          "description": "When detection last saw it hold the microphone for a call, Unix ms."
+        }
+      },
+      "required": [
+        "app",
+        "policy",
+        "chosen"
+      ],
+      "additionalProperties": false
+    },
+    "MeetingsCalls": {
+      "type": "object",
+      "description": "The call policies: the default for apps not chosen for, and every app seen or chosen for (at most 64), most recently seen first. In answer to meetings.calls.list and meetings.calls.set (with ref), and unasked when the default changed or detection saw a new app.",
+      "properties": {
+        "type": {
+          "const": "meetings.calls"
+        },
+        "default": {
+          "$ref": "#/$defs/CallPolicy",
+          "description": "The policy for apps not chosen for (meetings.calls.default; ask unless set)."
+        },
+        "apps": {
+          "type": "array",
+          "description": "The apps.",
+          "items": {
+            "$ref": "#/$defs/CallApp",
+            "description": "An app."
+          }
+        },
+        "message": {
+          "type": "string",
+          "description": "Why the stored choices could not be read, while they are set aside: every app follows the default then, with Always lowered to Ask, and the next choice starts the list over."
+        },
+        "ref": {
+          "type": "string",
+          "description": "The command's \"id\", when it had one, so the shell can match the answer to what it sent."
+        }
+      },
+      "required": [
+        "type",
+        "default",
+        "apps"
+      ],
+      "additionalProperties": false
+    },
+    "MeetingDiscarded": {
+      "type": "object",
+      "description": "A meeting stopped with meeting.discard (Stop and delete), or one a crash interrupted on its way to being deleted, is gone as if it had never been made: no final pass ran and nothing was sent to a language model; its transcript, notes and search entries were deleted with their words overwritten in the library's files, then its audio. Follows meeting.stopped; no meeting.finished comes. The screens drop it.",
+      "properties": {
+        "type": {
+          "const": "meeting.discarded"
+        },
+        "record": {
+          "type": "string",
+          "description": "The record that is gone."
+        },
+        "audio_left": {
+          "type": "boolean",
+          "description": "Its recorded audio is still on disk: it could not be removed, or its folder is outside the library and was left alone. The record itself is gone."
+        },
+        "scrubbed": {
+          "type": "boolean",
+          "description": "No copy of its words is left in the library's files (as for record.deleted)."
+        }
+      },
+      "required": [
+        "type",
+        "record",
+        "audio_left",
+        "scrubbed"
       ],
       "additionalProperties": false
     },

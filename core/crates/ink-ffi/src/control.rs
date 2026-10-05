@@ -1,5 +1,6 @@
-//! Meetings, controlled: `meeting.start`, `meeting.stop`, `meeting.dismiss`, detection, and
-//! recovery after a crash, on their own thread, `ink-meetings`.
+//! Meetings, controlled: `meeting.start`, `meeting.stop`, `meeting.discard`, `meeting.dismiss`,
+//! detection with each app's call policy ([`calls`](crate::calls)), and recovery after a crash, on
+//! their own thread, `ink-meetings`.
 //!
 //! Apart from the command thread on purpose: that thread can be held for minutes by a model
 //! download, and "Record this call" must start the recording now. Each of these is quick
@@ -10,10 +11,13 @@
 //! |---|---|
 //! | `meeting.start {app?, title?}` | opens the mic and the far end ([`capture`](crate::capture)) and starts the meeting; `meeting.started` |
 //! | `meeting.stop` | ends capture; the final pass follows (`meeting.stopped` ... `meeting.finished`) |
+//! | `meeting.discard` | "Stop and delete", within [`DELETE_WINDOW`] of a start made here: capture ends, no final pass runs, and the record and its audio are deleted (`meeting.stopped`, `meeting.discarded`); refused after that (`delete_window_over`) |
 //! | `meeting.dismiss {app}` | "Not this one": the offer goes, and that app is not offered again until it releases the mic |
 //! | `meetings.recover` | finishes the meetings a crash interrupted ([`recovery`](crate::recovery)) |
-//! | a platform signal | [`Detection`] decides: `meeting.detected` (the consent Drop), `meeting.detection_ended`, or the recorded app's meeting ends |
-//! | the `meetings.detect` setting | starts or stops detection: `meeting.detection {listening}`; the first state is always said, off included, and a setting that could not be read is off with a message |
+//! | `meetings.calls.list` | `meetings.calls`: the default and every app seen or chosen for, with its policy |
+//! | `meetings.calls.set {app, policy}` | the user's choice for one app (`always`, `ask`, `never`, or `default` to clear it), saved, applied at once ([`Detection::set_policies`]); `meetings.calls` |
+//! | a platform signal | [`Detection`] decides: `meeting.detected` (the consent Drop), `meeting.detection_ended`, an Always app's meeting started as by `meeting.start` (`meeting.started` with `auto`), or the recorded app's meeting ends; apps seen past the hold join the list |
+//! | the default (`meetings.calls.default`, or the old `meetings.detect`) | read again: detection listens while any app could be offered or recorded, `meeting.detection {listening}`; the first state is always said, off included, and a default that could not be read is off with a message |
 //!
 //! It sleeps until a message arrives, or until [`Detection::deadline_ns`] while something is
 //! pending (an offer waiting out its hold, a recorded app's grace); idle, nothing ticks. The
@@ -28,13 +32,15 @@ use std::time::Duration;
 use ink_core::{AppRef, EventSink, MeetingDetector, MeetingSignal, RecordId};
 use serde_json::Value;
 
+use crate::calls::{CallPolicies, CallPolicy, Seen};
 use crate::capture::MeetingCapture;
-use crate::detection::{Action, Detection};
+use crate::detection::{Action, DELETE_WINDOW, Detection};
 use crate::events::{self, event};
 use crate::meeting::{Ending, MeetingInfo};
 use crate::runtime::{Runs, Shared, lock, start_meeting};
 
-/// The setting that turns detection on or off (`on`, the default, or `off`).
+/// The switch "Offer to record calls" (`on`, the default, or `off`), which the default call policy
+/// replaces: off is Never ([`crate::calls`], which migrates it and answers for it).
 pub const DETECT_KEY: &str = "meetings.detect";
 
 /// The setting: record the Bluetooth headset's own mic, not the built-in one (`on` or `off`, the
@@ -57,6 +63,11 @@ pub enum Msg {
         /// The command's id.
         id: Option<String>,
     },
+    /// `meeting.discard`: "Stop and delete".
+    Discard {
+        /// The command's id.
+        id: Option<String>,
+    },
     /// `meeting.dismiss`.
     Dismiss {
         /// The command's id.
@@ -69,13 +80,25 @@ pub enum Msg {
         /// The command's id.
         id: Option<String>,
     },
-    /// The detection setting changed (or the core started): on or off. `why_off`: why it is off
-    /// against the user's wish (the setting could not be read), said with the state.
-    Detect {
-        /// Listen, or not.
-        on: bool,
-        /// Why detection is off when the user did not turn it off.
-        why_off: Option<String>,
+    /// The core started, or the default call policy changed: the policies are read again, and
+    /// detection listens or not by them.
+    Calls {
+        /// Say `meetings.calls` once read (a change the Settings list shows).
+        announce: bool,
+    },
+    /// `meetings.calls.list`.
+    CallsList {
+        /// The command's id.
+        id: Option<String>,
+    },
+    /// `meetings.calls.set`.
+    CallsSet {
+        /// The command's id.
+        id: Option<String>,
+        /// The app, by identity (checked: [`crate::calls::check_app`]).
+        app: String,
+        /// Its policy; `None` follows the default.
+        policy: Option<CallPolicy>,
     },
     /// A platform signal, from its callback thread.
     Signal(MeetingSignal),
@@ -114,6 +137,10 @@ struct State {
     capture: Arc<dyn MeetingCapture>,
     detector: Option<Arc<dyn MeetingDetector>>,
     detection: Detection,
+    /// The call policies as saved; detection holds a copy.
+    policies: CallPolicies,
+    /// Why an Always app's start failed, said with the offer that follows it.
+    auto_failure: Option<String>,
     listening: bool,
     /// Whether the shell has been told if detection listens: the first state is always said,
     /// off included, so the shell never guesses.
@@ -140,6 +167,9 @@ impl Control {
             capture,
             detector,
             detection: Detection::new(),
+            // Until the store is read (the first message): nothing offered or recorded.
+            policies: CallPolicies::new(CallPolicy::Never),
+            auto_failure: None,
             listening: false,
             announced: false,
             by_hand: false,
@@ -226,16 +256,21 @@ impl State {
     }
 
     fn failed(&self, command: &str, id: Option<&str>, message: &str) {
+        self.failed_coded(command, id, message, None);
+    }
+
+    fn failed_coded(&self, command: &str, id: Option<&str>, message: &str, code: Option<&str>) {
         log::warn!("command {command} failed: {message}");
         self.shared
             .events
-            .emit(events::command_failed(command, id, message));
+            .emit(events::command_failed_coded(command, id, message, code));
     }
 
     fn handle(&mut self, msg: Msg) {
         match msg {
             Msg::Start { id, app, title } => self.start(id.as_deref(), app, title),
             Msg::Stop { id } => self.stop(id.as_deref()),
+            Msg::Discard { id } => self.discard(id.as_deref()),
             Msg::Dismiss { id, app } => {
                 let offered = self.detection.offered().is_some_and(|o| o.id == app);
                 self.detection.dismiss(&app);
@@ -253,7 +288,12 @@ impl State {
                 }
             }
             Msg::Recover { id } => self.recover(id.as_deref()),
-            Msg::Detect { on, why_off } => self.listen(on, why_off),
+            Msg::Calls { announce } => self.reload(announce),
+            Msg::CallsList { id } => self
+                .shared
+                .events
+                .emit(crate::calls::listing(&self.policies, id.as_deref())),
+            Msg::CallsSet { id, app, policy } => self.choose(id.as_deref(), &app, policy),
             Msg::Signal(signal) => {
                 let now = self.shared.clock.now_ns();
                 let actions = self.detection.signal(signal, now);
@@ -278,14 +318,23 @@ impl State {
                         &[
                             ("app", Some(app.id.into())),
                             ("app_name", Some(app.name.into())),
+                            ("message", self.auto_failure.take().map(Into::into)),
                         ],
                     ));
                 }
+                Action::Record(app) => self.record(app),
                 Action::Withdraw(app) => self.shared.events.emit(event(
                     "meeting.detection_ended",
                     &[
                         ("app", Some(app.id.into())),
                         ("dismissed", Some(false.into())),
+                    ],
+                )),
+                Action::Declined(app) => self.shared.events.emit(event(
+                    "meeting.detection_ended",
+                    &[
+                        ("app", Some(app.id.into())),
+                        ("dismissed", Some(true.into())),
                     ],
                 )),
                 Action::StopMeeting => {
@@ -315,6 +364,104 @@ impl State {
                 }
             }
         }
+        self.note_seen();
+    }
+
+    /// Adds the apps detection saw to the list and saves it; a new app or a new name is said
+    /// (`meetings.calls`), so Settings lists it. A save that fails is logged: the list is kept in
+    /// memory, and the next save writes it.
+    fn note_seen(&mut self) {
+        let seen = self.detection.take_seen();
+        if seen.is_empty() {
+            return;
+        }
+        let now = self.shared.clock.unix_ms();
+        let mut changed = false;
+        let mut save = false;
+        for app in &seen {
+            match self.policies.seen(app, now) {
+                Seen::New | Seen::Renamed => {
+                    changed = true;
+                    save = true;
+                }
+                Seen::Again => save = true,
+                Seen::NotKept => {}
+            }
+        }
+        if save
+            && let Err(e) = self
+                .shared
+                .store
+                .set_setting(crate::calls::APPS_KEY, &self.policies.to_json())
+        {
+            log::warn!("call policies: the apps seen could not be saved: {e}");
+        }
+        if changed {
+            self.shared
+                .events
+                .emit(crate::calls::listing(&self.policies, None));
+        }
+    }
+
+    /// Reads the call policies again (at launch, and when the default changed), applies them, and
+    /// listens while any app could be offered or recorded. A default that cannot be read leaves
+    /// detection off, with why.
+    fn reload(&mut self, announce: bool) {
+        match crate::calls::load(self.shared.store.as_ref()) {
+            Ok(policies) => {
+                self.policies = policies;
+                let now = self.shared.clock.now_ns();
+                let actions = self.detection.set_policies(self.policies.clone(), now);
+                self.listen(self.policies.listens(), None);
+                if self.listening {
+                    self.act(actions);
+                }
+                if announce {
+                    self.shared
+                        .events
+                        .emit(crate::calls::listing(&self.policies, None));
+                }
+            }
+            Err(e) => {
+                log::warn!("the detection setting could not be read ({e}); detection stays off");
+                self.policies = CallPolicies::new(CallPolicy::Never);
+                let now = self.shared.clock.now_ns();
+                let actions = self.detection.set_policies(self.policies.clone(), now);
+                self.act(actions);
+                self.listen(
+                    false,
+                    Some(format!("couldn't read the detection setting: {e}")),
+                );
+            }
+        }
+    }
+
+    /// `meetings.calls.set`: saved first, then applied; a save that fails changes nothing.
+    fn choose(&mut self, id: Option<&str>, app: &str, policy: Option<CallPolicy>) {
+        const NAME: &str = "meetings.calls.set";
+        let mut next = self.policies.clone();
+        if let Err(e) = next.choose(app, policy) {
+            return self.failed(NAME, id, &e);
+        }
+        if let Err(e) = self
+            .shared
+            .store
+            .set_setting(crate::calls::APPS_KEY, &next.to_json())
+        {
+            return self.failed(NAME, id, &format!("couldn't save the choice: {e}"));
+        }
+        self.policies = next;
+        let now = self.shared.clock.now_ns();
+        let actions = self.detection.set_policies(self.policies.clone(), now);
+        // Listening first: a choice that turns detection on (an Always app, over a default of
+        // Never) starts the platform's detector before anything is decided.
+        self.listen(self.policies.listens(), None);
+        if self.listening {
+            self.act(actions);
+        }
+        self.shared
+            .events
+            .emit(crate::calls::listing(&self.policies, id));
     }
 
     /// Starts or stops detection, and says so: every change, the first state (off included), and
@@ -378,14 +525,6 @@ impl State {
     }
 
     fn start(&mut self, id: Option<&str>, app: Option<String>, title: Option<String>) {
-        const NAME: &str = "meeting.start";
-        if lock(&self.runs)
-            .meeting
-            .as_ref()
-            .is_some_and(|m| !m.is_over())
-        {
-            return self.failed(NAME, id, "a meeting is already running");
-        }
         // The app as detection knows it (its name for the shell), or as the command names it.
         let app: Option<AppRef> = app.map(|app_id| match self.detection.offered() {
             Some(offered) if offered.id == app_id => offered.clone(),
@@ -395,6 +534,41 @@ impl State {
                 pid: None,
             },
         });
+        if let Err(e) = self.open_and_start(app, title, false) {
+            self.failed("meeting.start", id, &e);
+        }
+    }
+
+    /// [`Action::Record`]: an Always app's call, started exactly as `meeting.start` starts one
+    /// (the same capture, record, events and end), with `auto` in `meeting.started`. A start that
+    /// fails is offered instead, with why.
+    fn record(&mut self, app: AppRef) {
+        log::info!("meeting detection: an app the user always records holds the microphone");
+        if let Err(e) = self.open_and_start(Some(app.clone()), None, true) {
+            log::warn!("meeting detection: the recording did not start by itself: {e}");
+            self.auto_failure = Some(format!("couldn't start recording by itself: {e}"));
+            let actions = self.detection.start_failed(&app);
+            self.act(actions);
+            // Said with the offer only; none came (the app let go meanwhile).
+            self.auto_failure = None;
+        }
+    }
+
+    /// Opens capture and starts the meeting, for `app` or none; `auto` when its policy started
+    /// it. Tells detection it started.
+    fn open_and_start(
+        &mut self,
+        app: Option<AppRef>,
+        title: Option<String>,
+        auto: bool,
+    ) -> Result<(), String> {
+        if lock(&self.runs)
+            .meeting
+            .as_ref()
+            .is_some_and(|m| !m.is_over())
+        {
+            return Err("a meeting is already running".into());
+        }
         let headset_mic = self
             .shared
             .store
@@ -403,29 +577,58 @@ impl State {
             .flatten()
             .as_deref()
             == Some("on");
-        let opened = match self.capture.open(app.as_ref(), headset_mic) {
-            Ok(opened) => opened,
-            Err(e) => return self.failed(NAME, id, &e),
-        };
+        let opened = self.capture.open(app.as_ref(), headset_mic)?;
+        let window_ms = i64::try_from(DELETE_WINDOW.as_millis()).unwrap_or(i64::MAX);
         let info = MeetingInfo {
             title,
             app: app.as_ref().map(|a| (a.id.clone(), a.name.clone())),
             routing: opened.routing,
             mic: opened.mic,
             far: opened.far,
+            auto,
+            delete_until_unix_ms: Some(self.shared.clock.unix_ms().saturating_add(window_ms)),
         };
         let tx = Mutex::new(self.tx.clone());
         let ended = Box::new(move || {
             let _ = lock(&tx).send(Msg::CaptureEnded { by_hand: false });
         });
-        match start_meeting(&self.shared, &self.runs, opened.sides, info, Some(ended)) {
-            Ok(()) => {
-                self.by_hand = false;
-                let now = self.shared.clock.now_ns();
-                self.detection
-                    .started(app.as_ref().map(|a| a.id.as_str()), now);
+        let now = self.shared.clock.now_ns();
+        start_meeting(&self.shared, &self.runs, opened.sides, info, Some(ended))?;
+        self.by_hand = false;
+        self.detection
+            .started(app.as_ref().map(|a| a.id.as_str()), now);
+        Ok(())
+    }
+
+    /// `meeting.discard`: "Stop and delete", while [`Detection::deletable`] (the first
+    /// [`DELETE_WINDOW`] of a meeting started here, however it started). Capture ends as by
+    /// `meeting.stop`, and the meeting's worker then deletes it instead of running its final pass
+    /// ([`crate::meeting::MeetingRun::discard`]).
+    fn discard(&mut self, id: Option<&str>) {
+        const NAME: &str = "meeting.discard";
+        if !self.detection.recording() {
+            return self.failed(NAME, id, "no meeting is being recorded");
+        }
+        if !self.detection.deletable(self.shared.clock.now_ns()) {
+            return self.failed_coded(
+                NAME,
+                id,
+                "the first minute is over: stop the meeting, then delete it from the library",
+                Some("delete_window_over"),
+            );
+        }
+        let ended = lock(&self.runs).meeting.as_ref().map(|m| m.discard());
+        match ended {
+            Some(Ending::Ended) => {
+                log::info!("meeting: stopped to be deleted, by the user");
+                self.by_hand = true;
             }
-            Err(e) => self.failed(NAME, id, &e),
+            Some(Ending::AlreadyEnding) => {
+                self.failed(NAME, id, "the meeting is already stopping");
+            }
+            Some(Ending::NotCapturing) | None => {
+                self.failed(NAME, id, "no meeting is being recorded");
+            }
         }
     }
 

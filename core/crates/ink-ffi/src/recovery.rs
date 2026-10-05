@@ -16,6 +16,11 @@
 //!    marker stays and the next launch tries again), and asks for a retention sweep, as a live
 //!    meeting's pass does.
 //!
+//! A marker that says `"discard": true` ([`mark_discard`]) is a meeting its user stopped to
+//! delete ("Stop and delete"); a crash came before the delete was done. It is never finished:
+//! its record and its audio are deleted ([`crate::retention::discard`]), and `meeting.discarded`
+//! says so.
+//!
 //! The shell asks for it (`meetings.recover`) once its own engines are registered, so a
 //! recovered meeting gets the live partials' fallback and the language model a live one would.
 //! It runs on its own thread, one meeting at a time, and never while that meeting's record is
@@ -40,10 +45,21 @@ pub const LIVE_FILE: &str = "live.json";
 /// **Worker.** Marks the meeting in `dir` live: written whole (a temporary name, synced, renamed),
 /// so a crash leaves it complete or not at all. Readable by its owner only, as the library is.
 pub fn mark_live(dir: &Path, record: &RecordId) -> io::Result<()> {
+    write_marker(dir, &json!({"record": record.0}))
+}
+
+/// **Worker.** Marks the meeting in `dir` to be deleted, not finished (Stop and delete), written
+/// whole as [`mark_live`] writes: recovery deletes a meeting marked so.
+pub fn mark_discard(dir: &Path, record: &RecordId) -> io::Result<()> {
+    write_marker(dir, &json!({"record": record.0, "discard": true}))
+}
+
+/// The marker in `dir`, written whole: a temporary name, synced, renamed, the directory synced.
+fn write_marker(dir: &Path, marker: &Value) -> io::Result<()> {
     use std::io::Write;
     let tmp = dir.join(format!("{LIVE_FILE}.tmp"));
     let mut file = owner_only(&tmp)?;
-    file.write_all(json!({"record": record.0}).to_string().as_bytes())?;
+    file.write_all(marker.to_string().as_bytes())?;
     file.sync_all()?;
     drop(file);
     std::fs::rename(&tmp, dir.join(LIVE_FILE))?;
@@ -71,6 +87,15 @@ pub fn clear_live(dir: &Path) {
     {
         log::warn!("meeting: the crash-recovery marker could not be removed: {e}");
     }
+}
+
+/// Whether the marker in `dir` says the meeting is to be deleted ([`mark_discard`]).
+fn marked_discard(dir: &Path) -> bool {
+    std::fs::read_to_string(dir.join(LIVE_FILE))
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .and_then(|v| v.get("discard").and_then(Value::as_bool))
+        == Some(true)
 }
 
 /// The record a marker names, if it is one.
@@ -157,6 +182,27 @@ pub fn recover(shared: &Arc<Shared>, dir: &Path, record: &RecordId, cancel: &Can
         // marker goes with its audio.
         Err(e) => return fail(format!("the meeting could not be recovered: {e}")),
     };
+    if marked_discard(dir) {
+        // Its user stopped it to delete it: deleted, never finished (nothing is transcribed
+        // again, summarised or sent anywhere).
+        match crate::retention::discard(shared, Some(hold), record, dir) {
+            Ok(gone) => {
+                log::info!("meeting recovery: a meeting stopped to be deleted was deleted");
+                shared.events.emit(event(
+                    "meeting.discarded",
+                    &[
+                        ("record", Some(record.0.as_str().into())),
+                        ("audio_left", Some(gone.audio_left.into())),
+                        ("scrubbed", Some(gone.scrubbed.into())),
+                    ],
+                ));
+            }
+            Err(e) => fail(format!(
+                "a meeting stopped to be deleted could not be deleted: {e}; the next launch tries again"
+            )),
+        }
+        return;
+    }
     let stored = match shared.store.record(record) {
         Ok(Some(r)) => r,
         Ok(None) => {

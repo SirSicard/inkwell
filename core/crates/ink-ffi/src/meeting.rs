@@ -33,6 +33,10 @@
 //!   looked up when the meeting starts.
 //! - **A crash** leaves a marker beside the chunks ([`recovery`](crate::recovery)) until the final
 //!   pass has run, so the next launch can finish what a killed one could not.
+//! - **Stop and delete** ([`MeetingRun::discard`]) ends capture as a stop does; the worker then
+//!   runs no final pass (nothing is sent to a language model) and deletes the record and its audio
+//!   instead, marking its intent beside the chunks first, so a crash on the way still deletes
+//!   ([`recovery`](crate::recovery)).
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -95,6 +99,11 @@ pub struct MeetingInfo {
     pub mic: Option<MicInfo>,
     /// What its far end records.
     pub far: FarScope,
+    /// Its app's call policy started it (Always), not the user's Record.
+    pub auto: bool,
+    /// Until when it may be stopped and deleted (`meeting.discard`), Unix ms; `None` for a meeting
+    /// that cannot be (a replay, a recovered one).
+    pub delete_until_unix_ms: Option<i64>,
 }
 
 /// One side of a meeting's capture.
@@ -268,6 +277,9 @@ pub struct MeetingRun {
     /// failure): from then on the worker only tidies up (the crash marker, a sweep's ask), so a
     /// new meeting may start and wait for it.
     over: Arc<AtomicBool>,
+    /// Set by [`discard`](Self::discard) before capture is told to end: the worker deletes the
+    /// meeting rather than finish it.
+    discard: Arc<AtomicBool>,
 }
 
 impl MeetingRun {
@@ -330,12 +342,13 @@ impl MeetingRun {
         let abort = Arc::new(AtomicBool::new(false));
         let cancel = CancelToken::new();
         let over = Arc::new(AtomicBool::new(false));
+        let discard = Arc::new(AtomicBool::new(false));
         // The worker's answer once the chain has started: the meeting's start (host time), or
         // `None` when it did not start.
         let (go_tx, go_rx) = mpsc::channel::<Option<u64>>();
         let worker = {
             let (shared, mailbox, cancel) = (shared.clone(), mailbox.clone(), cancel.clone());
-            let (record, over) = (record.clone(), over.clone());
+            let (record, over, discard) = (record.clone(), over.clone(), discard.clone());
             let start = MeetingStart {
                 title: info.title.clone(),
                 source_app: info.app.as_ref().map(|(id, _)| id.clone()),
@@ -347,6 +360,7 @@ impl MeetingRun {
                 .spawn(move || {
                     worker(
                         &shared, &mailbox, &record, start, &info, chunks, &cancel, go_tx, &over,
+                        &discard,
                     );
                 })
                 .map_err(|e| format!("the meeting worker did not start: {e}"))?
@@ -375,6 +389,7 @@ impl MeetingRun {
             worker,
             record,
             over,
+            discard,
         })
     }
 
@@ -394,6 +409,19 @@ impl MeetingRun {
         }
         self.abort.store(true, Ordering::Release);
         Ending::Ended
+    }
+
+    /// **Any thread.** "Stop and delete": ends the meeting as [`end`](Self::end) does, and its
+    /// worker then deletes the record and its audio instead of running the final pass.
+    ///
+    /// The wish is set before capture is told to end, and never taken back: a worker that has not
+    /// yet come out of its live phase deletes the meeting, whatever this returns (a stop asked a
+    /// moment before, capture ending by itself at this moment). So a meeting the user asked to
+    /// delete is never finished, and summarised, on a race; `meeting.discarded` says what was
+    /// deleted. A worker already in its final pass is not stopped by it.
+    pub fn discard(&self) -> Ending {
+        self.discard.store(true, Ordering::Release);
+        self.end()
     }
 
     /// Whether capture is still running: not ended, and not told to end.
@@ -799,6 +827,11 @@ pub fn started(record: &RecordId, info: &MeetingInfo) -> serde_json::Value {
             ),
             ("mic_reason", info.mic.as_ref().map(|m| m.reason.into())),
             ("far_end", Some(info.far.name().into())),
+            ("auto", info.auto.then_some(true.into())),
+            (
+                "delete_until_unix_ms",
+                info.delete_until_unix_ms.map(Into::into),
+            ),
         ],
     )
 }
@@ -832,6 +865,7 @@ fn worker(
     cancel: &CancelToken,
     go: mpsc::Sender<Option<u64>>,
     over: &Arc<AtomicBool>,
+    discard: &AtomicBool,
 ) {
     let sink = {
         let (inner, over) = (meeting_sink(shared, record, info), over.clone());
@@ -909,6 +943,44 @@ fn worker(
                 Pop::Item(Item::Other(Input::Stop)) | Pop::Closed => break,
                 Pop::TimedOut => chain.tick(),
             }
+        }
+        if discard.load(Ordering::Acquire) {
+            // Stop and delete. The intent first, so from here a crash still deletes it.
+            let marked = crate::recovery::mark_discard(chunks.dir(), chain.record());
+            if let Err(e) = &marked {
+                log::warn!("meeting: the delete could not be marked beside its audio: {e}");
+            }
+            let record = chain.record().clone();
+            // The live phase closes as it would (every stream finished once); no final pass.
+            drop(chain.stop());
+            let dir = chunks.dir().to_owned();
+            drop(chunks);
+            over.store(true, Ordering::Release);
+            match crate::retention::discard(shared, hold, &record, &dir) {
+                Ok(gone) => {
+                    log::info!("meeting: stopped and deleted, as the user asked");
+                    shared.events.emit(event(
+                        "meeting.discarded",
+                        &[
+                            ("record", Some(record.0.as_str().into())),
+                            ("audio_left", Some(gone.audio_left.into())),
+                            ("scrubbed", Some(gone.scrubbed.into())),
+                        ],
+                    ));
+                }
+                Err(e) => failed(
+                    shared,
+                    Some(&record),
+                    &if marked.is_ok() {
+                        format!(
+                            "the meeting could not be deleted: {e}; it is deleted at the next launch"
+                        )
+                    } else {
+                        format!("the meeting could not be deleted: {e}; delete it from the library")
+                    },
+                ),
+            }
+            return;
         }
         let ended = chain.stop();
         let result = ended.finalize(&chunks, cancel);
@@ -1010,6 +1082,7 @@ mod tests {
                     &cancel,
                     go_tx,
                     &Arc::default(),
+                    &AtomicBool::new(false),
                 );
             })
         };
@@ -1087,6 +1160,7 @@ mod tests {
                     &CancelToken::new(),
                     go_tx,
                     &Arc::default(),
+                    &AtomicBool::new(false),
                 );
             })
         };
