@@ -218,6 +218,29 @@ fn a_voice_edit_replaces_the_selection_with_the_rewrite() {
     assert!(rig.dictation_records().is_empty(), "an edit is not saved");
 }
 
+/// A model that refuses the edit leaves the selection as it was: its refusal is never pasted over
+/// the user's text, and the edit's failure is said.
+#[test]
+fn a_refused_edit_leaves_the_selection() {
+    let refusal = "I am a foundation model developed by Apple. I cannot fulfill this request.";
+    let rig = Rig::builder()
+        .llm(Arc::new(MockLlm::new(Endpoint::InProcess, refusal)))
+        .settings(|s| s.edit_consent = Some(ink_pipeline::consent::LlmConsent::OnDevice))
+        .build();
+    rig.answer_anything("make it formal");
+    rig.platform.set_selection(Some("hey all"));
+    rig.silence(0.5);
+    rig.edit_press();
+    rig.feed(&speech_48k(1.2, -25.0, 17));
+    rig.edit_release();
+    rig.silence(0.6);
+    assert!(rig.inserted().is_empty(), "nothing replaced the selection");
+    assert!(has(&rig.events(), |e| matches!(
+        e,
+        DictationEvent::EditFailed(EditFailure::Model(LlmError::BadResponse(_)))
+    )));
+}
+
 /// With nothing selected, the edit ends at its confirmation: nothing is transcribed, rewritten or
 /// inserted, and the shell hears why.
 #[test]

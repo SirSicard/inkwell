@@ -846,7 +846,7 @@ fn a_saved_mode_reaches_a_running_dictation_at_once() {
 fn a_mode_polishes_on_its_own_model_only_where_the_consent_covers_it() {
     let rig = VoiceRig::new("modes-model");
     let setting = rig.register_local();
-    let own = rig.register_model("other-llm", "other", true, "Polished by the mode's model.");
+    let own = rig.register_model("other-llm", "other", true, "Hello world, mode!");
     let remote = rig.register_remote();
     rig.allow_on_device("c1");
 
@@ -878,10 +878,7 @@ fn a_mode_polishes_on_its_own_model_only_where_the_consent_covers_it() {
     assert_eq!(unknown["code"], "model_unknown");
 
     rig.default_on("engine:other-llm", "s1");
-    assert_eq!(
-        rig.dictate(1.0, 64)["text"],
-        "Polished by the mode's model."
-    );
+    assert_eq!(rig.dictate(1.0, 64)["text"], "Hello world, mode!");
     assert_eq!(own.calls.load(Ordering::SeqCst), 1);
 
     rig.default_on("engine:remote-llm", "s2");
@@ -1105,9 +1102,10 @@ impl VoiceRig {
         )
     }
 
-    /// Registers a model on this machine, as the Mac registers Apple's on-device model.
+    /// Registers a model on this machine, as the Mac registers Apple's on-device model. Its answer
+    /// is a cleanup of what the rig dictates ("hello world"), as polish's answer must be.
     fn register_local(&self) -> &'static RemoteModel {
-        self.register_model("local-llm", "on-device", true, "Polished on this machine.")
+        self.register_model("local-llm", "on-device", true, "Hello, world!")
     }
 
     fn register_model(
@@ -1323,7 +1321,7 @@ fn polish_allow_records_the_consent_and_turns_polish_on() {
         rig.platform
             .inserted()
             .last()
-            .is_some_and(|s| s.contains("Polished on this machine")),
+            .is_some_and(|s| s.contains("Hello, world!")),
         "{:?}",
         rig.platform.inserted()
     );

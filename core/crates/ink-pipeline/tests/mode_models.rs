@@ -57,8 +57,8 @@ fn cloud(endpoint: &str) -> Endpoint {
 /// The mode's model polishes, not the AI setting's.
 #[test]
 fn a_mode_s_own_model_polishes_its_dictations() {
-    let setting = Arc::new(MockLlm::new(Endpoint::InProcess, "By the setting."));
-    let own = Arc::new(MockLlm::new(Endpoint::InProcess, "By the mode."));
+    let setting = Arc::new(MockLlm::new(Endpoint::InProcess, "As said, setting."));
+    let own = Arc::new(MockLlm::new(Endpoint::InProcess, "As said, mode."));
     let rig = Rig::builder()
         .llm(setting.clone())
         .settings(|s| {
@@ -70,15 +70,15 @@ fn a_mode_s_own_model_polishes_its_dictations() {
         .borrow_mut()
         .set_mode_models(Some(lookup(&[("engine:own", own.clone())])));
     rig.dictate_fixture("as said", 1.5, -25.0);
-    assert_eq!(rig.inserted(), ["By the mode. "]);
+    assert_eq!(rig.inserted(), ["As said, mode. "]);
     assert_eq!((own.calls(), setting.calls()), (1, 0));
 }
 
 /// A mode without a model of its own polishes on the AI setting's, as before.
 #[test]
 fn a_mode_without_a_model_uses_the_ai_setting_s() {
-    let setting = Arc::new(MockLlm::new(Endpoint::InProcess, "By the setting."));
-    let own = Arc::new(MockLlm::new(Endpoint::InProcess, "By the mode."));
+    let setting = Arc::new(MockLlm::new(Endpoint::InProcess, "As said, setting."));
+    let own = Arc::new(MockLlm::new(Endpoint::InProcess, "As said, mode."));
     let rig = Rig::builder()
         .llm(setting.clone())
         .settings(|s| {
@@ -90,7 +90,7 @@ fn a_mode_without_a_model_uses_the_ai_setting_s() {
         .borrow_mut()
         .set_mode_models(Some(lookup(&[("engine:own", own.clone())])));
     rig.dictate_fixture("as said", 1.5, -25.0);
-    assert_eq!(rig.inserted(), ["By the setting. "]);
+    assert_eq!(rig.inserted(), ["As said, setting. "]);
     assert_eq!((own.calls(), setting.calls()), (0, 1));
 }
 
@@ -98,10 +98,10 @@ fn a_mode_without_a_model_uses_the_ai_setting_s() {
 /// text goes in as said, and the take names the consent that model needs.
 #[test]
 fn a_mode_s_cloud_model_needs_consent_for_its_own_destination() {
-    let setting = Arc::new(MockLlm::new(Endpoint::InProcess, "By the setting."));
+    let setting = Arc::new(MockLlm::new(Endpoint::InProcess, "As said, setting."));
     let own = Arc::new(MockLlm::new(
         cloud("https://api.example.com/v1"),
-        "By the mode.",
+        "As said, mode.",
     ));
     let rig = Rig::builder()
         .llm(setting.clone())
@@ -135,16 +135,16 @@ fn a_mode_s_cloud_model_needs_consent_for_its_own_destination() {
 fn cloud_consent_covers_a_mode_s_model_only_at_that_provider() {
     let setting = Arc::new(MockLlm::new(
         cloud("https://api.a.example/v1"),
-        "By the setting.",
+        "As said, setting.",
     ));
-    let local = Arc::new(MockLlm::new(Endpoint::InProcess, "On this machine."));
+    let local = Arc::new(MockLlm::new(Endpoint::InProcess, "As said, locally."));
     let same = Arc::new(MockLlm::new(
         cloud("https://api.a.example/v1"),
-        "Same provider.",
+        "As said, same.",
     ));
     let other = Arc::new(MockLlm::new(
         cloud("https://api.b.example/v1"),
-        "Other provider.",
+        "As said, other.",
     ));
     let consent = LlmConsent::Cloud {
         endpoint: "https://api.a.example/v1".into(),
@@ -170,7 +170,7 @@ fn cloud_consent_covers_a_mode_s_model_only_at_that_provider() {
         rig.chain.borrow_mut().set_mode_models(Some(models.clone()));
         rig.dictate_fixture("as said", 1.5, -25.0);
         let want = if polished {
-            "Same provider. "
+            "As said, same. "
         } else {
             "As said. "
         };
@@ -196,7 +196,7 @@ fn cloud_consent_covers_a_mode_s_model_only_at_that_provider() {
 /// on the AI setting's model instead, even where that one's consent is given.
 #[test]
 fn a_mode_whose_model_is_gone_is_not_polished_and_says_so() {
-    let setting = Arc::new(MockLlm::new(Endpoint::InProcess, "By the setting."));
+    let setting = Arc::new(MockLlm::new(Endpoint::InProcess, "As said, setting."));
     for models in [Some(lookup(&[])), None] {
         let rig = Rig::builder()
             .llm(setting.clone())
@@ -216,7 +216,7 @@ fn a_mode_whose_model_is_gone_is_not_polished_and_says_so() {
 /// A mode with its own model and polish off sends nothing, and says nothing.
 #[test]
 fn a_mode_s_model_is_not_looked_up_when_the_mode_does_not_polish() {
-    let own = Arc::new(MockLlm::new(Endpoint::InProcess, "By the mode."));
+    let own = Arc::new(MockLlm::new(Endpoint::InProcess, "As said, mode."));
     let rig = Rig::builder()
         .settings(|s| {
             s.modes = polishing_on(Some("engine:own"));

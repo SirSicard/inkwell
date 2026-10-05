@@ -36,6 +36,12 @@ public sealed partial class LanguageModelRows : UserControl
         Render();
     }
 
+    /// <summary>Under Use: where the first-run sheet shows polish's consent step when this Use asked.</summary>
+    public Panel StepSlot => FirstRunStepSlot;
+
+    /// <summary>Use, where the first-run sheet puts focus back once its step is answered.</summary>
+    public Button Use => UseButton;
+
     private void OnChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e) => Render();
 
     private void Render()

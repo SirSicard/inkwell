@@ -89,6 +89,10 @@ struct OnboardingView: View {
 
     /// Every step's title, the welcome's too: one scale.
     private func title(_ text: String) -> some View {
+        Self.title(text)
+    }
+
+    static func title(_ text: String) -> some View {
         Text(text).font(Typography.heading).accessibilityAddTraits(.isHeader)
     }
 
@@ -210,36 +214,13 @@ struct OnboardingView: View {
         .foregroundStyle(Theme.text)
     }
 
-    /// The switch (Apple's on-device model, where there is one), and the user's own key as one
-    /// choice, Groq's free model (GroqKeyRows; Settings > AI's rows behind "Other providers or
-    /// models…"), where Use asks polish's consent before choosing the provider, so local-only mode
-    /// goes off only with it.
+    /// The Polish step (FirstRunPolishStep). It fits the step with Groq's guide open
+    /// (OnboardingLayoutTests); the scroll view is for larger text than the sheet was measured at.
     private var polish: some View {
-        let polish = screens.polish
-        let cloud = screens.cloud
-        return ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                title("Polish")
-                Text("Polish tidies a dictation's wording before it is typed. It sends what you dictate to a language model, so it stays off unless you turn it on here or in Settings.")
-                    .fixedSize(horizontal: false, vertical: true)
-                Toggle("Polish my words", isOn: Binding(get: { polish.isOn }, set: { polish.setOn($0, from: .onboarding) }))
-                    .toggleStyle(.switch)
-                    .disabled(!polish.canToggle)
-                    .accessibilityHint(polish.status)
-                Text(polish.status)
-                    .font(Typography.caption)
-                    .foregroundStyle(polish.isProblem ? Theme.alert : Theme.secondaryText)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityHidden(true)
-                LabelledDisclosure(title: "Use Groq's free model", isExpanded: $ownKey) {
-                    GroqKeyRows(cloud: cloud, polish: polish)
-                        .padding(.top, 6)
-                }
-            }
-            .foregroundStyle(Theme.text)
-            .frame(maxWidth: .infinity, alignment: .leading)
+        ScrollView {
+            FirstRunPolishStep(ownKey: $ownKey)
         }
-        .polishConsent(polish, host: .onboarding)
+        .polishConsent(screens.polish, host: .onboarding)
     }
 
     /// Names the key dictation uses now: the import step can change it from fn. The try-it: the
@@ -270,6 +251,39 @@ struct OnboardingView: View {
         .font(Typography.body)
         .foregroundStyle(Theme.text)
         .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+/// The Polish step: the switch (Apple's on-device model, where there is one), and the user's own
+/// key as one choice, Groq's free model (GroqKeyRows, with how to get the key; Settings > AI's rows
+/// behind "Other providers or models…"), where Use asks polish's consent before choosing the
+/// provider, so local-only mode goes off only with it.
+struct FirstRunPolishStep: View {
+    @Environment(ScreenModels.self) private var screens
+    @Binding var ownKey: Bool
+
+    var body: some View {
+        let polish = screens.polish
+        VStack(alignment: .leading, spacing: 12) {
+            OnboardingView.title("Polish")
+            Text("Polish tidies a dictation's wording before it is typed. It sends what you dictate to a language model, so it stays off unless you turn it on here or in Settings.")
+                .fixedSize(horizontal: false, vertical: true)
+            Toggle("Polish my words", isOn: Binding(get: { polish.isOn }, set: { polish.setOn($0, from: .onboarding) }))
+                .toggleStyle(.switch)
+                .disabled(!polish.canToggle)
+                .accessibilityHint(polish.status)
+            Text(polish.status)
+                .font(Typography.caption)
+                .foregroundStyle(polish.isProblem ? Theme.alert : Theme.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityHidden(true)
+            LabelledDisclosure(title: "Use Groq's free model", isExpanded: $ownKey) {
+                GroqKeyRows(cloud: screens.cloud, polish: polish)
+                    .padding(.top, 6)
+            }
+        }
+        .foregroundStyle(Theme.text)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

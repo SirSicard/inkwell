@@ -183,6 +183,46 @@ public class CloudModelTests
     }
 
     /// <summary>
+    /// The first run shows polish's step inside the sheet, under the own key's rows, where it can
+    /// sit below the fold: pressing Use Groq then seemed to do nothing, and the first run went on
+    /// with nothing chosen and local-only mode on. So every step put on screen is counted, and the
+    /// sheet brings each new one into view: a second Use with the step still up counts again; what
+    /// the core says meanwhile, Cancel, Allow and an ask with no model to name do not.
+    /// </summary>
+    [Fact]
+    public void EveryStepPutOnScreenIsCountedSoTheSheetCanBringItIntoView()
+    {
+        var sent = new Sent();
+        var cloud = new CloudModel(sent.Send);
+        var polish = new PolishModel(sent.Send);
+        cloud.Apply(Providers(keyed: ["groq"]));
+        cloud.Suggest("groq");
+        Assert.Equal(0, polish.Consent.Asked);
+
+        polish.UseOwnKey(cloud);
+        Assert.Equal(1, polish.Consent.Asked);
+        polish.Apply(State(on: false, allowed: false, to: null));
+        Assert.True(polish.Consent.IsShowingStep(ConsentHost.Onboarding));
+        Assert.Equal(1, polish.Consent.Asked);
+        polish.UseOwnKey(cloud);
+        Assert.Equal(2, polish.Consent.Asked);
+        polish.CancelConsent();
+        polish.Consent.Ask(ConsentHost.Onboarding); // no model named yet: no step
+        Assert.Null(polish.Consent.Pending);
+        Assert.Equal(2, polish.Consent.Asked);
+        polish.UseOwnKey(cloud);
+        polish.AllowConsent();
+        Assert.Equal(3, polish.Consent.Asked);
+
+        // The sheet's switch asks through the other overload (a model the core named): counted too.
+        polish.Apply(Ev.Of(LocalLlm));
+        polish.Apply(State(on: false, allowed: false));
+        polish.SetOn(true, ConsentHost.Onboarding);
+        Assert.True(polish.Consent.IsShowingStep(ConsentHost.Onboarding));
+        Assert.Equal(4, polish.Consent.Asked);
+    }
+
+    /// <summary>
     /// An agreement waits for its own choice only: the core's state after the choice naming
     /// another destination settles it as a failed allow, and a step asked meanwhile drops it.
     /// </summary>

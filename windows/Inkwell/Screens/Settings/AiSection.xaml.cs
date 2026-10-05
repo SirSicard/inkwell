@@ -4,7 +4,8 @@
 // three features (Dictation's edit-key picker asks through it too): WinUI shows one dialog at a time.
 //
 // Above them, the language model (LanguageModelRows, over CloudModel: the provider, its key, its
-// model, Use and Test); then Local only, the explicit switch over llm.local_only.
+// model, Use and Test) and how to get a free Groq key (GroqKeyGuideView); then Local only, the
+// explicit switch over llm.local_only.
 using Inkwell.Core.Screens;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
@@ -28,6 +29,8 @@ public sealed partial class AiSection : UserControl
         polish = ai.Polish;
         InitializeComponent();
         LanguageModelHost.Content = new LanguageModelRows(cloud);
+        GroqGuideExpander.Header = GroqKeyGuide.Title;
+        GroqGuideExpander.Content = new GroqKeyGuideView(GroqKeyGuidePlace.Settings);
         _ = new ConsentDialog(this, ConsentHost.Settings, [polish.Consent, ai.EditConsent, ai.MeetingsConsent], log);
         Loaded += (_, _) =>
         {

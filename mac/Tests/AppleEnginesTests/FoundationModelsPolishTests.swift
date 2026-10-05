@@ -152,6 +152,16 @@ final class FoundationModelsPolishTests: XCTestCase {
         XCTAssertEqual(backend.answered.withLock { $0 }, [false, true, false])
     }
 
+    /// A plain-text request (polish) runs under Apple's guardrails for transforming the user's
+    /// text; one generated to a schema keeps the default ones (the permissive mode covers only
+    /// text answers). The choice per request; that each session uses it needs the real model.
+    func testEachRequestChoosesItsGuardrails() {
+        XCTAssertEqual(FoundationModelsPolish.SystemModel.guardrail(for: request), .permissiveContentTransformations)
+        var structured = request
+        structured.jsonSchema = #"{"type":"object"}"#
+        XCTAssertEqual(FoundationModelsPolish.SystemModel.guardrail(for: structured), .standard)
+    }
+
     /// The engines prewarm polish when a dictation starts, and only then.
     func testADictationStartPrewarmsTheRegisteredPolish() throws {
         let core = try TestCore.start()

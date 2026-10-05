@@ -121,6 +121,13 @@ public sealed class ConsentModel : ObservableModel
     /// <summary>Which screen asked, so only that one shows the step (the first-run sheet can sit over Settings).</summary>
     public ConsentHost? Host { get; private set; }
 
+    /// <summary>
+    /// How many steps were put on screen. The first-run sheet shows the step inside it, under the
+    /// own key's rows, so it brings each new one into view (a second Use asks again with the same
+    /// words, and counts), and never scrolls for anything else.
+    /// </summary>
+    public int Asked { get; private set; }
+
     /// <summary>For voice edit, the key the step turns it on with.</summary>
     public string? PendingKey { get; private set; }
 
@@ -204,6 +211,20 @@ public sealed class ConsentModel : ObservableModel
         LlmFeature.Edit => "Turn on voice edit?",
         _ => "Turn on summaries and Ask?",
     };
+
+    /// <summary>What Narrator hears as an inline step appears: its heading, then what it says (where the words go).</summary>
+    public static string Announcement(LlmFeature feature, ConsentDestination destination) =>
+        $"{Title(feature)} {Message(feature, destination)}";
+
+    /// <summary>
+    /// Focus and Enter land on Cancel for a model off this PC, so Enter never agrees to send words
+    /// away and agreeing is a deliberate press; on the agreeing button for one on this PC.
+    /// </summary>
+    public static bool FocusesCancel(ConsentDestination destination)
+    {
+        ArgumentNullException.ThrowIfNull(destination);
+        return !destination.IsOnDevice;
+    }
 
     /// <summary>What the consent step says: what the feature sends, and where the words go for this model.</summary>
     public static string Message(LlmFeature feature, ConsentDestination destination)
@@ -291,6 +312,7 @@ public sealed class ConsentModel : ObservableModel
         Pending = destination;
         Host = host;
         PendingKey = key;
+        Asked++;
         Changed();
     }
 
@@ -312,6 +334,7 @@ public sealed class ConsentModel : ObservableModel
         PendingKey = null;
         Choosing = true;
         this.choose = choose;
+        Asked++;
         Changed();
     }
 
