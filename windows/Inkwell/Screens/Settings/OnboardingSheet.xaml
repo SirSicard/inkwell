@@ -112,6 +112,26 @@
                     OnContent=""
                     Toggled="OnPolishToggled" />
                 <TextBlock x:Name="PolishStatus" AutomationProperties.AccessibilityView="Raw" Style="{StaticResource InkCaptionStyle}" />
+                <!-- Polish's consent step: the Mac's modal alert, inline (the sheet is a ContentDialog,
+                     and WinUI shows one at a time). It moves to the slot under what asked (this one,
+                     GroqStepSlot or the other providers' StepSlot); the sheet's buttons wait while it
+                     is up. Only its agreeing button sends anything. -->
+                <StackPanel x:Name="SwitchStepSlot">
+                    <Border
+                        x:Name="ConsentCard"
+                        BorderBrush="{ThemeResource AccentFillColorDefaultBrush}"
+                        BorderThickness="2"
+                        Style="{StaticResource InkCardStyle}">
+                        <StackPanel Spacing="10">
+                            <TextBlock x:Name="ConsentTitle" AutomationProperties.HeadingLevel="Level2" FontWeight="SemiBold" Style="{StaticResource InkBodyStyle}" />
+                            <TextBlock x:Name="ConsentMessage" Style="{StaticResource InkBodyStyle}" />
+                            <StackPanel HorizontalAlignment="Right" Orientation="Horizontal" Spacing="8">
+                                <Button x:Name="ConsentCancel" Click="OnConsentCancel" Content="Cancel" />
+                                <Button x:Name="ConsentAllow" Click="OnConsentAllow" Style="{StaticResource InkAccentButtonStyle}" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
                 <!-- The own key as one choice (the Mac's): Groq's free model behind a disclosure, how
                      to get its key (GroqKeyGuideView), the key with Save (stored, nothing more), and
                      Use Groq, which asks polish's consent before it chooses Groq
@@ -121,6 +141,7 @@
                     x:Name="OwnKeyExpander"
                     HorizontalAlignment="Stretch"
                     HorizontalContentAlignment="Stretch"
+                    Collapsed="OnOwnKeyCollapsed"
                     Expanding="OnOwnKeyExpanding">
                     <StackPanel Spacing="8">
                         <StackPanel x:Name="GroqRows" Spacing="8">
@@ -142,6 +163,8 @@
                                 <Button x:Name="OwnKeyUse" VerticalAlignment="Top" Click="OnOwnKeyUse" Style="{StaticResource InkAccentButtonStyle}" />
                                 <TextBlock x:Name="OwnKeyUseNote" Grid.Column="1" VerticalAlignment="Center" Style="{StaticResource InkCaptionStyle}" />
                             </Grid>
+                            <!-- Polish's step when Use Groq asked (ConsentCard moves here). -->
+                            <StackPanel x:Name="GroqStepSlot" />
                             <TextBlock x:Name="OwnKeyCloudStatus" Style="{StaticResource InkCaptionStyle}" />
                             <HyperlinkButton x:Name="OthersLink" Padding="0" Click="OnOthers" />
                         </StackPanel>
@@ -151,18 +174,6 @@
                         </StackPanel>
                     </StackPanel>
                 </Expander>
-                <!-- Polish's consent step, inside the sheet, brought into view when it is put up
-                     (RevealConsent). Only its agreeing button sends anything. -->
-                <Border x:Name="ConsentCard" Style="{StaticResource InkCardStyle}">
-                    <StackPanel Spacing="10">
-                        <TextBlock x:Name="ConsentTitle" AutomationProperties.HeadingLevel="Level2" FontWeight="SemiBold" Style="{StaticResource InkBodyStyle}" />
-                        <TextBlock x:Name="ConsentMessage" Style="{StaticResource InkBodyStyle}" />
-                        <StackPanel HorizontalAlignment="Right" Orientation="Horizontal" Spacing="8">
-                            <Button x:Name="ConsentCancel" Click="OnConsentCancel" Content="Cancel" />
-                            <Button x:Name="ConsentAllow" Click="OnConsentAllow" Style="{StaticResource InkAccentButtonStyle}" />
-                        </StackPanel>
-                    </StackPanel>
-                </Border>
             </StackPanel>
 
             <StackPanel x:Name="ReadyStep" Spacing="14">

@@ -212,6 +212,20 @@ public sealed class ConsentModel : ObservableModel
         _ => "Turn on summaries and Ask?",
     };
 
+    /// <summary>What Narrator hears as an inline step appears: its heading, then what it says (where the words go).</summary>
+    public static string Announcement(LlmFeature feature, ConsentDestination destination) =>
+        $"{Title(feature)} {Message(feature, destination)}";
+
+    /// <summary>
+    /// Focus and Enter land on Cancel for a model off this PC, so Enter never agrees to send words
+    /// away and agreeing is a deliberate press; on the agreeing button for one on this PC.
+    /// </summary>
+    public static bool FocusesCancel(ConsentDestination destination)
+    {
+        ArgumentNullException.ThrowIfNull(destination);
+        return !destination.IsOnDevice;
+    }
+
     /// <summary>What the consent step says: what the feature sends, and where the words go for this model.</summary>
     public static string Message(LlmFeature feature, ConsentDestination destination)
     {

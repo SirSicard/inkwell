@@ -69,6 +69,8 @@
                 Click="OnTest"
                 Content="Test" />
         </StackPanel>
+        <!-- The first run puts polish's consent step here when this Use asked (StepSlot); empty in Settings. -->
+        <StackPanel x:Name="FirstRunStepSlot" Visibility="Collapsed" />
         <TextBlock x:Name="TestStatus" Style="{StaticResource InkCaptionStyle}" />
         <TextBlock x:Name="CloudStatus" Style="{StaticResource InkCaptionStyle}" />
     </StackPanel>
