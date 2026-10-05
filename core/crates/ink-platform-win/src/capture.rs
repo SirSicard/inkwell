@@ -40,8 +40,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use ink_audio::{RealtimeGuard, unguarded};
 use ink_core::{
-    AppRef, AudioSink, AudioSource, CaptureControl, Channel, DeviceId, DeviceInfo, FarEndTarget,
-    Permission, PermissionState, PlatformError, SourceStats, StreamFormat,
+    AppRef, AudioSink, AudioSource, AutoInput, AutoReason, CaptureControl, Channel, DeviceChange,
+    DeviceId, DeviceInfo, EventSink, FarEndTarget, Permission, PermissionState, PlatformError,
+    SourceStats, StreamFormat,
 };
 
 pub use routing::{Endpoint, LE_AUDIO_MIN_RATE, MicRoute, MicRouteReason, route_mic, transport};
@@ -377,12 +378,29 @@ impl CaptureControl for WinCapture {
             .collect())
     }
 
+    /// [`WinCapture::output_endpoints`]: the active render endpoints, default first.
+    fn output_devices(&self) -> Result<Vec<DeviceInfo>, PlatformError> {
+        Ok(self
+            .output_endpoints()?
+            .into_iter()
+            .map(|e| e.info)
+            .collect())
+    }
+
     fn default_output(&self) -> Result<Option<DeviceInfo>, PlatformError> {
         Ok(self
             .output_endpoints()?
             .into_iter()
             .map(|e| e.info)
             .find(|info| info.is_default))
+    }
+
+    /// [`WinCapture::mic_route`], in the core's words.
+    fn automatic_input(&self) -> Result<Option<AutoInput>, PlatformError> {
+        Ok(self.mic_route()?.map(|(endpoint, why)| AutoInput {
+            device: endpoint.info,
+            reason: auto_reason(why),
+        }))
     }
 
     /// With `None`, the routed mic ([`WinCapture::mic_route`]).
@@ -395,6 +413,30 @@ impl CaptureControl for WinCapture {
     /// running), else device loopback of the endpoint the apps play to.
     fn open_far_end(&self, target: &FarEndTarget) -> Result<Box<dyn AudioSource>, PlatformError> {
         Ok(Box::new(self.open_far_end_source(target)?))
+    }
+
+    /// Not yet: an `IMMNotificationClient` (devices added, removed, changing state, and the
+    /// defaults) comes with the Windows device branch. Until then the core reads the devices when
+    /// it opens a mic or is asked.
+    fn watch_devices(&self, _: EventSink<DeviceChange>) -> Result<(), PlatformError> {
+        Err(PlatformError::Unsupported("device change notifications"))
+    }
+
+    fn unwatch_devices(&self) {}
+}
+
+/// The core's [`AutoReason`] for the routing's reason.
+fn auto_reason(why: MicRouteReason) -> AutoReason {
+    match why {
+        MicRouteReason::LeAudioHeadset => AutoReason::LeAudioHeadset,
+        // Not the classic headset's call-quality mic: built in, or USB (the core's word covers
+        // both, as the schema's does).
+        MicRouteReason::NotBluetoothForBluetoothOutput => AutoReason::BuiltInForBluetoothOutput,
+        MicRouteReason::HeadsetMicSetting => AutoReason::HeadsetMicSetting,
+        MicRouteReason::OnlyBluetoothMics => AutoReason::NoBuiltInMic,
+        MicRouteReason::FirstInput => AutoReason::FirstInput,
+        // `Requested` is never the routing's answer (it routes only when nothing is named).
+        MicRouteReason::DefaultInput | MicRouteReason::Requested => AutoReason::DefaultInput,
     }
 }
 

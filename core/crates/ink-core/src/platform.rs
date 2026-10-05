@@ -68,20 +68,89 @@ pub enum FarEndTarget {
     Apps(Vec<AppRef>),
 }
 
+/// Why the platform's routing picks an input when the caller names none
+/// ([`CaptureControl::automatic_input`]): what Settings calls "Automatic".
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum AutoReason {
+    /// The output is not Bluetooth: the system default input.
+    DefaultInput,
+    /// The output is Bluetooth: a mic that is not the headset's (the built-in one; on Windows a
+    /// USB mic may be the one kept), because a classic headset mic is 16 kHz call audio.
+    BuiltInForBluetoothOutput,
+    /// The output is Bluetooth and no other mic exists (a Mac without a built-in mic; on Windows,
+    /// every mic is Bluetooth): the default input.
+    NoBuiltInMic,
+    /// No default input is set: the first input.
+    FirstInput,
+    /// An LE Audio headset, whose own mic keeps full quality (Windows).
+    LeAudioHeadset,
+    /// The platform's own headset-mic switch is on: the Bluetooth headset's mic. Nothing in the
+    /// core turns that switch on since the user picks a mic (`audio.input`); it goes when the
+    /// platforms drop the switch.
+    HeadsetMicSetting,
+}
+
+/// The input [`CaptureControl::open_mic`] opens when it is given no device, and why.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AutoInput {
+    /// The device.
+    pub device: DeviceInfo,
+    /// Why the routing picks it.
+    pub reason: AutoReason,
+}
+
+/// What changed among the devices ([`CaptureControl::watch_devices`]). The core reads the lists
+/// again whatever the kind; the kind is for the log.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum DeviceChange {
+    /// A device was added or removed, or one changed state (enabled, disabled, renamed).
+    Devices,
+    /// The default input changed.
+    DefaultInput,
+    /// The default output changed.
+    DefaultOutput,
+}
+
 /// Opens capture streams and reports devices.
 pub trait CaptureControl: Send + Sync {
     /// **Worker.** Input devices, default first.
     fn input_devices(&self) -> Result<Vec<DeviceInfo>, PlatformError>;
 
+    /// **Worker.** Output devices, default first, for the output picker (Windows: which output a
+    /// meeting's far end records). [`PlatformError::Unsupported`] where the far end does not
+    /// depend on an output (macOS: the process tap hears the app wherever it plays).
+    fn output_devices(&self) -> Result<Vec<DeviceInfo>, PlatformError>;
+
     /// **Worker.** The current default output device, if there is one. Mic routing and the echo
     /// decision read its transport.
     fn default_output(&self) -> Result<Option<DeviceInfo>, PlatformError>;
 
-    /// **Worker.** A microphone stream on `device`, or on the routing default when `None`.
+    /// **Worker.** The input `open_mic(None)` would open now, and why; `None` when there is no
+    /// input at all. Opens nothing.
+    fn automatic_input(&self) -> Result<Option<AutoInput>, PlatformError>;
+
+    /// **Worker.** A microphone stream on `device`, or on the routing default when `None`. A
+    /// stream whose device goes away (unplugged, disconnected) reports [`AudioSource::ended`]: a
+    /// meeting then opens the mic again elsewhere.
     fn open_mic(&self, device: Option<&DeviceId>) -> Result<Box<dyn AudioSource>, PlatformError>;
 
     /// **Worker.** A far-end stream for `target`.
     fn open_far_end(&self, target: &FarEndTarget) -> Result<Box<dyn AudioSource>, PlatformError>;
+
+    /// **Worker.** Starts telling `on_change` when devices come or go, or a default changes: an OS
+    /// notification (Core Audio property listeners, `IMMNotificationClient`), never a poll.
+    /// `on_change` runs on a callback thread (never a realtime one) and must not block: the core
+    /// only enqueues, and coalesces what arrives together. Several notifications for one change
+    /// are fine. Calling it again replaces the callback. [`PlatformError::Unsupported`] where the
+    /// platform cannot watch yet: the core then reads the devices only when it opens a mic or is
+    /// asked.
+    fn watch_devices(&self, on_change: EventSink<DeviceChange>) -> Result<(), PlatformError>;
+
+    /// **Worker.** Stops watching. When it returns, the callback will not run again. A no-op when
+    /// not watching.
+    fn unwatch_devices(&self);
 }
 
 /// A change in which applications hold the microphone.

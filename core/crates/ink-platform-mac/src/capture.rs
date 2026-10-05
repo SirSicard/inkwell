@@ -30,7 +30,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use ink_audio::{RealtimeGuard, unguarded};
-use ink_core::{AudioSource, CaptureControl, DeviceId, DeviceInfo, FarEndTarget, PlatformError};
+use ink_core::{
+    AudioSource, AutoInput, AutoReason, CaptureControl, DeviceChange, DeviceId, DeviceInfo,
+    EventSink, FarEndTarget, PlatformError,
+};
 use objc2_core_audio::CATapMuteBehavior;
 
 pub use io::{IoStats, leaked_contexts};
@@ -178,8 +181,24 @@ impl CaptureControl for MacCapture {
         self.inputs(&hal::devices()?)
     }
 
+    /// None: the far end is a process tap, which hears its app whatever output it plays to, so
+    /// there is nothing to pick.
+    fn output_devices(&self) -> Result<Vec<DeviceInfo>, PlatformError> {
+        Err(PlatformError::Unsupported(
+            "an output picker: the far end is tapped from its app, whatever it plays to",
+        ))
+    }
+
     fn default_output(&self) -> Result<Option<DeviceInfo>, PlatformError> {
         self.output(&hal::devices()?)
+    }
+
+    /// [`MacCapture::mic_route`], in the core's words.
+    fn automatic_input(&self) -> Result<Option<AutoInput>, PlatformError> {
+        Ok(self.mic_route()?.map(|(device, why)| AutoInput {
+            device,
+            reason: auto_reason(why),
+        }))
     }
 
     /// With `None`, the routed mic ([`MacCapture::mic_route`]).
@@ -191,6 +210,27 @@ impl CaptureControl for MacCapture {
     /// helpers under their bundle ids, and fails if none has an audio process.
     fn open_far_end(&self, target: &FarEndTarget) -> Result<Box<dyn AudioSource>, PlatformError> {
         Ok(Box::new(self.open_far_end_source(target)?))
+    }
+
+    /// Not yet: the HAL's device-list and default-device listeners come with the Mac's device
+    /// branch (through `io`'s listener seam and its leak-safe teardown). Until then the core reads
+    /// the devices when it opens a mic or is asked.
+    fn watch_devices(&self, _: EventSink<DeviceChange>) -> Result<(), PlatformError> {
+        Err(PlatformError::Unsupported("device change notifications"))
+    }
+
+    fn unwatch_devices(&self) {}
+}
+
+/// The core's [`AutoReason`] for the routing's reason.
+fn auto_reason(why: MicRouteReason) -> AutoReason {
+    match why {
+        MicRouteReason::BuiltInForBluetoothOutput => AutoReason::BuiltInForBluetoothOutput,
+        MicRouteReason::HeadsetMicSetting => AutoReason::HeadsetMicSetting,
+        MicRouteReason::NoBuiltInMic => AutoReason::NoBuiltInMic,
+        MicRouteReason::FirstInput => AutoReason::FirstInput,
+        // `Requested` is never the routing's answer (it routes only when nothing is named).
+        MicRouteReason::DefaultInput | MicRouteReason::Requested => AutoReason::DefaultInput,
     }
 }
 
