@@ -83,6 +83,10 @@ public enum InkEvent: Codable, Sendable, Equatable {
     case meetingDetectionEnded(MeetingDetectionEnded)
     /// `meeting.detection`
     case meetingDetection(MeetingDetection)
+    /// `meetings.calls`
+    case meetingsCalls(MeetingsCalls)
+    /// `meeting.discarded`
+    case meetingDiscarded(MeetingDiscarded)
     /// `meeting.answered`
     case meetingAnswered(MeetingAnswered)
     /// `meeting.recovered`
@@ -257,6 +261,8 @@ public enum InkEvent: Codable, Sendable, Equatable {
             case "meeting.detected": self = .meetingDetected(try MeetingDetected(from: decoder))
             case "meeting.detection_ended": self = .meetingDetectionEnded(try MeetingDetectionEnded(from: decoder))
             case "meeting.detection": self = .meetingDetection(try MeetingDetection(from: decoder))
+            case "meetings.calls": self = .meetingsCalls(try MeetingsCalls(from: decoder))
+            case "meeting.discarded": self = .meetingDiscarded(try MeetingDiscarded(from: decoder))
             case "meeting.answered": self = .meetingAnswered(try MeetingAnswered(from: decoder))
             case "meeting.recovered": self = .meetingRecovered(try MeetingRecovered(from: decoder))
             case "meetings.recovered": self = .meetingsRecovered(try MeetingsRecovered(from: decoder))
@@ -360,6 +366,8 @@ public enum InkEvent: Codable, Sendable, Equatable {
         case .meetingDetected(let event): try event.encode(to: encoder)
         case .meetingDetectionEnded(let event): try event.encode(to: encoder)
         case .meetingDetection(let event): try event.encode(to: encoder)
+        case .meetingsCalls(let event): try event.encode(to: encoder)
+        case .meetingDiscarded(let event): try event.encode(to: encoder)
         case .meetingAnswered(let event): try event.encode(to: encoder)
         case .meetingRecovered(let event): try event.encode(to: encoder)
         case .meetingsRecovered(let event): try event.encode(to: encoder)
@@ -768,6 +776,40 @@ public enum BestUnit: String, Codable, Sendable, Equatable, CaseIterable {
     case ms
     case wpm
     case words
+}
+
+/// An app in the call policies' list: one detection has seen hold the microphone for a call, or
+/// one the user chose for. Never shown by its identity: a shell names it and shows its icon
+/// from the identity, as for a mode's apps.
+public struct CallApp: Codable, Sendable, Equatable {
+    /// Its identity, as detection reports it: a bundle id on the Mac, the executable (or the
+    /// package's app id) on Windows, where it is kept in lowercase.
+    public let app: String
+    /// Its name as detection last saw it; absent for an app chosen for that has not been seen.
+    public let appName: String?
+    /// Whether the user chose its policy; false while it follows the default.
+    public let chosen: Bool
+    /// What happens for it now: the user's choice, else the default (Always is Ask while the
+    /// stored list could not be read).
+    public let policy: CallPolicy
+    /// When detection last saw it hold the microphone for a call, Unix ms.
+    public let seenUnixMs: Int64?
+
+    private enum CodingKeys: String, CodingKey {
+        case app
+        case appName = "app_name"
+        case chosen
+        case policy
+        case seenUnixMs = "seen_unix_ms"
+    }
+}
+
+/// What happens when an app holds the microphone for a call: always (recorded at once, visibly,
+/// as by Record), ask (the consent Drop offers it) or never (neither).
+public enum CallPolicy: String, Codable, Sendable, Equatable, CaseIterable {
+    case always
+    case ask
+    case never
 }
 
 /// A model in the catalogue that runs on this OS.
@@ -1515,13 +1557,16 @@ public enum FailedStage: String, Codable, Sendable, Equatable, CaseIterable {
     case other
 }
 
-/// A command.failed a shell acts on: list_unreadable (a snippets.save or voice_commands.save
-/// refused because the stored list cannot be read; send it again with replace_unreadable to
-/// start over); meeting_recording (an audio.test refused because a meeting records: the mic
-/// test waits until it ends).
+/// A command.failed a shell acts on: list_unreadable (a snippets.save, voice_commands.save or
+/// meetings.calls.set refused because the stored list cannot be read; send it again with
+/// replace_unreadable to start over); meeting_recording (an audio.test refused because a
+/// meeting records: the mic test waits until it ends); delete_window_over (a meeting.discard
+/// after the meeting's first minute: only Stop is left, and the record can be deleted from the
+/// library once it is finished).
 public enum FailureCode: String, Codable, Sendable, Equatable, CaseIterable {
     case listUnreadable = "list_unreadable"
     case meetingRecording = "meeting_recording"
+    case deleteWindowOver = "delete_window_over"
 }
 
 /// What a meeting records as the other side: the sound of its app alone (a call recorded from
@@ -1969,26 +2014,38 @@ public struct MeetingCommitments: Codable, Sendable, Equatable {
 
 /// An app has held the microphone long enough to be a call, and no meeting is being recorded:
 /// the shell offers to record it (the consent Drop), and records only if the user says so
-/// (meeting.start with this app).
+/// (meeting.start with this app). Its policy is Ask (meetings.calls), or Always when its
+/// recording could not start by itself (message says why: a start that failed, or a far end
+/// that would not be the app's sound alone), when the user stopped a recording by hand during
+/// this call, or when the app was made Always during this call. The Drop can also set the app's
+/// policy (meetings.calls.set): Always (then meeting.start) or Never.
 public struct MeetingDetected: Codable, Sendable, Equatable {
     /// The app, by id (a bundle id on the Mac).
     public let app: String
     /// Its name, as the shell shows it.
     public let appName: String
+    /// Why it is offered rather than recorded, when its policy is Always: its recording could
+    /// not start by itself (the platform's error), or its own sound cannot be recorded alone,
+    /// so the recording would hold everything this computer plays (the Mac's fallback, Windows'
+    /// device loopback): an Always app is recorded by itself only when its sound alone is.
+    /// Never content.
+    public let message: String?
     /// Always `meeting.detected`.
     public let type: String
 
     private enum CodingKeys: String, CodingKey {
         case app
         case appName = "app_name"
+        case message
         case type
     }
 }
 
 /// Whether the core is listening for calls now: sent once at start whatever the state (off
-/// included, with a message when the setting could not be read), then when detection starts,
-/// stops (the meetings.detect setting), fails to start, or stops on its own (the platform
-/// stopped answering). The shell shows this state, not the setting.
+/// included, with a message when the default call policy could not be read), then when
+/// detection starts, stops (the call policies: it listens while any app could be offered or
+/// recorded, so a default of Never with no app chosen for is off), fails to start, or stops on
+/// its own (the platform stopped answering). The shell shows this state, not the setting.
 public struct MeetingDetection: Codable, Sendable, Equatable {
     /// Whether apps taking the microphone are being watched.
     public let listening: Bool
@@ -1999,11 +2056,13 @@ public struct MeetingDetection: Codable, Sendable, Equatable {
 }
 
 /// The offer to record an app is over before it was taken: the app released the microphone, or
-/// the user said not this one (meeting.dismiss).
+/// the user said not this one (meeting.dismiss), or its policy became Never
+/// (meetings.calls.set).
 public struct MeetingDetectionEnded: Codable, Sendable, Equatable {
     /// The app, by id.
     public let app: String
-    /// Whether the user dismissed it (rather than the app releasing the microphone).
+    /// Whether the user dismissed it, by Not this one or Never (rather than the app releasing
+    /// the microphone).
     public let dismissed: Bool
     /// Always `meeting.detection_ended`.
     public let type: String
@@ -2023,6 +2082,30 @@ public struct MeetingDiarized: Codable, Sendable, Equatable {
     public let substantial: Int64
     /// Always `meeting.diarized`.
     public let type: String
+}
+
+/// A meeting stopped with meeting.discard (Stop and delete), or one a crash interrupted on its
+/// way to being deleted, is gone as if it had never been made: no final pass ran and nothing
+/// was sent to a language model; its transcript, notes and search entries were deleted with
+/// their words overwritten in the library's files, then its audio. Follows meeting.stopped; no
+/// meeting.finished comes. The screens drop it.
+public struct MeetingDiscarded: Codable, Sendable, Equatable {
+    /// Its recorded audio is still on disk: it could not be removed, or its folder is outside
+    /// the library and was left alone. The record itself is gone.
+    public let audioLeft: Bool
+    /// The record that is gone.
+    public let record: String
+    /// No copy of its words is left in the library's files (as for record.deleted).
+    public let scrubbed: Bool
+    /// Always `meeting.discarded`.
+    public let type: String
+
+    private enum CodingKeys: String, CodingKey {
+        case audioLeft = "audio_left"
+        case record
+        case scrubbed
+        case type
+    }
 }
 
 /// Whether the live mic is protected from echo, when it changes. Which fields are present
@@ -2321,12 +2404,25 @@ public struct MeetingSideState: Codable, Sendable, Equatable {
 }
 
 /// A meeting's record exists and its capture is being transcribed live. Names what the shell
-/// shows of it: its title, its app and its mic, when known.
+/// shows of it: its title, its app and its mic, when known. Sent for every meeting, however it
+/// started (Record, the consent Drop's offer, or an app's Always policy): the shell shows the
+/// recording indicator from this event, so a call recorded by its policy shows exactly as one
+/// the user started.
 public struct MeetingStarted: Codable, Sendable, Equatable {
     /// The app it records, by id (a bundle id on the Mac), when it was started for one.
     public let app: String?
     /// That app's name, as the shell shows it.
     public let appName: String?
+    /// True when the app's call policy (Always) started it, without a tap: the shell says so
+    /// where the recording shows, keeps the reminder to tell the others, and offers Stop and
+    /// Stop and delete. Absent for a start the user made. A policy start always records the
+    /// app's own sound alone (far_end app).
+    public let auto: Bool?
+    /// Until this moment, Unix ms (a minute after the start), meeting.discard (Stop and delete)
+    /// may delete this meeting as if it had never been made; after it only Stop is offered
+    /// (meeting.discard is refused with delete_window_over). Absent for a meeting that cannot
+    /// be deleted so (a replay).
+    public let deleteUntilUnixMs: Int64?
     /// What it records as the other side.
     public let farEnd: FarEnd?
     /// The microphone it records, as the OS names it.
@@ -2346,6 +2442,8 @@ public struct MeetingStarted: Codable, Sendable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case app
         case appName = "app_name"
+        case auto
+        case deleteUntilUnixMs = "delete_until_unix_ms"
         case farEnd = "far_end"
         case micName = "mic_name"
         case micReason = "mic_reason"
@@ -2541,6 +2639,26 @@ public struct MeetingWorkerFailed: Codable, Sendable, Equatable {
     /// The meeting's record id.
     public let record: String
     /// Always `meeting.worker_failed`.
+    public let type: String
+}
+
+/// The call policies: the default for apps not chosen for, and every app seen or chosen for (at
+/// most 64), most recently seen first. In answer to meetings.calls.list and meetings.calls.set
+/// (with ref), and unasked when the default changed or detection saw a new app.
+public struct MeetingsCalls: Codable, Sendable, Equatable {
+    /// The apps.
+    public let apps: [CallApp]
+    /// The policy for apps not chosen for (meetings.calls.default; ask unless set).
+    public let `default`: CallPolicy
+    /// Why the stored choices could not be read, while they are set aside: every app follows
+    /// the default then, with Always lowered to Ask, and meetings.calls.set is refused
+    /// (list_unreadable) unless it says replace_unreadable, which starts the list over. In the
+    /// answer to that start over under a default of Always: that the default is Ask now
+    /// (written), so the user sets Always again knowingly.
+    public let message: String?
+    /// The command's "id", when it had one, so the shell can match the answer to what it sent.
+    public let ref: String?
+    /// Always `meetings.calls`.
     public let type: String
 }
 

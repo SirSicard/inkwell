@@ -39,6 +39,8 @@ struct ReplayCapture {
     opened_for: Mutex<Vec<Option<String>>>,
     /// An app's own sound cannot be tapped: everything this "Mac" plays is recorded instead.
     tap_fails: std::sync::atomic::AtomicBool,
+    /// An app is heard by loopback of its output device, as Windows hears most apps.
+    device_loopback: std::sync::atomic::AtomicBool,
     /// Frames delivered to capture by the latest meeting's mic and far end.
     delivered: [Arc<AtomicU64>; 2],
 }
@@ -143,9 +145,23 @@ impl MeetingCapture for ReplayCapture {
                 Some(_) if self.tap_fails.load(std::sync::atomic::Ordering::Relaxed) => {
                     FarScope::EverythingInstead("no audio process for that app".into())
                 }
+                Some(_)
+                    if self
+                        .device_loopback
+                        .load(std::sync::atomic::Ordering::Relaxed) =>
+                {
+                    FarScope::Everything
+                }
                 Some(_) => FarScope::App,
             },
         })
+    }
+
+    /// As Windows' plan: an app heard by device loopback is known before anything opens.
+    fn planned_far(&self, _app: &AppRef) -> Option<FarScope> {
+        self.device_loopback
+            .load(std::sync::atomic::Ordering::Relaxed)
+            .then_some(FarScope::Everything)
     }
 }
 
@@ -212,6 +228,7 @@ fn rig_with(label: &str, seconds: f64, clock: Arc<dyn Clock>, store: Arc<dyn Sto
         clock: clock.clone(),
         opened_for: Mutex::default(),
         tap_fails: Default::default(),
+        device_loopback: Default::default(),
         delivered: Default::default(),
     });
     let detector = Arc::new(FakeDetector::default());
@@ -1845,4 +1862,619 @@ fn a_call_that_cannot_be_heard_alone_says_it_records_everything_this_mac_plays()
     assert_eq!(r.events.count("meeting.far_end_fallback"), 1, "once");
     r.events.assert_valid();
     r.core.shutdown();
+}
+
+// --- Call policies: Always, Ask, Never; Stop and delete -------------------------------------
+
+/// A rig on a mock clock, driven as the detection test drives it: the meetings thread reads the
+/// clock when a signal arrives, so each signal is given time to be taken before the clock moves.
+struct Driven {
+    r: Rig,
+    clock: Arc<MockClock>,
+}
+
+impl Driven {
+    fn new(label: &str, store: Arc<dyn Store>) -> Self {
+        let clock = Arc::new(MockClock::new(10_000_000_000, 1_790_146_800_000));
+        let r = rig_with(label, 60.0, clock.clone(), store);
+        Self { r, clock }
+    }
+
+    fn signal(&self, s: MeetingSignal) {
+        self.r.detector.signal(s);
+        std::thread::sleep(Duration::from_millis(150));
+    }
+
+    /// Any signal makes the meetings thread judge what is pending at the clock's time.
+    fn poke(&self) {
+        self.signal(MeetingSignal::MicReleased {
+            app: app("nobody", "Nobody"),
+        });
+    }
+
+    /// `id` takes the mic and holds it past the hold.
+    fn hold(&self, id: &str, name: &str) {
+        self.signal(MeetingSignal::MicInUse { app: app(id, name) });
+        self.clock.advance_ns(3_500_000_000);
+        self.poke();
+    }
+
+    fn command(&self, json: &str) {
+        self.r.core.command(json).unwrap();
+    }
+
+    fn listening(&self, on: bool) {
+        self.r
+            .events
+            .wait_for(WAIT, |v| {
+                v["type"] == "meeting.detection" && v["listening"] == on
+            })
+            .unwrap_or_else(|| panic!("listening {on}: {:?}", self.r.events.types()));
+    }
+
+    fn answer(&self, ty: &str, reference: &str) -> Value {
+        self.r
+            .events
+            .wait_for(WAIT, |v| v["type"] == ty && v["ref"] == reference)
+            .unwrap_or_else(|| panic!("no {ty} for {reference}: {:?}", self.r.events.types()))
+    }
+}
+
+fn memory_store() -> Arc<dyn Store> {
+    Arc::new(ink_store::SqliteStore::open_in_memory().unwrap())
+}
+
+/// The meeting directories under the rig's library.
+fn meeting_dirs(r: &Rig) -> Vec<PathBuf> {
+    match std::fs::read_dir(r._dir.path().join("meetings")) {
+        Ok(entries) => entries.filter_map(Result::ok).map(|e| e.path()).collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// Never records silently: an Always app's call starts with no offer, through the same start as
+/// Record, and its `meeting.started` (the event the shells show the recording indicator from)
+/// says it was its policy and until when it can be stopped and deleted. It ends as any recorded
+/// app's meeting does.
+#[test]
+fn an_always_app_is_recorded_without_asking_and_shows_as_any_recording() {
+    let d = Driven::new("always", memory_store());
+    d.listening(true);
+    d.command(
+        r#"{"cmd":"meetings.calls.set","app":"com.example.call","policy":"always","id":"c1"}"#,
+    );
+    let listed = d.answer("meetings.calls", "c1");
+    assert_eq!(listed["default"], "ask");
+    assert_eq!(
+        listed["apps"],
+        serde_json::json!([{"app": "com.example.call", "policy": "always", "chosen": true}])
+    );
+
+    d.hold("com.example.call", "Example Call");
+    let started = d.r.events.wait_type("meeting.started", WAIT);
+    assert_eq!(started["auto"], true, "{started}");
+    assert_eq!(started["app"], "com.example.call");
+    assert_eq!(started["app_name"], "Example Call");
+    assert_eq!(started["far_end"], "app");
+    assert_eq!(
+        started["delete_until_unix_ms"].as_i64(),
+        Some(d.clock.unix_ms() + 60_000),
+        "a minute after the start"
+    );
+    assert_eq!(
+        d.r.events.count("meeting.detected"),
+        0,
+        "recorded, not asked"
+    );
+    assert_eq!(
+        *d.r.capture.opened_for.lock().unwrap(),
+        [Some("com.example.call".to_owned())]
+    );
+    // Seen: the list now names it, for Settings.
+    let seen =
+        d.r.events
+            .wait_for(WAIT, |v| {
+                v["type"] == "meetings.calls"
+                    && v.get("ref").is_none()
+                    && v["apps"][0]["app_name"] == "Example Call"
+            })
+            .expect("the app seen joins the list");
+    assert_eq!(seen["apps"][0]["policy"], "always");
+    assert!(seen["apps"][0]["seen_unix_ms"].is_i64());
+    // Saved: a new core reads the same choice.
+    let stored =
+        d.r.core
+            .shared()
+            .store
+            .setting(ink_ffi::calls::APPS_KEY)
+            .unwrap()
+            .unwrap();
+    assert!(stored.contains("\"policy\":\"always\""), "{stored}");
+
+    // It ends as a recorded app's meeting does: 15 s after its app lets go.
+    std::thread::sleep(Duration::from_millis(500));
+    d.signal(MeetingSignal::MicReleased {
+        app: app("com.example.call", "Example Call"),
+    });
+    d.clock.advance_ns(16_000_000_000);
+    d.poke();
+    d.r.events.wait_type("meeting.stopped", WAIT);
+    d.r.events.wait_type("meeting.finished", WAIT);
+    d.r.events.assert_valid();
+    d.r.core.shutdown();
+}
+
+/// "Stop and delete" in the first minute: capture ends, no final pass runs, and the record and its
+/// audio directory are gone as if the meeting had never been made.
+#[test]
+fn stop_and_delete_in_the_first_minute_leaves_nothing_of_the_meeting() {
+    let r = rig("discard", 30.0, clock());
+    r.core
+        .command(r#"{"cmd":"meeting.start","id":"s"}"#)
+        .unwrap();
+    let started = r.events.wait_type("meeting.started", WAIT);
+    assert!(started.get("auto").is_none(), "the user started it");
+    assert!(
+        started["delete_until_unix_ms"].is_i64(),
+        "any start may be deleted"
+    );
+    assert!(r.capture.wait_delivered(16_000, WAIT));
+    let record = ink_core::RecordId(started["record"].as_str().unwrap().to_owned());
+    let store = r.core.shared().store.clone();
+    assert!(store.record(&record).unwrap().is_some());
+    let dirs = meeting_dirs(&r);
+    assert_eq!(dirs.len(), 1);
+    assert!(
+        dirs[0].join("live.json").is_file(),
+        "marked live while it records"
+    );
+
+    r.core
+        .command(r#"{"cmd":"meeting.discard","id":"d1"}"#)
+        .unwrap();
+    r.events.wait_type("meeting.stopped", WAIT);
+    let gone = r.events.wait_type("meeting.discarded", WAIT);
+    assert_eq!(gone["record"], started["record"]);
+    assert_eq!(gone["audio_left"], false);
+    assert_eq!(gone["scrubbed"], true);
+    assert!(
+        store.record(&record).unwrap().is_none(),
+        "the record is gone"
+    );
+    assert!(
+        store.segments(&record).unwrap_or_default().is_empty(),
+        "and its words"
+    );
+    assert!(meeting_dirs(&r).is_empty(), "and its audio, marker and all");
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(r.events.count("meeting.finished"), 0, "no final pass");
+    assert_eq!(r.events.count("meeting.transcribed"), 0);
+
+    // Nothing left to delete; a new meeting starts at once.
+    r.core
+        .command(r#"{"cmd":"meeting.discard","id":"d2"}"#)
+        .unwrap();
+    assert!(
+        failed_with(&r.events, "d2")["message"]
+            .as_str()
+            .unwrap()
+            .contains("no meeting")
+    );
+    r.core.command(r#"{"cmd":"meeting.start"}"#).unwrap();
+    assert!(r.events.wait_count("meeting.started", 2, WAIT));
+    r.core.command(r#"{"cmd":"meeting.stop"}"#).unwrap();
+    r.events.wait_type("meeting.finished", WAIT);
+    r.events.assert_valid();
+    r.core.shutdown();
+}
+
+/// After the first minute only Stop is left: the delete is refused with its code, and the meeting
+/// goes on to be stopped and finished as usual.
+#[test]
+fn stop_and_delete_is_refused_after_the_first_minute() {
+    let d = Driven::new("discard-late", memory_store());
+    d.command(r#"{"cmd":"meeting.start","id":"s"}"#);
+    let started = d.r.events.wait_type("meeting.started", WAIT);
+    assert!(d.r.capture.wait_delivered(8_000, WAIT));
+    d.clock.advance_ns(60_000_000_000);
+    d.command(r#"{"cmd":"meeting.discard","id":"late"}"#);
+    let refused = failed_with(&d.r.events, "late");
+    assert_eq!(refused["code"], "delete_window_over", "{refused}");
+    d.command(r#"{"cmd":"meeting.stop"}"#);
+    let finished = d.r.events.wait_type("meeting.finished", WAIT);
+    assert_eq!(finished["record"], started["record"]);
+    assert_eq!(d.r.events.count("meeting.discarded"), 0);
+    let record = ink_core::RecordId(started["record"].as_str().unwrap().to_owned());
+    assert!(d.r.core.shared().store.record(&record).unwrap().is_some());
+    d.r.events.assert_valid();
+    d.r.core.shutdown();
+}
+
+/// A Never app is neither offered nor recorded; made Ask while it holds the mic, it is offered at
+/// once; made Never from the offer ("Never for this app"), the offer goes as if dismissed.
+#[test]
+fn a_never_app_is_offered_once_it_becomes_ask_and_never_withdraws_its_offer() {
+    let d = Driven::new("never", memory_store());
+    d.listening(true);
+    d.command(r#"{"cmd":"meetings.calls.set","app":"com.example.chat","policy":"never","id":"n"}"#);
+    d.answer("meetings.calls", "n");
+    d.hold("com.example.chat", "Example Chat");
+    d.clock.advance_ns(30_000_000_000);
+    d.poke();
+    assert_eq!(d.r.events.count("meeting.detected"), 0, "Never: no offer");
+    assert_eq!(
+        d.r.events.count("meeting.started"),
+        0,
+        "and nothing recorded"
+    );
+
+    d.command(r#"{"cmd":"meetings.calls.set","app":"com.example.chat","policy":"ask","id":"a"}"#);
+    let offered = d.r.events.wait_type("meeting.detected", WAIT);
+    assert_eq!(offered["app"], "com.example.chat");
+    assert!(offered.get("message").is_none());
+    let listed = d.answer("meetings.calls", "a");
+    assert_eq!(listed["apps"][0]["policy"], "ask");
+
+    d.command(
+        r#"{"cmd":"meetings.calls.set","app":"com.example.chat","policy":"never","id":"n2"}"#,
+    );
+    let ended = d.r.events.wait_type("meeting.detection_ended", WAIT);
+    assert_eq!(ended["app"], "com.example.chat");
+    assert_eq!(ended["dismissed"], true);
+
+    // `default` clears the choice: the app follows the default (Ask) and is offered again.
+    d.command(
+        r#"{"cmd":"meetings.calls.set","app":"com.example.chat","policy":"default","id":"c"}"#,
+    );
+    assert!(d.r.events.wait_count("meeting.detected", 2, WAIT));
+    let listed = d.answer("meetings.calls", "c");
+    assert_eq!(listed["apps"][0]["chosen"], false);
+    // A choice the core refuses changes nothing.
+    assert!(
+        d.r.core
+            .command(r#"{"cmd":"meetings.calls.set","app":" padded","policy":"always"}"#)
+            .is_err()
+    );
+    assert!(
+        d.r.core
+            .command(r#"{"cmd":"meetings.calls.set","app":"x","policy":"sometimes"}"#)
+            .is_err()
+    );
+    d.r.events.assert_valid();
+    d.r.core.shutdown();
+}
+
+/// The old switch "Offer to record calls" off becomes the default Never at launch: detection is
+/// off, as before. An Always app turns it on, and only that app is recorded; the old switch on
+/// over Never is Ask.
+#[test]
+fn the_old_switch_off_migrates_to_never_and_an_always_app_turns_detection_on() {
+    let store = memory_store();
+    store.set_setting("meetings.detect", "off").unwrap();
+    let d = Driven::new("migrate", store.clone());
+    d.listening(false);
+    assert_eq!(
+        store
+            .setting(ink_ffi::calls::DEFAULT_KEY)
+            .unwrap()
+            .as_deref(),
+        Some("never"),
+        "migrated"
+    );
+    d.command(r#"{"cmd":"setting.get","key":"meetings.calls.default"}"#);
+    d.command(r#"{"cmd":"setting.get","key":"meetings.detect"}"#);
+    let value = |key: &str| {
+        d.r.events
+            .wait_for(WAIT, |v| v["type"] == "setting.value" && v["key"] == key)
+            .unwrap()["value"]
+            .clone()
+    };
+    assert_eq!(value("meetings.calls.default"), "never");
+    assert_eq!(value("meetings.detect"), "off");
+
+    d.command(r#"{"cmd":"meetings.calls.set","app":"com.example.call","policy":"always"}"#);
+    d.listening(true);
+    d.hold("com.example.other", "Other");
+    assert_eq!(
+        d.r.events.count("meeting.detected"),
+        0,
+        "the default is Never"
+    );
+    d.hold("com.example.call", "Example Call");
+    let started = d.r.events.wait_type("meeting.started", WAIT);
+    assert_eq!(started["app"], "com.example.call");
+    assert_eq!(started["auto"], true);
+    d.command(r#"{"cmd":"meeting.stop"}"#);
+    d.r.events.wait_type("meeting.finished", WAIT);
+
+    // The old switch on, over Never: Ask (the shell's toggle keeps working until it moves).
+    d.command(r#"{"cmd":"setting.set","key":"meetings.detect","value":"on","id":"on"}"#);
+    assert!(
+        d.r.events
+            .wait_for(WAIT, |v| v["type"] == "meetings.calls"
+                && v["default"] == "ask")
+            .is_some()
+    );
+    assert_eq!(
+        store
+            .setting(ink_ffi::calls::DEFAULT_KEY)
+            .unwrap()
+            .as_deref(),
+        Some("ask")
+    );
+    d.r.events.assert_valid();
+    d.r.core.shutdown();
+}
+
+/// A crash after "Stop and delete" and before the delete was done: the next launch's recovery
+/// deletes the meeting (record and audio) and never finishes it.
+#[test]
+fn recovery_deletes_a_meeting_stopped_to_be_deleted() {
+    let r = rig("discard-recover", 5.0, clock());
+    let store = r.core.shared().store.clone();
+    let record = store
+        .create_record(NewRecord {
+            kind: RecordKind::Meeting,
+            title: None,
+            started_at_unix_ms: 1_790_146_800_000,
+            source_app: Some("com.example.call".into()),
+            audio_dir: Some("meetings/1790146800000-0".into()),
+        })
+        .unwrap();
+    store
+        .append_segments(
+            &record,
+            &[ink_core::Segment {
+                channel: Channel::Mic,
+                start_ms: 0,
+                end_ms: 1_000,
+                text: "words said by mistake".into(),
+                speaker: None,
+            }],
+        )
+        .unwrap();
+    let dir = r._dir.path().join("meetings/1790146800000-0");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("mic-000000.pcm"), [0u8; 64]).unwrap();
+    ink_ffi::recovery::mark_discard(&dir, &record).unwrap();
+
+    r.core.command(r#"{"cmd":"meetings.recover"}"#).unwrap();
+    let gone = r.events.wait_type("meeting.discarded", WAIT);
+    assert_eq!(gone["record"], record.0.as_str());
+    r.events.wait_type("meetings.recovered", WAIT);
+    assert!(store.record(&record).unwrap().is_none());
+    assert!(!dir.exists(), "its audio and marker are gone");
+    assert_eq!(r.events.count("meeting.finished"), 0, "never finished");
+    r.events.assert_valid();
+    r.core.shutdown();
+}
+
+/// A stop by hand during an Always call is the user's: the call, its app still on the mic, is not
+/// recorded again by itself (it is offered); Stop and delete is a stop by hand too.
+#[test]
+fn a_stopped_always_call_is_offered_not_recorded_again() {
+    let d = Driven::new("always-stop", memory_store());
+    d.listening(true);
+    d.command(r#"{"cmd":"meetings.calls.set","app":"com.example.call","policy":"always"}"#);
+    d.hold("com.example.call", "Example Call");
+    d.r.events.wait_type("meeting.started", WAIT);
+    assert!(d.r.capture.wait_delivered(4_000, WAIT));
+    d.command(r#"{"cmd":"meeting.discard","id":"d"}"#);
+    d.r.events.wait_type("meeting.discarded", WAIT);
+    d.clock.advance_ns(5_000_000_000);
+    d.poke();
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(d.r.events.count("meeting.started"), 1, "not recorded again");
+    assert_eq!(
+        d.r.events.count("meeting.detected"),
+        0,
+        "dismissed for this call, as Not this one"
+    );
+    // The next call is recorded again.
+    d.signal(MeetingSignal::MicReleased {
+        app: app("com.example.call", "Example Call"),
+    });
+    d.hold("com.example.call", "Example Call");
+    assert!(d.r.events.wait_count("meeting.started", 2, WAIT));
+    d.command(r#"{"cmd":"meeting.stop"}"#);
+    d.r.events.wait_type("meeting.finished", WAIT);
+    d.r.events.assert_valid();
+    d.r.core.shutdown();
+}
+
+/// Stored choices the core cannot read: every app is at most asked about, the list says why, and
+/// a choice is refused until it says to start the list over.
+#[test]
+fn unreadable_choices_are_set_aside_and_only_replaced_when_asked() {
+    let store = memory_store();
+    store
+        .set_setting(ink_ffi::calls::DEFAULT_KEY, "always")
+        .unwrap();
+    store
+        .set_setting(
+            ink_ffi::calls::APPS_KEY,
+            "{\"apps\": [{\"app\": \"x\", \"policy\": 7}]}",
+        )
+        .unwrap();
+    let d = Driven::new("calls-unreadable", store.clone());
+    d.listening(true);
+    d.command(r#"{"cmd":"meetings.calls.list","id":"l"}"#);
+    let listed = d.answer("meetings.calls", "l");
+    assert!(listed["message"].is_string(), "{listed}");
+    // Always lowered to Ask: offered, not recorded.
+    d.hold("com.example.call", "Example Call");
+    d.r.events.wait_type("meeting.detected", WAIT);
+    assert_eq!(d.r.events.count("meeting.started"), 0);
+    d.command(r#"{"cmd":"meetings.calls.set","app":"com.example.call","policy":"never","id":"n"}"#);
+    let refused = failed_with(&d.r.events, "n");
+    assert_eq!(refused["code"], "list_unreadable", "{refused}");
+    assert!(
+        store
+            .setting(ink_ffi::calls::APPS_KEY)
+            .unwrap()
+            .unwrap()
+            .contains("\"policy\": 7"),
+        "the stored text is untouched"
+    );
+    d.command(
+        r#"{"cmd":"meetings.calls.set","app":"com.example.call","policy":"never","replace_unreadable":true,"id":"r"}"#,
+    );
+    let listed = d.answer("meetings.calls", "r");
+    // Started over under Always: the default is Ask now, written, and said.
+    assert_eq!(listed["default"], "ask", "{listed}");
+    assert!(
+        listed["message"].as_str().unwrap().contains("Ask now"),
+        "{listed}"
+    );
+    assert_eq!(
+        store
+            .setting(ink_ffi::calls::DEFAULT_KEY)
+            .unwrap()
+            .as_deref(),
+        Some("ask")
+    );
+    assert_eq!(listed["apps"][0]["policy"], "never");
+    d.r.events.wait_type("meeting.detection_ended", WAIT);
+    d.r.events.assert_valid();
+    d.r.core.shutdown();
+}
+
+/// An Always app whose own sound cannot be recorded alone (the Mac's tap fails, so everything it
+/// plays would be recorded; or Windows hears it by loopback of its output device) is never
+/// recorded by itself: it is offered, saying why, and no meeting.started comes. Windows' plan
+/// says so before anything opens; the Mac's tap only once opened, so its capture is opened and
+/// closed unstarted. A tap on Record records it, as today, with the fallback said.
+#[test]
+fn an_always_app_that_cannot_be_recorded_alone_is_offered_instead() {
+    use std::sync::atomic::Ordering::Relaxed;
+    for (label, mac) in [("not-alone-mac", true), ("not-alone-win", false)] {
+        let d = Driven::new(label, memory_store());
+        if mac {
+            d.r.capture.tap_fails.store(true, Relaxed);
+        } else {
+            d.r.capture.device_loopback.store(true, Relaxed);
+        }
+        d.listening(true);
+        d.command(r#"{"cmd":"meetings.calls.set","app":"com.example.call","policy":"always"}"#);
+        d.hold("com.example.call", "Example Call");
+        let offered = d.r.events.wait_type("meeting.detected", WAIT);
+        assert_eq!(offered["app"], "com.example.call");
+        assert_eq!(
+            offered["message"].as_str(),
+            Some(ink_ffi::control::NOT_ALONE),
+            "{label}"
+        );
+        assert_eq!(
+            d.r.events.count("meeting.started"),
+            0,
+            "{label}: nothing started"
+        );
+        let opened: &[Option<String>] = if mac {
+            &[Some("com.example.call".to_owned())]
+        } else {
+            &[]
+        };
+        assert_eq!(
+            *d.r.capture.opened_for.lock().unwrap(),
+            opened,
+            "{label}: opened only where only opening tells, and never started"
+        );
+        // The user's tap records it, everything included, and says so.
+        d.command(r#"{"cmd":"meeting.start","app":"com.example.call"}"#);
+        let started = d.r.events.wait_type("meeting.started", WAIT);
+        assert!(started.get("auto").is_none());
+        assert_eq!(started["far_end"], "everything", "{label}");
+        d.command(r#"{"cmd":"meeting.stop"}"#);
+        d.r.events.wait_type("meeting.finished", WAIT);
+        d.r.events.assert_valid();
+        d.r.core.shutdown();
+    }
+}
+
+/// A meeting whose worker failed (its record could not be made, so it never started) refuses
+/// Stop and delete at once: the shell is not left waiting for a meeting.discarded that cannot
+/// come.
+#[test]
+fn a_meeting_that_failed_to_start_refuses_to_be_deleted() {
+    let store = FailingStore::new(Arc::new(ink_store::SqliteStore::open_in_memory().unwrap()));
+    let r = rig_with("discard-failed", 5.0, clock(), store.clone());
+    store.fail(&["create_record"]);
+    let run =
+        ink_ffi::meeting::MeetingRun::start(r.core.shared(), Vec::new(), Default::default(), None)
+            .unwrap();
+    let failed = r.events.wait_type("meeting.failed", WAIT);
+    assert!(
+        failed["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("the meeting could not start"),
+        "{failed}"
+    );
+    let until = std::time::Instant::now() + WAIT;
+    while !run.is_over() && std::time::Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(run.is_over());
+    assert!(!run.discard(), "refused: nothing will be deleted");
+    run.join();
+    assert_eq!(r.events.count("meeting.discarded"), 0);
+    r.events.assert_valid();
+    r.core.shutdown();
+}
+
+/// Starting an unreadable list over lowers the default from what the store says, not what the
+/// meetings thread last read: a Never the store holds stands; a store that cannot be read lowers
+/// it (fail closed: never Always on a guess).
+#[test]
+fn starting_over_lowers_the_default_from_what_the_store_says() {
+    for (label, after_load, lowered) in [
+        ("store-never", "never", false),
+        ("store-ask", "ask", false),
+        ("store-fails", "", true),
+    ] {
+        let store = FailingStore::new(memory_store());
+        store
+            .set_setting(ink_ffi::calls::DEFAULT_KEY, "always")
+            .unwrap();
+        store
+            .set_setting(ink_ffi::calls::APPS_KEY, "{\"apps\": 7}")
+            .unwrap();
+        let d = Driven::new(label, store.clone());
+        d.listening(true);
+        // Behind the meetings thread's back: no reload says so.
+        if after_load.is_empty() {
+            store.fail(&["setting"]);
+        } else {
+            store
+                .inner
+                .set_setting(ink_ffi::calls::DEFAULT_KEY, after_load)
+                .unwrap();
+        }
+        d.command(
+            r#"{"cmd":"meetings.calls.set","app":"com.example.call","policy":"never","replace_unreadable":true,"id":"r"}"#,
+        );
+        let listed = d.answer("meetings.calls", "r");
+        store.heal();
+        let stored = store.inner.setting(ink_ffi::calls::DEFAULT_KEY).unwrap();
+        if lowered {
+            assert_eq!(stored.as_deref(), Some("ask"), "{label}");
+            assert_eq!(listed["default"], "ask", "{listed}: this thread's too");
+            assert!(
+                listed["message"].as_str().unwrap().contains("Ask now"),
+                "{listed}"
+            );
+        } else {
+            assert_eq!(
+                stored.as_deref(),
+                Some(after_load),
+                "{label}: the store's stands"
+            );
+            assert!(listed.get("message").is_none(), "{listed}");
+            // And is this thread's at once: never the stale Always it last read.
+            assert_eq!(listed["default"], after_load, "{listed}");
+        }
+        assert_eq!(listed["apps"][0]["policy"], "never", "{listed}");
+        d.r.events.assert_valid();
+        d.r.core.shutdown();
+    }
 }

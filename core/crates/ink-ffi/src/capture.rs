@@ -111,6 +111,14 @@ pub trait MeetingCapture: Send + Sync {
     /// goes mid-meeting reads it again ([`FollowMic`]). `choices`' output is for the Windows far
     /// end to pin its loopback to (the Windows device branch; until then it follows the default).
     fn open(&self, app: Option<&AppRef>, choices: &Choices) -> Result<Opened, String>;
+
+    /// **Worker.** What the far end of `app` would record, when the platform knows without
+    /// opening anything: on Windows, everything for an app its plan gives device loopback.
+    /// `None` when only [`open`](Self::open) can tell (the default; the Mac's tap may find no
+    /// process for the app, and an app given process loopback may not be running).
+    fn planned_far(&self, _app: &AppRef) -> Option<FarScope> {
+        None
+    }
 }
 
 /// No devices: a platform without capture, or a test core.
@@ -423,6 +431,13 @@ mod win {
     }
 
     impl MeetingCapture for WinMeetingCapture {
+        fn planned_far(&self, app: &AppRef) -> Option<FarScope> {
+            // The plan's own test: any other app is heard by device loopback, whatever runs. One
+            // on the list is known only once opened (not running: everything instead).
+            (!ink_platform_win::capture::is_process_loopback_app(&app.id))
+                .then_some(FarScope::Everything)
+        }
+
         /// `choices`' output is not read yet: the far end follows the default output until the
         /// Windows device branch pins it.
         fn open(&self, app: Option<&AppRef>, choices: &Choices) -> Result<Opened, String> {

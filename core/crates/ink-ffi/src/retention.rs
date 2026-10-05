@@ -35,6 +35,11 @@
 //! of any kind (imports included: the user asked), the same way and with the same checks: never
 //! one without an end that this app made, nor one whose final pass has not finished.
 //!
+//! **Stop and delete.** A meeting its user stopped to delete in its first minute
+//! (`meeting.discard`) is deleted by its own worker ([`discard`]), or by recovery after a crash,
+//! the same way: the record through the store's secure delete, then its audio directory. It has
+//! no final pass to wait for; the worker's hold becomes the delete's claim under one lock.
+//!
 //! **Where.** On its own thread, `ink-retention` ([`Sweeper`]), which sleeps until a sweep is
 //! asked for: never on a meeting's worker (a new meeting must be able to start the moment the last
 //! one's final pass is over) nor on the screens' thread. Asks that arrive during a sweep are one
@@ -42,6 +47,7 @@
 
 use std::collections::BTreeSet;
 use std::io;
+use std::path::Path;
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -462,6 +468,91 @@ pub fn delete_one(shared: &Shared, id: &RecordId) -> Result<Deleted, String> {
     Ok(Deleted {
         kind: record.kind,
         audio_left: audio != Audio::Gone,
+        scrubbed: !shared.store.unscrubbed(),
+    })
+}
+
+/// What Stop and delete did ([`discard`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Discarded {
+    /// Its audio is still on disk: it could not be removed, or its directory is outside the
+    /// library and was left alone (logged). The record is gone.
+    pub audio_left: bool,
+    /// The library's files hold no copy of its words (as [`Deleted::scrubbed`]).
+    pub scrubbed: bool,
+}
+
+/// `meeting.discarded`: `record` is gone, as [`discard`] left it.
+pub(crate) fn discarded(record: &RecordId, gone: Discarded) -> serde_json::Value {
+    event(
+        "meeting.discarded",
+        &[
+            ("record", Some(record.0.as_str().into())),
+            ("audio_left", Some(gone.audio_left.into())),
+            ("scrubbed", Some(gone.scrubbed.into())),
+        ],
+    )
+}
+
+/// **Worker** (the meeting's, or recovery's). Deletes the meeting `record`, whose chunks are in
+/// `dir` (a directory under the library's `meetings`), for "Stop and delete": as `record.delete`
+/// deletes, but with no final pass to wait for and with or without an end. `hold`, this process's
+/// hold on it, becomes the delete's claim under one lock, so no sweep or `record.delete` takes it
+/// in between; without one, a record held or being deleted by another path is left to it. The
+/// record goes first (the store's secure delete; already gone is no error), then the directory,
+/// with its markers and chunks. Errors are the store's, or a claim refused: the record is still
+/// there, and so is its audio, marker and all, for recovery to delete at the next launch.
+pub(crate) fn discard(
+    shared: &Shared,
+    hold: Option<Hold<'_>>,
+    record: &RecordId,
+    dir: &Path,
+) -> Result<Discarded, String> {
+    {
+        let mut holds = lock(&shared.finishing);
+        if hold.is_none() && (holds.held.contains(record) || holds.sweeping.contains(record)) {
+            return Err(format!(
+                "record {} is being finished or deleted by another path",
+                record.0
+            ));
+        }
+        holds.sweeping.insert(record.clone());
+    }
+    // After the claim: the record is never unheld and unclaimed at once.
+    drop(hold);
+    let deleted = shared.store.delete_record(record);
+    lock(&shared.finishing).sweeping.remove(record);
+    match deleted {
+        Ok(()) | Err(StoreError::NotFound) => {}
+        Err(e) => return Err(format!("record {}: {e}", record.0)),
+    }
+    // Through the library's own check, as every delete: never outside it, links resolved.
+    let relative = dir
+        .file_name()
+        .map(|name| format!("meetings/{}", name.to_string_lossy()));
+    let audio_left = match relative.map(|r| crate::library::audio_dir(&shared.data_dir, &r)) {
+        Some(Ok(Some(dir))) => match std::fs::remove_dir_all(&dir) {
+            Ok(()) => false,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => false,
+            Err(e) => {
+                log::warn!("discard: a deleted meeting's audio could not be removed: {e}");
+                true
+            }
+        },
+        Some(Ok(None)) => false,
+        Some(Err(e)) => {
+            log::warn!("discard: a deleted meeting's audio was left alone: {e}");
+            true
+        }
+        None => {
+            log::warn!("discard: a deleted meeting's audio directory has no name; left alone");
+            true
+        }
+    };
+    // As record.delete: this answer reports the scrub's state, so it takes the change too.
+    let _ = shared.store.scrub_change();
+    Ok(Discarded {
+        audio_left,
         scrubbed: !shared.store.unscrubbed(),
     })
 }

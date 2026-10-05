@@ -347,7 +347,8 @@ fn zoom_is_heard_alone_and_a_zoom_that_is_gone_falls_back_and_says_so() {
         .unwrap();
     assert!(r.events.wait_count("meeting.started", 2, WAIT));
     let fallback = r.events.wait_type("meeting.far_end_fallback", WAIT);
-    assert_eq!(fallback["app"], "Zoom.exe");
+    // The identity as the core keeps it on Windows: lowercased where it came in.
+    assert_eq!(fallback["app"], "zoom.exe");
     assert!(
         fallback["message"]
             .as_str()
@@ -365,7 +366,7 @@ fn zoom_is_heard_alone_and_a_zoom_that_is_gone_falls_back_and_says_so() {
     assert_eq!(second["far_end"], "everything");
     assert_eq!(
         r.asked()[r.asked().len() - 2..],
-        ["far: Zoom.exe (pid Some(211))", "far: the default output"]
+        ["far: zoom.exe (pid Some(211))", "far: the default output"]
     );
     std::thread::sleep(Duration::from_millis(500));
     r.core.command(r#"{"cmd":"meeting.stop"}"#).unwrap();
@@ -420,6 +421,41 @@ fn a_teams_call_whose_output_changes_is_followed() {
         "{:?}",
         r.events.types()
     );
+    r.events.assert_valid();
+    r.core.shutdown();
+}
+
+/// The shell may name an app in any case: meeting.dismiss and meeting.start find the offer by the
+/// identity as the core keeps it on Windows (lowercased), and every event says it so; the name is
+/// the one detection gave.
+#[test]
+fn an_offered_app_is_answered_whatever_case_the_shell_names_it_in() {
+    let r = rig("win-case", 60.0);
+    let offered = r.offered(exe("Zoom.exe", 210), 1);
+    assert_eq!(offered["app"], "zoom.exe");
+    assert_eq!(offered["app_name"], "Zoom");
+    r.core
+        .command(r#"{"cmd":"meeting.dismiss","app":"ZOOM.EXE","id":"d"}"#)
+        .unwrap();
+    let ended = r.events.wait_type("meeting.detection_ended", WAIT);
+    assert_eq!(ended["app"], "zoom.exe");
+    assert_eq!(ended["dismissed"], true, "{ended}");
+
+    // The next call, started (meeting.start) in yet another case.
+    r.signal(MeetingSignal::MicReleased {
+        app: exe("Zoom.exe", 210),
+    });
+    r.offered(exe("Zoom.exe", 211), 2);
+    r.core
+        .command(r#"{"cmd":"meeting.start","app":"ZOOM.exe"}"#)
+        .unwrap();
+    let started = r.events.wait_type("meeting.started", WAIT);
+    assert_eq!(started["app"], "zoom.exe");
+    assert_eq!(started["app_name"], "Zoom", "the offer's own: it was found");
+    assert_eq!(started["far_end"], "app");
+    std::thread::sleep(Duration::from_millis(500));
+    r.core.command(r#"{"cmd":"meeting.stop"}"#).unwrap();
+    r.events.wait_type("meeting.finished", WAIT);
     r.events.assert_valid();
     r.core.shutdown();
 }

@@ -62,8 +62,12 @@ pub const SHELL_SETTINGS: &[(&str, &[&str])] = &[
     // language model. As for polish, `setting.set` takes only `off` (which withdraws the consent
     // too): it turns on through `consent.allow` (crate::consent).
     (crate::consent::MEETINGS_SETTING, &["on", "off"]),
-    // Whether the app watches for calls and offers to record them (the consent Drop). On unless
-    // turned off; the meetings thread starts or stops detection when it changes.
+    // What happens for apps the user has not chosen for when one takes the mic for a call
+    // (crate::calls): ask (the consent Drop; also when unset), always record, or never. The
+    // meetings thread reads the policies again when it changes.
+    (crate::calls::DEFAULT_KEY, crate::calls::DEFAULT_VALUES),
+    // "Offer to record calls", which the default replaced: answered for the default until the
+    // shells move to it (off is never; on over never is ask), never stored again.
     (crate::control::DETECT_KEY, &["on", "off"]),
     // Retired (crate::control::HEADSET_MIC_KEY): the core reads it nowhere; accepted until the
     // shells' Meetings switch gives way to Settings > Sound.
@@ -881,9 +885,13 @@ impl Ctx<'_> {
             }
             Query::ModelsList => emit(self.catalogue()),
             Query::EngineRoute(job) => emit(routed(self.shared, job)),
-            Query::SettingGet { key } => match store.setting(&key) {
+            Query::SettingGet { key } => match if crate::calls::is_calls_setting(&key) {
+                crate::calls::setting_value(store, &key)
+            } else {
+                store.setting(&key).map_err(|e| e.to_string())
+            } {
                 Ok(value) => emit(setting(&key, value)),
-                Err(e) => fail(e.to_string()),
+                Err(e) => fail(e),
             },
             Query::SettingSet { key, value } => {
                 match match crate::consent::feature_switched_by(&key) {
@@ -898,21 +906,31 @@ impl Ctx<'_> {
                     {
                         crate::sound::set_choice(self.shared, &key, &value)
                     }
+                    _ if key == crate::control::DETECT_KEY => {
+                        crate::calls::set_detect(store, &value)
+                    }
                     _ => store.set_setting(&key, &value).map_err(|e| e.to_string()),
                 } {
                     Ok(()) => {
                         if key == crate::llms::LOCAL_ONLY_KEY {
                             self.shared.local_only.set(value != "off");
                         }
-                        if key == crate::control::DETECT_KEY {
-                            self.shared.tell_meetings(crate::control::Msg::Detect {
-                                on: value == "on",
-                                why_off: None,
-                            });
-                        }
+                        let calls = crate::calls::is_calls_setting(&key);
                         let sweep = key == crate::retention::RETENTION_KEY;
                         let switched = crate::consent::feature_switched_by(&key);
                         emit(setting(&key, Some(value)));
+                        if calls {
+                            if key == crate::control::DETECT_KEY {
+                                // The default it set, for a screen that shows the default.
+                                let default = crate::calls::DEFAULT_KEY;
+                                match crate::calls::setting_value(store, default) {
+                                    Ok(v) => emit(setting(default, v)),
+                                    Err(e) => log::warn!("call policies: the default: {e}"),
+                                }
+                            }
+                            self.shared
+                                .tell_meetings(crate::control::Msg::Calls { announce: true });
+                        }
                         if let Some(feature) = switched {
                             emit(crate::consent::state(self.shared, feature, None));
                         }

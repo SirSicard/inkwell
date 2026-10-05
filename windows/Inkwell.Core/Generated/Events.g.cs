@@ -80,6 +80,8 @@ public abstract record InkEvent
                 "meeting.detected" => root.Deserialize(InkEventsJson.Default.MeetingDetected)!,
                 "meeting.detection_ended" => root.Deserialize(InkEventsJson.Default.MeetingDetectionEnded)!,
                 "meeting.detection" => root.Deserialize(InkEventsJson.Default.MeetingDetection)!,
+                "meetings.calls" => root.Deserialize(InkEventsJson.Default.MeetingsCalls)!,
+                "meeting.discarded" => root.Deserialize(InkEventsJson.Default.MeetingDiscarded)!,
                 "meeting.answered" => root.Deserialize(InkEventsJson.Default.MeetingAnswered)!,
                 "meeting.recovered" => root.Deserialize(InkEventsJson.Default.MeetingRecovered)!,
                 "meetings.recovered" => root.Deserialize(InkEventsJson.Default.MeetingsRecovered)!,
@@ -226,6 +228,8 @@ public sealed class StrictEnumConverter<T> : JsonStringEnumConverter<T>
 [JsonSerializable(typeof(MeetingDetected))]
 [JsonSerializable(typeof(MeetingDetectionEnded))]
 [JsonSerializable(typeof(MeetingDetection))]
+[JsonSerializable(typeof(MeetingsCalls))]
+[JsonSerializable(typeof(MeetingDiscarded))]
 [JsonSerializable(typeof(MeetingAnswered))]
 [JsonSerializable(typeof(MeetingRecovered))]
 [JsonSerializable(typeof(MeetingsRecovered))]
@@ -898,6 +902,61 @@ public enum BestUnit
     Wpm,
     [JsonStringEnumMemberName("words")]
     Words,
+}
+
+/// <summary>
+/// An app in the call policies' list: one detection has seen hold the microphone for a call, or
+/// one the user chose for. Never shown by its identity: a shell names it and shows its icon
+/// from the identity, as for a mode's apps.
+/// </summary>
+public sealed record CallApp
+{
+    /// <summary>
+    /// Its identity, as detection reports it: a bundle id on the Mac, the executable (or the
+    /// package's app id) on Windows, where it is kept in lowercase.
+    /// </summary>
+    [JsonPropertyName("app")]
+    public required string App { get; init; }
+
+    /// <summary>
+    /// Its name as detection last saw it; absent for an app chosen for that has not been seen.
+    /// </summary>
+    [JsonPropertyName("app_name")]
+    public string? AppName { get; init; }
+
+    /// <summary>
+    /// Whether the user chose its policy; false while it follows the default.
+    /// </summary>
+    [JsonPropertyName("chosen")]
+    public required bool Chosen { get; init; }
+
+    /// <summary>
+    /// What happens for it now: the user's choice, else the default (Always is Ask while the
+    /// stored list could not be read).
+    /// </summary>
+    [JsonPropertyName("policy")]
+    public required CallPolicy Policy { get; init; }
+
+    /// <summary>
+    /// When detection last saw it hold the microphone for a call, Unix ms.
+    /// </summary>
+    [JsonPropertyName("seen_unix_ms")]
+    public long? SeenUnixMs { get; init; }
+}
+
+/// <summary>
+/// What happens when an app holds the microphone for a call: always (recorded at once, visibly,
+/// as by Record), ask (the consent Drop offers it) or never (neither).
+/// </summary>
+[JsonConverter(typeof(StrictEnumConverter<CallPolicy>))]
+public enum CallPolicy
+{
+    [JsonStringEnumMemberName("always")]
+    Always,
+    [JsonStringEnumMemberName("ask")]
+    Ask,
+    [JsonStringEnumMemberName("never")]
+    Never,
 }
 
 /// <summary>
@@ -2144,10 +2203,12 @@ public enum FailedStage
 }
 
 /// <summary>
-/// A command.failed a shell acts on: list_unreadable (a snippets.save or voice_commands.save
-/// refused because the stored list cannot be read; send it again with replace_unreadable to
-/// start over); meeting_recording (an audio.test refused because a meeting records: the mic
-/// test waits until it ends).
+/// A command.failed a shell acts on: list_unreadable (a snippets.save, voice_commands.save or
+/// meetings.calls.set refused because the stored list cannot be read; send it again with
+/// replace_unreadable to start over); meeting_recording (an audio.test refused because a
+/// meeting records: the mic test waits until it ends); delete_window_over (a meeting.discard
+/// after the meeting's first minute: only Stop is left, and the record can be deleted from the
+/// library once it is finished).
 /// </summary>
 [JsonConverter(typeof(StrictEnumConverter<FailureCode>))]
 public enum FailureCode
@@ -2156,6 +2217,8 @@ public enum FailureCode
     ListUnreadable,
     [JsonStringEnumMemberName("meeting_recording")]
     MeetingRecording,
+    [JsonStringEnumMemberName("delete_window_over")]
+    DeleteWindowOver,
 }
 
 /// <summary>
@@ -2953,7 +3016,11 @@ public sealed record MeetingCommitments : InkEvent
 /// <summary>
 /// An app has held the microphone long enough to be a call, and no meeting is being recorded:
 /// the shell offers to record it (the consent Drop), and records only if the user says so
-/// (meeting.start with this app).
+/// (meeting.start with this app). Its policy is Ask (meetings.calls), or Always when its
+/// recording could not start by itself (message says why: a start that failed, or a far end
+/// that would not be the app's sound alone), when the user stopped a recording by hand during
+/// this call, or when the app was made Always during this call. The Drop can also set the app's
+/// policy (meetings.calls.set): Always (then meeting.start) or Never.
 /// </summary>
 public sealed record MeetingDetected : InkEvent
 {
@@ -2968,13 +3035,24 @@ public sealed record MeetingDetected : InkEvent
     /// </summary>
     [JsonPropertyName("app_name")]
     public required string AppName { get; init; }
+
+    /// <summary>
+    /// Why it is offered rather than recorded, when its policy is Always: its recording could
+    /// not start by itself (the platform's error), or its own sound cannot be recorded alone,
+    /// so the recording would hold everything this computer plays (the Mac's fallback, Windows'
+    /// device loopback): an Always app is recorded by itself only when its sound alone is.
+    /// Never content.
+    /// </summary>
+    [JsonPropertyName("message")]
+    public string? Message { get; init; }
 }
 
 /// <summary>
 /// Whether the core is listening for calls now: sent once at start whatever the state (off
-/// included, with a message when the setting could not be read), then when detection starts,
-/// stops (the meetings.detect setting), fails to start, or stops on its own (the platform
-/// stopped answering). The shell shows this state, not the setting.
+/// included, with a message when the default call policy could not be read), then when
+/// detection starts, stops (the call policies: it listens while any app could be offered or
+/// recorded, so a default of Never with no app chosen for is off), fails to start, or stops on
+/// its own (the platform stopped answering). The shell shows this state, not the setting.
 /// </summary>
 public sealed record MeetingDetection : InkEvent
 {
@@ -2993,7 +3071,8 @@ public sealed record MeetingDetection : InkEvent
 
 /// <summary>
 /// The offer to record an app is over before it was taken: the app released the microphone, or
-/// the user said not this one (meeting.dismiss).
+/// the user said not this one (meeting.dismiss), or its policy became Never
+/// (meetings.calls.set).
 /// </summary>
 public sealed record MeetingDetectionEnded : InkEvent
 {
@@ -3004,7 +3083,8 @@ public sealed record MeetingDetectionEnded : InkEvent
     public required string App { get; init; }
 
     /// <summary>
-    /// Whether the user dismissed it (rather than the app releasing the microphone).
+    /// Whether the user dismissed it, by Not this one or Never (rather than the app releasing
+    /// the microphone).
     /// </summary>
     [JsonPropertyName("dismissed")]
     public required bool Dismissed { get; init; }
@@ -3044,6 +3124,35 @@ public sealed record MeetingDiarized : InkEvent
     /// </summary>
     [JsonPropertyName("substantial")]
     public required long Substantial { get; init; }
+}
+
+/// <summary>
+/// A meeting stopped with meeting.discard (Stop and delete), or one a crash interrupted on its
+/// way to being deleted, is gone as if it had never been made: no final pass ran and nothing
+/// was sent to a language model; its transcript, notes and search entries were deleted with
+/// their words overwritten in the library's files, then its audio. Follows meeting.stopped; no
+/// meeting.finished comes. The screens drop it.
+/// </summary>
+public sealed record MeetingDiscarded : InkEvent
+{
+    /// <summary>
+    /// Its recorded audio is still on disk: it could not be removed, or its folder is outside
+    /// the library and was left alone. The record itself is gone.
+    /// </summary>
+    [JsonPropertyName("audio_left")]
+    public required bool AudioLeft { get; init; }
+
+    /// <summary>
+    /// The record that is gone.
+    /// </summary>
+    [JsonPropertyName("record")]
+    public required string Record { get; init; }
+
+    /// <summary>
+    /// No copy of its words is left in the library's files (as for record.deleted).
+    /// </summary>
+    [JsonPropertyName("scrubbed")]
+    public required bool Scrubbed { get; init; }
 }
 
 /// <summary>
@@ -3515,7 +3624,10 @@ public sealed record MeetingSideState : InkEvent
 
 /// <summary>
 /// A meeting's record exists and its capture is being transcribed live. Names what the shell
-/// shows of it: its title, its app and its mic, when known.
+/// shows of it: its title, its app and its mic, when known. Sent for every meeting, however it
+/// started (Record, the consent Drop's offer, or an app's Always policy): the shell shows the
+/// recording indicator from this event, so a call recorded by its policy shows exactly as one
+/// the user started.
 /// </summary>
 public sealed record MeetingStarted : InkEvent
 {
@@ -3530,6 +3642,24 @@ public sealed record MeetingStarted : InkEvent
     /// </summary>
     [JsonPropertyName("app_name")]
     public string? AppName { get; init; }
+
+    /// <summary>
+    /// True when the app's call policy (Always) started it, without a tap: the shell says so
+    /// where the recording shows, keeps the reminder to tell the others, and offers Stop and
+    /// Stop and delete. Absent for a start the user made. A policy start always records the
+    /// app's own sound alone (far_end app).
+    /// </summary>
+    [JsonPropertyName("auto")]
+    public bool? Auto { get; init; }
+
+    /// <summary>
+    /// Until this moment, Unix ms (a minute after the start), meeting.discard (Stop and delete)
+    /// may delete this meeting as if it had never been made; after it only Stop is offered
+    /// (meeting.discard is refused with delete_window_over). Absent for a meeting that cannot
+    /// be deleted so (a replay).
+    /// </summary>
+    [JsonPropertyName("delete_until_unix_ms")]
+    public long? DeleteUntilUnixMs { get; init; }
 
     /// <summary>
     /// What it records as the other side.
@@ -3894,6 +4024,42 @@ public sealed record MeetingWorkerFailed : InkEvent
     /// </summary>
     [JsonPropertyName("record")]
     public required string Record { get; init; }
+}
+
+/// <summary>
+/// The call policies: the default for apps not chosen for, and every app seen or chosen for (at
+/// most 64), most recently seen first. In answer to meetings.calls.list and meetings.calls.set
+/// (with ref), and unasked when the default changed or detection saw a new app.
+/// </summary>
+public sealed record MeetingsCalls : InkEvent
+{
+    /// <summary>
+    /// The apps.
+    /// </summary>
+    [JsonPropertyName("apps")]
+    public required global::System.Collections.Generic.IReadOnlyList<CallApp> Apps { get; init; }
+
+    /// <summary>
+    /// The policy for apps not chosen for (meetings.calls.default; ask unless set).
+    /// </summary>
+    [JsonPropertyName("default")]
+    public required CallPolicy Default { get; init; }
+
+    /// <summary>
+    /// Why the stored choices could not be read, while they are set aside: every app follows
+    /// the default then, with Always lowered to Ask, and meetings.calls.set is refused
+    /// (list_unreadable) unless it says replace_unreadable, which starts the list over. In the
+    /// answer to that start over under a default of Always: that the default is Ask now
+    /// (written), so the user sets Always again knowingly.
+    /// </summary>
+    [JsonPropertyName("message")]
+    public string? Message { get; init; }
+
+    /// <summary>
+    /// The command's "id", when it had one, so the shell can match the answer to what it sent.
+    /// </summary>
+    [JsonPropertyName("ref")]
+    public string? Ref { get; init; }
 }
 
 /// <summary>

@@ -57,7 +57,11 @@ use devices::Flow;
 use stream::{Counters, Running, StreamKind};
 
 /// Apps whose far end is captured with process-tree loopback rather than device loopback: Zoom and
-/// the browsers (S0.4). Matched case-insensitively against the executable name.
+/// the browsers (S0.4). Matched case-insensitively against the executable name, in ASCII only
+/// ([`is_process_loopback_app`]), as every lookup by executable here is: the core keeps Windows
+/// identities lowercased the same way (`ink_ffi::calls::identity`, `to_ascii_lowercase`), and
+/// decides from this list before opening whether an Always app is heard alone. A change to how
+/// executables are matched here changes both.
 pub const PROCESS_LOOPBACK_APPS: [&str; 5] = [
     "Zoom.exe",
     "chrome.exe",
@@ -97,7 +101,9 @@ pub enum FarReason {
     AppNotPlayingYet,
 }
 
-fn is_process_loopback_app(exe: &str) -> bool {
+/// Whether `exe` is one of [`PROCESS_LOOPBACK_APPS`]: heard alone, by process loopback, while it
+/// runs. Every other app is heard by device loopback (everything its output plays). Pure.
+pub fn is_process_loopback_app(exe: &str) -> bool {
     PROCESS_LOOPBACK_APPS
         .iter()
         .any(|app| app.eq_ignore_ascii_case(exe))
@@ -589,6 +595,17 @@ impl Drop for WasapiSource {
 mod tests {
     use super::*;
     use crate::process::ProcessEntry;
+
+    /// The core decides from this list, with identities folded in ASCII, whether an Always app is
+    /// heard alone: every entry must be ASCII, and found by its lowercased name.
+    #[test]
+    fn the_process_loopback_list_is_ascii_and_found_lowercased() {
+        for exe in PROCESS_LOOPBACK_APPS {
+            assert!(exe.is_ascii(), "{exe}");
+            assert!(is_process_loopback_app(&exe.to_ascii_lowercase()), "{exe}");
+        }
+        assert!(!is_process_loopback_app("ms-teams.exe"));
+    }
 
     fn app(id: &str, pid: Option<u32>) -> AppRef {
         AppRef {

@@ -312,9 +312,10 @@ whitelist of settings the shell owns (`SHELL_SETTINGS` in
 [`queries.rs`](../core/crates/ink-ffi/src/queries.rs), each with the values it takes):
 `onboarding.done`, `dictation.polish` and `meetings.llm` (only ever set to off: they turn on
 through `consent.allow`), `dictation.key`, `dictation.edit_key`, `dictation.enabled`,
-`meetings.detect`, `audio.input` and `audio.output` (Sound, below), `llm.local_only`,
-`retention.days`, `import.key_note`, `meetings.headset_mic` (retired: read nowhere, accepted
-until the shells' Sound section replaces its switch),
+`meetings.calls.default` (`ask`, `always` or `never`), `meetings.detect` (answered for that default:
+below), `audio.input` and `audio.output` (Sound, below), `llm.local_only`, `retention.days`,
+`import.key_note`, `meetings.headset_mic` (retired: read nowhere, accepted until the shells' Sound
+section replaces its switch),
 and the appearance settings: `appearance.mode` (`light`, `dark` or `system`),
 `appearance.dots.light` and `appearance.dots.dark` (a preset from
 [`design/tokens.json`](../design/tokens.json)), `appearance.you.light`, `appearance.them.light`,
@@ -415,13 +416,43 @@ files through the same path (`replay_meeting`, architecture rule 7). Commands fo
 their own thread, `ink-meetings`, so a model download on the command thread never delays "Record
 this call"; questions about a live meeting (`meeting.ask`) run on `ink-ask`.
 
-- **Consent.** Detection only offers. An app that has held the microphone for 3 s is offered
-  (`meeting.detected`, the shell's Drop), one at a time; "not this one" lasts until that app
-  releases the microphone. Nothing records until the user says so. A meeting recorded for an app
-  ends 15 s after the app lets go of the microphone; one started with "Record now" ends when it is
-  stopped. The rules are a pure state machine (`ink-ffi/src/detection.rs`); the thread wakes only
+- **Consent, per app.** An app that has held the microphone for 3 s is judged by its call policy
+  (`ink-ffi/src/calls.rs`), which the user chooses in the Drop or in Settings
+  (`meetings.calls.set`), else the default (`meetings.calls.default`, Ask unless set):
+  - **Ask** offers it (`meeting.detected`, the shell's Drop), one at a time; "not this one" lasts
+    until that app releases the microphone.
+  - **Always** records it at once, through the same start as Record, so the recording indicator,
+    the Live screen and the meeting's end are the same; `meeting.started` says `auto`, and the
+    Drop keeps its reminder to tell the others. Only when the app's own sound can be recorded
+    alone: where it cannot (the Mac's tap finds no process for it, Windows hears it by loopback of
+    its output device), the recording would hold everything the computer plays, so it is offered
+    instead and the offer says why. Windows' plan says so before anything opens; the Mac's tap
+    only once opened, and its capture is closed again unstarted. After the user stops one by
+    hand, that call is offered rather than recorded again, until the app lets go.
+  - **Never** neither offers nor records.
+
+  Nothing records without the user's Record or an Always choice the core could read: a stored
+  list it cannot read is set aside, and Always is then Ask; starting it over under a default of
+  Always sets the default to Ask. Apps are keyed by the identity detection reports (bundle id;
+  executable in lowercase on Windows), at most 64, each listed with its name for Settings
+  (`meetings.calls`). The old switch "Offer to record calls" (`meetings.detect`) is the default
+  now: off was migrated to Never at launch, and the setting answers for the default until the
+  shells move. A meeting recorded for an app ends 15 s after the app lets go of the microphone;
+  one started with "Record now" ends when it is stopped. The rules are a pure state machine
+  (`ink-ffi/src/detection.rs`, its decision table in the module docs); the thread wakes only
   while something is pending. The platform's detector polls the audio server once a second while
-  detection is on (`meetings.detect`).
+  detection listens, which it does while any app could be offered or recorded (a default of Never
+  with nothing chosen is off, as the old switch was).
+- **Stop and delete.** For the first minute of a meeting started here, however it started,
+  `meeting.discard` ends it and deletes it as if never made: no final pass (so nothing reaches a
+  language model), then the store's secure delete of the record and the removal of its audio
+  directory. The intent is written into the crash marker first, so a crash on the way still
+  deletes it at the next launch. After the minute only Stop is left (`delete_window_over`); the
+  record can be deleted from the library once it is finished. A meeting already being finished,
+  or whose worker failed, refuses it at once: which of the user and the worker decides is settled
+  once (`DiscardGate`), so the answer is what happens. A delete granted just before the meeting
+  fails ends with that failure (`meeting.failed`, `meeting.worker_failed`) rather than
+  `meeting.discarded`, and its marker deletes what it had recorded at the next launch.
 - **Capture.** On the Mac: the chosen mic's own IOProc (Sound, below; Automatic is the built-in
   mic with Bluetooth output) and a process tap of the meeting's app, else of everything this
   Mac plays except Inkwell. On Windows: the chosen mic (WASAPI), and for the far end process
