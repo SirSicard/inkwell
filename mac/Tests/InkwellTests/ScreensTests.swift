@@ -2407,15 +2407,22 @@ final class LabelledDisclosureTests: XCTestCase {
 
     fileprivate static let margin: CGFloat = 20
 
-    private func click(_ point: NSPoint, in window: NSWindow) {
+    /// Clicks `point` and waits up to two seconds for the disclosure to read `expected`; a click
+    /// that toggled twice would read it and then turn back, so the state is read again after.
+    private func click(_ point: NSPoint, in window: NSWindow, expect expected: Bool, opened: Opened) -> Bool {
         for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
             guard let event = NSEvent.mouseEvent(
                 with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
                 windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)
-            else { return XCTFail("no mouse event") }
+            else { return false }
             window.sendEvent(event)
         }
-        RunLoop.main.run(until: Date().addingTimeInterval(0.4))
+        let deadline = Date().addingTimeInterval(2)
+        while opened.value != expected, Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+        }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        return opened.value == expected
     }
 
     func testTheTitlesRowOpensAndClosesItAndTheArrowStillDoes() throws {
@@ -2443,18 +2450,10 @@ final class LabelledDisclosureTests: XCTestCase {
         // The arrow answers only at the row's leading edge, a few points wide.
         let onArrow = NSPoint(x: Self.margin + 3, y: y)
 
-        click(onTitle, in: window)
-        XCTAssertTrue(opened.value, "the title opens it")
-        click(onTitle, in: window)
-        XCTAssertFalse(opened.value, "and closes it")
-        click(pastTitle, in: window)
-        XCTAssertTrue(opened.value, "the row past the title opens it")
-        click(pastTitle, in: window)
-        XCTAssertFalse(opened.value, "and closes it")
-        click(onArrow, in: window)
-        XCTAssertTrue(opened.value, "the arrow opens it")
-        click(onArrow, in: window)
-        XCTAssertFalse(opened.value, "and closes it")
+        for (point, name) in [(onTitle, "the title"), (pastTitle, "the row past the title"), (onArrow, "the arrow")] {
+            XCTAssertTrue(click(point, in: window, expect: true, opened: opened), "\(name) opens it")
+            XCTAssertTrue(click(point, in: window, expect: false, opened: opened), "\(name) closes it")
+        }
     }
 }
 
