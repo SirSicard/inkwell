@@ -220,6 +220,25 @@ impl Rig {
         assert!(self.platform.release());
     }
 
+    /// Waits until no mic has been opened for 100 ms of real time: ten passes of the mic thread,
+    /// which opens a mic again within one, so a reopen that was coming has come.
+    fn opens_settle(&self) {
+        let until = Instant::now() + WAIT;
+        let mut last = (self.opens().len(), Instant::now());
+        while last.1.elapsed() < Duration::from_millis(100) {
+            assert!(
+                Instant::now() < until,
+                "the mic keeps opening: {:?}",
+                self.opens()
+            );
+            std::thread::sleep(Duration::from_millis(5));
+            let n = self.opens().len();
+            if n != last.0 {
+                last = (n, Instant::now());
+            }
+        }
+    }
+
     fn opens(&self) -> Vec<String> {
         self.platform.mic_opens().into_iter().map(|d| d.0).collect()
     }
@@ -410,7 +429,7 @@ fn dictation_lets_go_of_its_idle_mic_only_when_the_pick_changes() {
     // Within a second of a press, a change waits: a press may still be on its way to the chain.
     rig.tap();
     rig.set("audio.input", "usb", "s1");
-    std::thread::sleep(Duration::from_millis(200));
+    rig.opens_settle();
     assert!(rig.mic_open(), "not within the grace after a press");
     rig.released();
     rig.tap();
@@ -471,7 +490,7 @@ fn dictation_notices_its_mic_going_by_itself() {
     let rig = Rig::new("sound-dead-mic", windows_like(), true);
     rig.enable_dictation();
     let after = |n: usize| {
-        std::thread::sleep(Duration::from_millis(200));
+        rig.opens_settle();
         assert_eq!(rig.opens().len(), n, "{:?}", rig.opens());
         assert_eq!(
             rig.events.count("dictation.mic_failed"),
@@ -499,15 +518,40 @@ fn dictation_notices_its_mic_going_by_itself() {
     assert!(rig.platform.press());
     assert!(rig.platform.unplug("usb"));
     rig.until("opened again", || rig.opens().len() == 3);
-    assert!(rig.platform.release());
     assert_eq!(rig.opens()[2], "desk");
-    // Its new device ends too, within the same press's grace: not opened again (no loop), and
-    // with no mic left nothing is said until a press needs one.
+    // Its new device ends too, the key still down: not opened again (no loop), and the press
+    // ends, said, rather than sit with no audio.
     assert!(rig.platform.unplug("desk"));
-    after(3);
+    let failed = rig.events.wait_type("dictation.mic_failed", WAIT);
+    assert!(
+        failed["message"]
+            .as_str()
+            .unwrap()
+            .contains("Desk Microphone"),
+        "{failed}"
+    );
+    rig.opens_settle();
+    assert_eq!(rig.opens().len(), 3, "{:?}", rig.opens());
+    assert_eq!(rig.events.count("dictation.mic_failed"), 1);
+    assert!(rig.platform.release());
+
+    // A new press is a new guard: its dead mic is opened again once more.
     rig.platform.plug(usb("usb"));
+    rig.platform
+        .plug(device("desk", "Desk Microphone", Transport::Usb, false));
     rig.tap();
     assert_eq!(rig.opens()[3], "usb");
+    assert!(rig.platform.press());
+    assert!(rig.platform.unplug("usb"));
+    rig.until("opened again for the new press", || rig.opens().len() == 5);
+    assert_eq!(rig.opens()[4], "desk");
+    assert!(rig.platform.release());
+    rig.platform.plug(usb("usb"));
+    rig.platform.unplug("desk");
+    rig.until("let go of after the desk mic went", || !rig.mic_open());
+    rig.platform.clock().advance_ns(1_500 * MS);
+    rig.tap();
+    assert_eq!(rig.opens().last().unwrap(), "usb");
 
     // In a take: hold, speak until the take has started, then pull the mic.
     let speech: Vec<f32> = ink_audio::synth::speech_like(3.0, -25.0, 5)
@@ -528,7 +572,14 @@ fn dictation_notices_its_mic_going_by_itself() {
     }
     assert!(rig.events.wait_count("dictation.started", 1, WAIT));
     assert!(rig.platform.unplug("usb"));
-    let failed = rig.events.wait_type("dictation.mic_failed", WAIT);
+    assert!(rig.events.wait_count("dictation.mic_failed", 2, WAIT));
+    let failed = rig
+        .events
+        .all()
+        .into_iter()
+        .filter(|v| v["type"] == "dictation.mic_failed")
+        .nth(1)
+        .unwrap();
     assert!(
         failed["message"]
             .as_str()
@@ -637,12 +688,12 @@ fn a_press_during_the_pick_keeps_the_mic_and_looks_again_later() {
     // The press lands during the pick.
     assert!(rig.platform.press());
     gated.release_gate();
-    std::thread::sleep(Duration::from_millis(200));
+    rig.opens_settle();
     assert!(rig.mic_open(), "the press keeps the mic");
     assert_eq!(rig.opens(), ["built-in"]);
     // Still held: nothing changes however long it is held.
     rig.platform.clock().advance_ns(1_500 * MS);
-    std::thread::sleep(Duration::from_millis(200));
+    rig.opens_settle();
     assert!(rig.mic_open(), "never while a key is held");
     assert!(rig.platform.release());
     // Looked at again (the flag was set again): let go of, and the next press opens the choice.

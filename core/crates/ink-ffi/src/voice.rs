@@ -31,7 +31,7 @@
 //! itself (its device went) ends a take in progress, said (`dictation.mic_failed`); between takes
 //! it is let go of quietly, and opened again at once only for a press still held or made within
 //! the grace (that press's wake may already have been taken), at most once per press, so a device
-//! that opens and ends at once cannot loop.
+//! that opens and ends at once cannot loop: a second end for the same press ends the press, said.
 //!
 //! **Threads.** `ink-voice` exists while dictation is enabled; it blocks on its channel while the
 //! mic is closed and wakes every [`PUMP_INTERVAL`] while it is open. The key sinks run on the
@@ -581,11 +581,14 @@ struct Activity {
     busy: AtomicBool,
     /// Host time of the latest press or take ending.
     last_ns: AtomicU64,
-    /// Host time of the latest press alone (0 until the first): whether a press, not a take's
-    /// end, was just made.
+    /// Host time of the latest press alone, not a take's end: whether a press was just made.
+    /// Read only once [`presses`](Self::presses) is above 0 (host time may start at 0).
     pressed_ns: AtomicU64,
-    /// A key is down now (pressed, not yet released, cancelled or lost).
-    held: AtomicBool,
+    /// Presses so far, of either key: which press is which (two may carry one host time).
+    presses: AtomicU64,
+    /// Each key down now (pressed, not yet released, cancelled or lost): the dictation key, then
+    /// the edit key, apart, so letting go of one while the other is down leaves that one held.
+    held: [AtomicBool; 2],
 }
 
 impl Activity {
@@ -596,6 +599,26 @@ impl Activity {
     fn pressed(&self, at_ns: u64) {
         self.touch(at_ns);
         self.pressed_ns.fetch_max(at_ns, Ordering::AcqRel);
+        self.presses.fetch_add(1, Ordering::AcqRel);
+    }
+
+    /// **Callback thread.** A key's edge: whether it is held from now, and its press noted.
+    fn key(&self, edit: bool, e: HotkeyEvent) {
+        let held = &self.held[usize::from(edit)];
+        match e {
+            HotkeyEvent::Pressed { at_ns } => {
+                held.store(true, Ordering::Release);
+                self.pressed(at_ns);
+            }
+            HotkeyEvent::Released { .. } | HotkeyEvent::Cancelled | HotkeyEvent::Lost => {
+                held.store(false, Ordering::Release);
+            }
+        }
+    }
+
+    /// Whether either key is down.
+    fn any_held(&self) -> bool {
+        self.held.iter().any(|h| h.load(Ordering::Acquire))
     }
 }
 
@@ -909,15 +932,9 @@ fn key_sink(
     edit: bool,
 ) -> EventSink<HotkeyEvent> {
     Arc::new(move |e| {
-        match e {
-            HotkeyEvent::Pressed { at_ns } => {
-                activity.held.store(true, Ordering::Release);
-                activity.pressed(at_ns);
-                wake(&ctl);
-            }
-            HotkeyEvent::Released { .. } | HotkeyEvent::Cancelled | HotkeyEvent::Lost => {
-                activity.held.store(false, Ordering::Release);
-            }
+        activity.key(edit, e);
+        if let HotkeyEvent::Pressed { .. } = e {
+            wake(&ctl);
         }
         // After the worker stopped, refused (the keys are let go of then).
         let _ = inbox.send(if edit {
@@ -1032,8 +1049,8 @@ fn controller(
     activity: &Activity,
 ) {
     let mut reopen = false;
-    // The press a dead mic was last opened again for: at most once per press, so a device that
-    // opens and ends at once cannot loop.
+    // The press (by count) a dead mic was last opened again for: at most once per press, so a
+    // device that opens and ends at once cannot loop.
     let mut reopened_for = None;
     loop {
         if !std::mem::take(&mut reopen) {
@@ -1093,9 +1110,12 @@ fn controller(
 
 /// Whether the last press was within [`STALE_GRACE`] (never, before the first).
 fn press_recent(shared: &Shared, activity: &Activity) -> bool {
+    if activity.presses.load(Ordering::Acquire) == 0 {
+        return false;
+    }
     let grace_ns = u64::try_from(STALE_GRACE.as_nanos()).unwrap_or(u64::MAX);
     let pressed = activity.pressed_ns.load(Ordering::Acquire);
-    pressed != 0 && shared.clock.now_ns().saturating_sub(pressed) < grace_ns
+    shared.clock.now_ns().saturating_sub(pressed) < grace_ns
 }
 
 /// The worker stopped for good: let go of the keys (presses would reach nothing) and say so.
@@ -1173,28 +1193,36 @@ fn pump(
                 shared.events.emit(mic_failed(&message));
                 return Closed::Failed;
             }
-            log::info!("dictation: the mic's device went; it is let go of");
             // Opened again only for a press held or just made (never a take's end), once per press.
-            let pressed = activity.pressed_ns.load(Ordering::Acquire);
-            let wanted = activity.held.load(Ordering::Acquire) || press_recent(shared, activity);
-            return if wanted && *reopened_for != Some(pressed) {
-                *reopened_for = Some(pressed);
-                Closed::Reopen
-            } else {
-                Closed::Idle
-            };
+            let press = activity.presses.load(Ordering::Acquire);
+            let wanted = activity.any_held() || press_recent(shared, activity);
+            if !wanted {
+                log::info!("dictation: the mic's device went; it is let go of");
+                return Closed::Idle;
+            }
+            if *reopened_for != Some(press) {
+                log::info!("dictation: the mic's device went; it is opened again for the press");
+                *reopened_for = Some(press);
+                return Closed::Reopen;
+            }
+            // Its press already had its one reopen: the press ends here, said, rather than wait
+            // with no audio.
+            let message = format!("the microphone {} stopped delivering", mic.name);
+            log::warn!("dictation: {message}");
+            shared.events.emit(mic_failed(&message));
+            return Closed::Failed;
         }
         // A device or the choice changed ([`crate::sound`]): between takes, with no key held and
         // not within [`STALE_GRACE`] of a press, the mic it would open now is picked again, and
         // this one let go of when that is another (or none). A take finishes first. A press during
         // the pick keeps the mic, and it is looked at again later.
         if !busy && shared.sound.take_stale() {
-            let seen = activity.pressed_ns.load(Ordering::Acquire);
-            let settled = !activity.held.load(Ordering::Acquire) && !press_recent(shared, activity);
+            let seen = activity.presses.load(Ordering::Acquire);
+            let settled = !activity.any_held() && !press_recent(shared, activity);
             let next = settled.then(|| pick(shared, platform.capture.as_ref()));
             let pressed = activity.busy.load(Ordering::Acquire)
-                || activity.held.load(Ordering::Acquire)
-                || activity.pressed_ns.load(Ordering::Acquire) != seen;
+                || activity.any_held()
+                || activity.presses.load(Ordering::Acquire) != seen;
             match next {
                 None => shared.sound.mark_stale(),
                 Some(_) if pressed => shared.sound.mark_stale(),
@@ -1213,7 +1241,7 @@ fn pump(
             }
         }
         let last = activity.last_ns.load(Ordering::Acquire);
-        if !busy && shared.clock.now_ns().saturating_sub(last) >= idle_ns {
+        if !busy && !activity.any_held() && shared.clock.now_ns().saturating_sub(last) >= idle_ns {
             log::info!(
                 "dictation: the mic is let go of after {} s without a take",
                 MIC_IDLE.as_secs()
@@ -1275,6 +1303,25 @@ mod tests {
         // Stopping keys that were never bound is a no-op.
         platform.keys.stop();
         platform.edit_keys.stop();
+    }
+
+    /// Each key is held on its own: letting go of the edit key while the dictation key is down
+    /// leaves a key held, and either one's press is noted.
+    #[test]
+    fn the_two_keys_are_held_apart() {
+        let a = Activity::default();
+        assert!(!a.any_held());
+        a.key(false, HotkeyEvent::Pressed { at_ns: 5 });
+        a.key(true, HotkeyEvent::Pressed { at_ns: 7 });
+        a.key(true, HotkeyEvent::Released { at_ns: 8 });
+        assert!(a.any_held(), "the dictation key is still down");
+        assert_eq!(a.pressed_ns.load(Ordering::Acquire), 7);
+        assert_eq!(a.presses.load(Ordering::Acquire), 2);
+        a.key(false, HotkeyEvent::Cancelled);
+        assert!(!a.any_held());
+        a.key(true, HotkeyEvent::Pressed { at_ns: 9 });
+        a.key(true, HotkeyEvent::Lost);
+        assert!(!a.any_held());
     }
 
     /// The tap's thread never waits on the mic thread: a burst of presses with nobody receiving
