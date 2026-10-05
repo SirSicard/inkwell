@@ -2570,6 +2570,34 @@ final class OnboardingLayoutTests: XCTestCase {
         }
     }
 
+    /// The whole Polish step with "Use Groq's free model" open, so with Groq's guide, fits the
+    /// step without scrolling: Groq picked with no key (its key line, "Save your Groq key first"),
+    /// with its key saved (the longest Use note), and chosen while local-only mode is on (the
+    /// longest status under it). Polish's own line is its longest kind, Apple Intelligence still
+    /// being checked; every one of them is a single line at this width. The guide is there: the
+    /// open step is taller than the closed one by the guide's height and more.
+    func testThePolishStepFitsTheSheetWithGroqsGuideOpen() {
+        let guide = NSHostingController(rootView: GroqKeyGuide(place: .firstRun))
+            .sizeThatFits(in: CGSize(width: OnboardingView.stepRoom.width, height: 10_000))
+        XCTAssertGreaterThan(guide.height, 5 * 14, "the cost line and four steps")
+        let chosen = #","chosen":"groq","model":"llama-3.3-70b-versatile","endpoint":"https://api.groq.com/openai/v1","to":"cloud""#
+        for (hasKey, choice, label) in [(false, "", "no key"), (true, "", "key saved"), (true, chosen, "chosen, local only")] {
+            let screens = ScreenModels(send: { _ in }, calendar: FakeCalendar(), apps: WorkspaceApps())
+            screens.cloud.apply(event(#"{"type":"llm.providers","ref":"x","local_only":true,"ready":false\#(choice),"providers":[{"id":"groq","default_model":"llama-3.3-70b-versatile","endpoint":"https://api.groq.com/openai/v1","custom_url":false,"needs_key":true,"has_key":\#(hasKey)}]}"#))
+            screens.cloud.select("groq")
+            XCTAssertFalse(screens.cloud.firstRunStartsOnOthers, "\(label): Groq's rows, not the other providers'")
+            if !choice.isEmpty {
+                XCTAssertTrue(screens.cloud.status.hasSuffix("local-only mode is on, so nothing is sent."), screens.cloud.status)
+            }
+            XCTAssertEqual(screens.polish.status, PolishModel.unavailable(nil), label)
+            let open = needed(FirstRunPolishStep(ownKey: .constant(true)), screens: screens)
+            let closed = needed(FirstRunPolishStep(ownKey: .constant(false)), screens: screens)
+            XCTAssertLessThanOrEqual(open.height, OnboardingView.stepRoom.height, label)
+            XCTAssertLessThanOrEqual(open.width, OnboardingView.stepRoom.width + 0.5, label)
+            XCTAssertGreaterThan(open.height - closed.height, guide.height, "\(label): the guide is shown")
+        }
+    }
+
     func testTheModelsStepFitsTheSheetBeforeThePress() {
         let screens = listed()
         assertFits(screens.catalogue, screens: screens, "before the press")
@@ -2655,6 +2683,58 @@ final class OnboardingLayoutTests: XCTestCase {
         XCTAssertEqual(catalogue.state(of: .transcripts), .failed(longFailure), "the set's row shows Retry")
         XCTAssertEqual(catalogue.state(of: .speakers), .failed(longFailure), "and the diarizer's")
         assertFits(catalogue, screens: screens, "with two failures")
+    }
+}
+
+/// How to get a free Groq key: the first run's and Settings > AI's steps (the Windows app's words),
+/// the buttons and pages they name, and Settings' guide at its narrowest.
+@MainActor
+final class GroqKeyGuideTests: XCTestCase {
+    func testTheStepsSayWhatToDoInOrderAndEndWhereTheGuideIs() {
+        XCTAssertEqual(GroqKeyGuide.title, "How to get a free Groq key")
+        XCTAssertEqual(GroqKeyGuide.cost, "Groq's Free plan costs $0 and has rate limits, listed on its Rate Limits page.")
+        XCTAssertTrue(GroqKeyGuide.cost.contains(GroqKeyGuide.rateLimitsLink))
+        let shared = [
+            "Open Groq's API Keys page:",
+            "Log in, or make a Groq account.",
+            "Press Create API Key and give the key a name, such as Inkwell.",
+        ]
+        XCTAssertEqual(GroqKeyGuide.steps(.firstRun), shared + ["Copy the key, paste it below and press Save, then Use Groq."])
+        XCTAssertEqual(GroqKeyGuide.steps(.settings), shared + ["Copy the key, choose Groq above, paste it and press Save key, then Use Groq."])
+        // The buttons the last steps name are the ones beside them: Save, Save key, Use Groq.
+        XCTAssertTrue(GroqKeyGuide.steps(.firstRun)[3].contains("press \(GroqKeyRows.saveTitle),"))
+        XCTAssertTrue(GroqKeyGuide.steps(.settings)[3].contains("press \(LanguageModelRows.saveKeyTitle),"))
+        let cloud = ScreenModels(send: { _ in }, calendar: FakeCalendar(), apps: WorkspaceApps()).cloud
+        cloud.apply(event(#"{"type":"llm.providers","ref":"x","local_only":true,"ready":false,"providers":[{"id":"groq","default_model":"llama-3.3-70b-versatile","endpoint":"https://api.groq.com/openai/v1","custom_url":false,"needs_key":true,"has_key":false}]}"#))
+        cloud.select("groq")
+        XCTAssertEqual(cloud.useLabel, "Use Groq")
+        XCTAssertTrue(GroqKeyGuide.steps(.firstRun)[3].hasSuffix("then \(cloud.useLabel)."))
+        XCTAssertTrue(GroqKeyGuide.steps(.settings)[3].hasSuffix("then \(cloud.useLabel)."))
+    }
+
+    func testTheLinksOpenGroqsOwnPagesAndAreNamedForVoiceOver() {
+        XCTAssertEqual(GroqKeyGuide.keysURL.absoluteString, "https://console.groq.com/keys")
+        XCTAssertEqual("https://" + GroqKeyGuide.keysLink, GroqKeyGuide.keysURL.absoluteString)
+        XCTAssertEqual(GroqKeyGuide.rateLimitsURL.absoluteString, "https://console.groq.com/docs/rate-limits")
+        // The cost line's link is its Rate Limits page, and only that.
+        let links = GroqKeyGuide.costText.runs.compactMap { run in
+            run.link.map { (String(GroqKeyGuide.costText[run.range].characters), $0) }
+        }
+        XCTAssertEqual(links.map(\.0), [GroqKeyGuide.rateLimitsLink])
+        XCTAssertEqual(links.map(\.1), [GroqKeyGuide.rateLimitsURL])
+        XCTAssertEqual(GroqKeyGuide.keysLinkName, "Open Groq's API Keys page in your browser")
+        XCTAssertEqual(GroqKeyGuide.stepName(2, of: 4, "Log in, or make a Groq account."), "Step 2 of 4: Log in, or make a Groq account.")
+    }
+
+    /// Settings' narrowest content beside the sidebar (the 720-pt window less the sidebar and the
+    /// margins, as StatsLayoutTests measures it): the guide wraps inside it and never asks for more.
+    func testSettingsGuideFitsTheNarrowestSettingsWidth() {
+        let width: CGFloat = 720 - 280 - 96
+        let hosting = NSHostingController(rootView: GroqKeyGuide(place: .settings))
+        let size = hosting.sizeThatFits(in: CGSize(width: width, height: 10_000))
+        XCTAssertLessThanOrEqual(size.width, width + 0.5)
+        XCTAssertGreaterThan(size.height, 5 * 14, "the cost line and four steps")
+        XCTAssertLessThan(hosting.sizeThatFits(in: .zero).width, width, "its minimum")
     }
 }
 

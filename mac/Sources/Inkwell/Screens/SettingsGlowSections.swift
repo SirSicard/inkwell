@@ -496,6 +496,10 @@ struct LanguageModelRows: View {
     @State private var key = ""
     /// The provider whose key Delete asks about, while it asks.
     @State private var deleting: String?
+    /// Settings' "How to get a free Groq key" is open (closed at first, as the first run's is).
+    @State private var groqGuide = false
+    /// The key's button, which Settings' guide names (GroqKeyGuide.steps).
+    static let saveKeyTitle = "Save key"
 
     /// Use: in the first run, polish's consent step first; in Settings, the choice itself.
     private func use() {
@@ -532,7 +536,7 @@ struct LanguageModelRows: View {
                             .textFieldStyle(.roundedBorder)
                             .frame(maxWidth: 340)
                             .accessibilityLabel("API key")
-                        Button("Save key") {
+                        Button(Self.saveKeyTitle) {
                             // Sent once, then gone from the field.
                             let typed = key
                             key = ""
@@ -574,6 +578,13 @@ struct LanguageModelRows: View {
                     .font(Typography.caption)
                     .foregroundStyle(cloud.failure != nil || cloud.readError != nil ? Theme.alert : Theme.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
+                // Settings only: the first run has the guide over Groq's own rows (GroqKeyRows).
+                if firstRun == nil {
+                    LabelledDisclosure(title: GroqKeyGuide.title, isExpanded: $groqGuide) {
+                        GroqKeyGuide(place: .settings)
+                            .padding(.top, 4)
+                    }
+                }
             }
             if firstRun == nil {
                 SettingRow(title: "Local only") {
@@ -611,8 +622,8 @@ struct LanguageModelRows: View {
     }
 }
 
-/// The first run's own key as one choice: Groq's free model, with the homepage's sentence and its
-/// console.groq.com link, the key field and Save, and Use, which asks polish's consent before
+/// The first run's own key as one choice: Groq's free model, with how to get its key
+/// (GroqKeyGuide), the key field and Save, and Use, which asks polish's consent before
 /// choosing Groq (PolishModel.useOwnKey), so Local only goes off only with it. Another provider or
 /// model is under "Other providers or models…": Settings > AI's rows, with the same consent.
 struct GroqKeyRows: View {
@@ -620,6 +631,8 @@ struct GroqKeyRows: View {
     let polish: PolishModel
     /// The key being typed: sent once on Save, then cleared. Never kept anywhere else.
     @State private var key = ""
+    /// The key's button, which the first run's guide names (GroqKeyGuide.steps).
+    static let saveTitle = "Save"
     /// The other providers' rows are shown instead. Set when the rows are made, so a provider
     /// already chosen or picked never flashes Groq's rows first.
     @State private var others: Bool
@@ -664,7 +677,7 @@ struct GroqKeyRows: View {
         }
     }
 
-    /// A link in the ink, as the console.groq.com link is (the system's blue is not the app's).
+    /// A link in the ink, as the guide's console.groq.com/keys link is (the system's blue is not the app's).
     private static func link(_ title: String) -> some View {
         Text(title).font(Typography.caption).underline().foregroundStyle(Theme.text)
     }
@@ -672,16 +685,13 @@ struct GroqKeyRows: View {
     private var groq: some View {
         let provider = cloud.selectedProvider
         return VStack(alignment: .leading, spacing: 8) {
-            Text("Groq's free tier covers ordinary personal use and needs no credit card. Sign in at [console.groq.com](https://console.groq.com), create a key under API Keys and paste it here.")
-                .font(Typography.caption)
-                .foregroundStyle(Theme.secondaryText)
-                .fixedSize(horizontal: false, vertical: true)
+            GroqKeyGuide(place: .firstRun)
             HStack(spacing: 8) {
                 SecureField("Paste your Groq key", text: $key)
                     .textFieldStyle(.roundedBorder)
                     .frame(maxWidth: 260)
                     .accessibilityLabel("Groq API key")
-                Button("Save") {
+                Button(Self.saveTitle) {
                     // Sent once, then gone from the field.
                     let typed = key
                     key = ""
@@ -715,5 +725,114 @@ struct GroqKeyRows: View {
                 .foregroundStyle(cloud.failure != nil || cloud.readError != nil ? Theme.alert : Theme.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+}
+
+/// How to get a free Groq key, step by step: the first run's, over Groq's key field, and Settings >
+/// AI's, under the language model's rows. The same words as the Windows app's guide.
+///
+/// Only what Groq's own pages say, checked 2026-10-05:
+/// - https://console.groq.com/keys ("API Keys - GroqCloud"): the "Create API Key" button, a Name
+///   for each key, and "Remember to keep your API keys safe".
+/// - https://console.groq.com/settings/billing/plans: "Free", "Great for anyone to get started
+///   with our APIs", "$0".
+/// - https://console.groq.com/docs/rate-limits: the "Free Plan Limits" table.
+/// None of them says whether the Free plan needs a card or whether a key is shown only once, so the
+/// guide says neither.
+struct GroqKeyGuide: View {
+    /// Where the guide is, which is what its last step says to press.
+    enum Place {
+        case firstRun, settings
+    }
+
+    let place: Place
+
+    static let title = "How to get a free Groq key"
+    static let cost = "Groq's Free plan costs $0 and has rate limits, listed on its Rate Limits page."
+    /// The part of `cost` that is the link to `rateLimitsURL`.
+    static let rateLimitsLink = "Rate Limits page"
+    static let rateLimitsURL = URL(string: "https://console.groq.com/docs/rate-limits")!
+    static let keysURL = URL(string: "https://console.groq.com/keys")!
+    /// The first step's link, as it reads.
+    static let keysLink = "console.groq.com/keys"
+    /// The first step's link, as VoiceOver names it.
+    static let keysLinkName = "Open Groq's API Keys page in your browser"
+
+    /// Four steps, not five: copying the key and pasting it are one, so the first run's Polish
+    /// step still fits its sheet with the guide open (OnboardingLayoutTests; five ran 15 pt over).
+    static func steps(_ place: Place) -> [String] {
+        let last = switch place {
+        case .firstRun: "Copy the key, paste it below and press Save, then Use Groq."
+        case .settings: "Copy the key, choose Groq above, paste it and press Save key, then Use Groq."
+        }
+        return [
+            "Open Groq's API Keys page:",
+            "Log in, or make a Groq account.",
+            "Press Create API Key and give the key a name, such as Inkwell.",
+            last,
+        ]
+    }
+
+    /// A step as VoiceOver reads it: its number and how many there are, then the words.
+    static func stepName(_ number: Int, of count: Int, _ text: String) -> String {
+        "Step \(number) of \(count): \(text)"
+    }
+
+    /// The cost line, its Rate Limits page a link (in the tint, as the old sentence's link was).
+    static let costText: AttributedString = {
+        var text = AttributedString(cost)
+        if let range = text.range(of: rateLimitsLink) {
+            text[range].link = rateLimitsURL
+        }
+        return text
+    }()
+
+    var body: some View {
+        let steps = Self.steps(place)
+        VStack(alignment: .leading, spacing: 4) {
+            Text(Self.costText)
+                .fixedSize(horizontal: false, vertical: true)
+            ForEach(Array(steps.enumerated()), id: \.offset) { index, text in
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text("\(index + 1).")
+                        .monospacedDigit()
+                        .accessibilityHidden(true)
+                    let step = stepText(text, index, steps.count)
+                    if index == 0 {
+                        // The link beside the step where it fits, under it where it doesn't.
+                        ViewThatFits(in: .horizontal) {
+                            HStack(alignment: .firstTextBaseline, spacing: 4) { step; keysLink }
+                            VStack(alignment: .leading, spacing: 2) { step; keysLink }
+                        }
+                    } else {
+                        step
+                    }
+                }
+            }
+        }
+        .font(Typography.caption)
+        .foregroundStyle(Theme.secondaryText)
+        .accessibilityElement(children: .contain)
+        // Named in the first run only: in Settings the disclosure over it already says this.
+        .accessibilityLabel(place == .firstRun ? Self.title : "")
+    }
+
+    private func stepText(_ text: String, _ index: Int, _ count: Int) -> some View {
+        Text(text)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityLabel(Self.stepName(index + 1, of: count, text))
+    }
+
+    /// Opens the page in the browser. In the ink, as the app's other links are.
+    private var keysLink: some View {
+        Link(destination: Self.keysURL) {
+            Text(Self.keysLink).underline().foregroundStyle(Theme.text)
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+        .accessibilityLabel(Self.keysLinkName)
+        // Voice Control matches what is on screen ("click console.groq.com/keys") too.
+        .accessibilityInputLabels([Text(Self.keysLink), Text(Self.keysLinkName)])
+        .help(Self.keysURL.absoluteString)
     }
 }
