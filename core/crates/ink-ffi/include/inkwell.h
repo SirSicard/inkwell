@@ -263,7 +263,7 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       hidden streak is shown nowhere and its milestones are not celebrated; shown unless set),
  *       "stats.share_heatmap" (on|off: the share card may carry the heatmap; off unless set; the
  *       core does nothing with it) and "stats.review_dismissed" (a YYYY-MM-DD date: the first day
- *       of the week whose review the user dismissed). A change to the keys or to dictation.polish reaches a
+ *       of the week whose review the user dismissed, as week_review's "week"). A change to the keys or to dictation.polish reaches a
  *       running dictation at once (keys rebound): a new "dictation.ready" (or "dictation.off")
  *       follows the "setting.value".
  *   {"cmd":"hotkey.check","binding":"<token>","id":"<ref>"}
@@ -399,7 +399,8 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       Send it at launch and after a dictation or a meeting ends. Takes stats.get's calendar.
  *       Its "best" is a best the newest take (or today, or this week) just set, with the old value
  *       and the new, for a short note: at most one a day, none on a library's first check or with
- *       stats.celebrate off, and only once five earlier entries were beaten.
+ *       stats.celebrate off, and only once five earlier entries were beaten. A day's or a week's
+ *       best is reported once, when it first passes the old one, and grows on the shelf after.
  *   {"cmd":"streak.pause","utc_offsets":[...],"week_start":1,"id":"<ref>"}
  *   {"cmd":"streak.resume","utc_offsets":[...],"week_start":1,"id":"<ref>"}
  *       Pause the streak from today (days without a dictation do not count against it, for up to

@@ -115,7 +115,7 @@ pub const HEATMAP_WEEKS_BEFORE: i64 = 11;
 pub const MAX_UTC_OFFSETS: usize = 400;
 /// The longest a pause runs, in days, unless resumed sooner (as Apple pauses Activity rings).
 pub const MAX_PAUSE_DAYS: i64 = 90;
-/// The most pauses kept: about one a month for sixteen years.
+/// The most pauses kept, about one a month for sixteen years: past it the oldest goes.
 pub const MAX_PAUSES: usize = 200;
 /// The least a dictation is held before its speed can be a best. A take's speed is its words over
 /// the time the key was held, and the press and the release are each a few hundred ms off the
@@ -125,7 +125,8 @@ pub const MAX_PAUSES: usize = 200;
 /// window of them.
 pub const FASTEST_MIN_HELD_MS: u64 = 30_000;
 /// How many earlier entries of its kind a best must have beaten or tied before it is news: the
-/// second take ever is always the longest yet, which is not worth a note.
+/// second take ever is always the longest yet, which is not worth a note. Every take counts as an
+/// entry, a short one too: a best is the user's own, and five takes is little to ask.
 pub const BEST_AFTER: u64 = 5;
 /// The weeks before last week its speed is compared with.
 pub const REVIEW_AVERAGE_WEEKS: i64 = 4;
@@ -384,37 +385,41 @@ pub fn running_pause(pauses: &[Pause], today: i64) -> Option<i64> {
 }
 
 /// `streak.pause`: the pauses with one started today, or unchanged while one runs. Each before it
-/// is closed on its last day (one left running past its 90 days ends there). Refused when
-/// [`MAX_PAUSES`] are kept.
-pub fn pause(pauses: &[Pause], today: i64) -> Result<Vec<Pause>, String> {
+/// is closed on its last day (one left running past its 90 days ends there), and one that starts
+/// after today (a clock set back) goes: those days were never paused. At [`MAX_PAUSES`] the oldest
+/// goes, so pausing always works; only a streak that old can grow shorter.
+pub fn pause(pauses: &[Pause], today: i64) -> Vec<Pause> {
     if running_pause(pauses, today).is_some() {
-        return Ok(pauses.to_vec());
-    }
-    if pauses.len() >= MAX_PAUSES {
-        return Err(format!(
-            "streak.pause: at most {MAX_PAUSES} pauses are kept"
-        ));
+        return pauses.to_vec();
     }
     let mut out: Vec<Pause> = pauses
         .iter()
+        .filter(|p| p.from <= today)
         .map(|p| Pause {
             from: p.from,
             until: Some(p.last()),
         })
         .collect();
+    if out.len() >= MAX_PAUSES {
+        out.drain(..=out.len() - MAX_PAUSES);
+    }
     out.push(Pause {
         from: today,
         until: None,
     });
-    Ok(out)
+    out
 }
 
 /// `streak.resume`: the pauses with the running one ended yesterday, so today counts as any day;
-/// one started today goes, as if it never was. Unchanged when none runs.
+/// one started today goes, as if it never was, and so does one that starts after today (a clock
+/// set back). Unchanged when none runs.
 pub fn resume(pauses: &[Pause], today: i64) -> Vec<Pause> {
     pauses
         .iter()
         .filter_map(|p| {
+            if p.from > today {
+                return None;
+            }
             if p.until.is_some() || !p.covers(today) {
                 return Some(*p);
             }
@@ -443,35 +448,39 @@ pub fn pauses_note(pauses: &[Pause]) -> String {
     Value::Array(rows).to_string()
 }
 
-/// The pauses in [`PAUSES_KEY`]'s note: none without one, or (said in the log) when it cannot be
-/// read. Only the core writes it.
+/// The pauses in [`PAUSES_KEY`]'s note, oldest first: none without one. Only the core writes it;
+/// a row that cannot be read is skipped (said in the log), never the note, so one odd row does
+/// not cost the rest, and the next write keeps them.
 pub fn pauses_from(note: Option<&str>) -> Vec<Pause> {
     let Some(note) = note else {
         return Vec::new();
     };
-    let read = || -> Option<Vec<Pause>> {
-        let rows = serde_json::from_str::<Value>(note).ok()?;
-        rows.as_array()?
-            .iter()
-            .map(|row| {
-                let day = |k: &str| {
-                    row.get(k)
-                        .map(|v| v.as_str().and_then(Calendar::parse_date))
-                };
-                Some(Pause {
-                    from: day("from")??,
-                    until: match day("until") {
-                        None => None,
-                        Some(until) => Some(until?),
-                    },
-                })
-            })
-            .collect()
-    };
-    read().unwrap_or_else(|| {
+    let Some(rows) = serde_json::from_str::<Value>(note)
+        .ok()
+        .and_then(|v| v.as_array().cloned())
+    else {
         log::warn!("stats: the streak's pauses could not be read; counted without them");
-        Vec::new()
-    })
+        return Vec::new();
+    };
+    let read = |row: &Value| -> Option<Pause> {
+        let day = |k: &str| {
+            row.get(k)
+                .map(|v| v.as_str().and_then(Calendar::parse_date))
+        };
+        Some(Pause {
+            from: day("from")??,
+            until: match day("until") {
+                None => None,
+                Some(until) => Some(until?),
+            },
+        })
+    };
+    let mut pauses: Vec<Pause> = rows.iter().filter_map(read).collect();
+    if pauses.len() < rows.len() {
+        log::warn!("stats: a pause of the streak could not be read; counted without it");
+    }
+    pauses.sort_by_key(|p| p.from);
+    pauses
 }
 
 /// A streak's three numbers, in active days.
@@ -845,7 +854,7 @@ impl Counted {
     }
 }
 
-/// The user's settings that shape the counts ([`settings`]).
+/// The user's settings that shape the counts ([`read_settings`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Settings {
     /// The typing speed time saved is measured against.
@@ -856,7 +865,7 @@ pub struct Settings {
     pub pauses: Vec<Pause>,
     /// Whether the user hid the streak.
     pub streak_hidden: bool,
-    /// The first day of the week whose review the user dismissed.
+    /// A day of the week whose review the user dismissed (its first day, as sent).
     pub review_dismissed: Option<i64>,
 }
 
@@ -1070,9 +1079,11 @@ pub fn count(
     }
 
     let words_last: u64 = per_day.range(last_week..week).map(|(_, w)| w).sum();
-    let week_review = ((words_last > 0 || meetings_last.meetings > 0)
-        && settings.review_dismissed != Some(last_week))
-    .then(|| {
+    // A dismissal names its week by a day in it, so changing the week's first day keeps it.
+    let dismissed = settings
+        .review_dismissed
+        .is_some_and(|day| calendar.week_start_of(day) == last_week);
+    let week_review = ((words_last > 0 || meetings_last.meetings > 0) && !dismissed).then(|| {
         let wpm_last = wpm(timed_last.0, timed_last.1);
         let saved = saved_ms(timed_last.0, timed_last.1, settings.typing_wpm);
         WeekReview {
@@ -1260,7 +1271,8 @@ pub fn typing_wpm(store: &dyn Store) -> Result<u32, String> {
 ///   and beat at least [`BEST_AFTER`] earlier entries. A best held for the first time is the
 ///   baseline, not news. When several are news, the first in the shelf's order is reported.
 /// - **One a day.** After a best is reported, the rest of the day's are noted silently: a take
-///   that beats one just beaten is on the shelf, not in another note.
+///   that beats one just beaten is on the shelf, not in another note. A day's or a week's best is
+///   news once, when it first passes the old one; it keeps growing on the shelf after that.
 /// - **A first check reports nothing.** With no note (a library from before bests, or a note that
 ///   cannot be read) the shelf is noted silently.
 /// - **Off notes without reporting.** With celebrations off a best is noted, so turning them back
@@ -1351,7 +1363,7 @@ fn read_best_note(note: &str) -> Option<(Seen, Option<i64>)> {
 
 /// The user's settings that shape the counts, from the store. A value that cannot be read (only
 /// the core writes them, each checked) counts as unset.
-pub fn settings(store: &dyn Store) -> Result<Settings, String> {
+pub fn read_settings(store: &dyn Store) -> Result<Settings, String> {
     let get = |key: &str| store.setting(key).map_err(|e| e.to_string());
     Ok(Settings {
         typing_wpm: typing_wpm(store)?,
@@ -1376,9 +1388,9 @@ pub fn answer(shared: &Shared, query: StatsQuery, id: Option<&str>) -> Result<Va
     let now = shared.clock.unix_ms();
     let calendar = query.calendar();
     let today = calendar.day(now);
-    let mut settings = settings(store)?;
+    let mut settings = read_settings(store)?;
     let pauses = match &query {
-        StatsQuery::Pause { .. } => Some(pause(&settings.pauses, today)?),
+        StatsQuery::Pause { .. } => Some(pause(&settings.pauses, today)),
         StatsQuery::Resume { .. } => Some(resume(&settings.pauses, today)),
         StatsQuery::Get { .. } | StatsQuery::CheckMilestones { .. } => None,
     };
@@ -2226,6 +2238,81 @@ mod tests {
         assert_eq!(streaks(&days(&[90, 91, 92]), 185, running).current, 0);
     }
 
+    /// Days off are skipped, not forgiven: two missed days with a rest day between them are
+    /// still two in a row, and a rest day today leaves a streak running as any today does.
+    #[test]
+    fn days_off_between_and_after_missed_days() {
+        let days = |d: &[i64]| d.iter().copied().collect::<BTreeSet<i64>>();
+        // Wednesday (97) a rest day: Tuesday and Thursday missed around it end the streak.
+        let wednesday = |day: i64| Calendar::weekday(day) == 3;
+        let s = streaks(&days(&[95, 99]), 99, wednesday);
+        assert_eq!((s.current, s.longest), (1, 1));
+        // The weekend off, Thursday active, Friday missed: running on Saturday, Sunday and
+        // Monday, ended on Tuesday.
+        let weekend = |day: i64| Calendar::weekday(day) >= 6;
+        for (today, current) in [(100, 1), (101, 1), (102, 1), (103, 0)] {
+            assert_eq!(
+                streaks(&days(&[98]), today, weekend).current,
+                current,
+                "day {today}"
+            );
+        }
+    }
+
+    /// Digests come in no promised order: any order counts the same, and two takes that start
+    /// at the same moment are told apart by their ids.
+    #[test]
+    fn the_counts_do_not_depend_on_the_digests_order() {
+        let cal = utc();
+        let twin = |id: &str, held: u64| RecordDigest {
+            record: RecordId(id.into()),
+            ..dictation(NOON - HOUR, 50, held)
+        };
+        let mut digests = vec![
+            twin("b", 40_000),
+            twin("a", 40_000),
+            // Ties the twins' 40 s, and started first: the longest.
+            dictation(NOON - DAY, 300, 40_000),
+            dictation(NOON - 9 * DAY, 160, 30_000),
+            meeting(NOON - 2 * DAY, 75, TranscriptDigest::default()),
+            meeting(NOON - 3 * DAY, 75, TranscriptDigest::default()),
+        ];
+        let first = count(&digests, &[], NOON, &cal, &Settings::default());
+        let longest = first
+            .bests
+            .iter()
+            .find(|b| b.id == BestId::LongestDictation)
+            .unwrap();
+        assert_eq!(longest.record, Some(RecordId(format!("d{}", NOON - DAY))));
+        for _ in 0..digests.len() {
+            digests.rotate_left(1);
+            assert_eq!(
+                count(&digests, &[], NOON, &cal, &Settings::default()),
+                first
+            );
+            digests.reverse();
+            assert_eq!(
+                count(&digests, &[], NOON, &cal, &Settings::default()),
+                first
+            );
+        }
+        // Of the twins, "b" is the newest (the same start, the later id).
+        let fastest = first
+            .bests
+            .iter()
+            .find(|b| b.id == BestId::FastestDictation)
+            .unwrap();
+        assert_eq!(fastest.record, Some(RecordId(format!("d{}", NOON - DAY))));
+        let mut later = digests.clone();
+        later.push(twin("c", 90_000));
+        let longest = count(&later, &[], NOON, &cal, &Settings::default())
+            .bests
+            .into_iter()
+            .find(|b| b.id == BestId::LongestDictation)
+            .unwrap();
+        assert!(longest.fresh, "c is the newest: same start, later id");
+    }
+
     /// The latest streak is the last run, running or not: what the shell shows once it has ended
     /// (with the longest), so an ended streak is never shown as a loss.
     #[test]
@@ -2249,7 +2336,7 @@ mod tests {
 
     #[test]
     fn a_pause_runs_from_today_until_resumed_or_ninety_days() {
-        let p = pause(&[], 100).unwrap();
+        let p = pause(&[], 100);
         assert_eq!(
             p,
             [Pause {
@@ -2259,7 +2346,7 @@ mod tests {
         );
         assert_eq!(running_pause(&p, 100), Some(100));
         // Paused already: unchanged.
-        assert_eq!(pause(&p, 105).unwrap(), p);
+        assert_eq!(pause(&p, 105), p);
         // Resumed: the pause ends yesterday, and today counts as any day.
         let closed = resume(&p, 105);
         assert_eq!(
@@ -2278,7 +2365,7 @@ mod tests {
         assert_eq!(running_pause(&p, 189), Some(100));
         assert_eq!(running_pause(&p, 190), None);
         assert_eq!(
-            pause(&p, 200).unwrap(),
+            pause(&p, 200),
             [
                 Pause {
                     from: 100,
@@ -2290,14 +2377,30 @@ mod tests {
                 }
             ]
         );
-        // At most MAX_PAUSES are kept: one more is refused, with why.
+        // At most MAX_PAUSES are kept: the oldest goes, and pausing still works.
         let many: Vec<Pause> = (0..MAX_PAUSES as i64)
             .map(|i| Pause {
                 from: i * 2,
                 until: Some(i * 2),
             })
             .collect();
-        assert!(pause(&many, 10_000).unwrap_err().contains("pauses"));
+        let more = pause(&many, 10_000);
+        assert_eq!(more.len(), MAX_PAUSES);
+        assert_eq!(more[0].from, 2, "the oldest went");
+        assert_eq!(running_pause(&more, 10_000), Some(10_000));
+        // A clock set back: a pause that starts after today was never one, and goes.
+        let ahead = [Pause {
+            from: 300,
+            until: None,
+        }];
+        assert_eq!(resume(&ahead, 200), []);
+        assert_eq!(
+            pause(&ahead, 200),
+            [Pause {
+                from: 200,
+                until: None
+            }]
+        );
     }
 
     /// Pauses are kept as the user's local dates; a note that cannot be read is no pauses.
@@ -2323,6 +2426,13 @@ mod tests {
         assert_eq!(pauses_from(None), []);
         assert_eq!(pauses_from(Some("nonsense")), []);
         assert_eq!(pauses_from(Some(r#"[{"from":"2026-02-30"}]"#)), []);
+        // One odd row costs only itself.
+        assert_eq!(
+            pauses_from(Some(
+                r#"[{"from":"2026-10-10"},{"from":"2026-10-01","until":null},{"from":"2026-10-01","until":"2026-10-04"}]"#
+            )),
+            p
+        );
     }
 
     /// The settings shape the counts: rest days and a running pause go into the streak, and the
@@ -2692,6 +2802,11 @@ mod tests {
             count(&digests, &[], NOON, &cal, &dismissed(last_week - 7))
                 .week_review
                 .is_some()
+        );
+        // Dismissed by another day of that week (weeks started on another day then): still gone.
+        assert_eq!(
+            count(&digests, &[], NOON, &cal, &dismissed(last_week + 3)).week_review,
+            None
         );
         // A week with nothing in it has no review.
         assert_eq!(
