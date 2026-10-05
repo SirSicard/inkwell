@@ -10,15 +10,21 @@
     Loaded="OnLoaded">
     <StackPanel Spacing="10">
         <TextBlock AutomationProperties.HeadingLevel="Level2" Style="{StaticResource InkHeadingStyle}" Text="Voice commands" />
-        <StackPanel Orientation="Horizontal" Spacing="10" Visibility="{x:Bind local:SettingsFormat.Shows(Model.Failure), Mode=OneWay}">
+        <!-- The failure wraps beside Start over (a Grid: a horizontal panel would never wrap it). -->
+        <Grid ColumnSpacing="10" Visibility="{x:Bind local:SettingsFormat.Shows(Model.Failure), Mode=OneWay}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
             <TextBlock VerticalAlignment="Center" Style="{StaticResource InkAlertTextStyle}" Text="{x:Bind Model.Failure, Mode=OneWay}" />
             <Button
+                Grid.Column="1"
                 Click="OnStartOver"
                 Content="{x:Bind local:VoiceCommandsSection.StartOverTitle}"
                 ToolTipService.ToolTip="{x:Bind local:VoiceCommandsSection.StartOverHelp}"
                 AutomationProperties.HelpText="{x:Bind local:VoiceCommandsSection.StartOverHelp}"
                 Visibility="{x:Bind Model.Unreadable, Mode=OneWay}" />
-        </StackPanel>
+        </Grid>
         <Grid ColumnSpacing="12">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="150" />

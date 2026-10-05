@@ -8,6 +8,6 @@ public sealed partial class PermissionsSection : UserControl
     public PermissionsSection(PermissionsModel permissions)
     {
         InitializeComponent();
-        CardsHost.Content = new PermissionCardsView(permissions);
+        CardsHost.Content = new PermissionCardsView(permissions, inSettings: true);
     }
 }

@@ -12,11 +12,16 @@ public sealed partial class ImportKeyNoteView : UserControl
     private readonly Func<string> currentKeyName;
 
     /// <param name="currentKeyName">The dictation key's name now (e.g. "Right Ctrl").</param>
-    public ImportKeyNoteView(ImportNoteModel importNote, Func<string> currentKeyName)
+    /// <param name="inSettings">Settings > Dictation: inside the section's card, so flat (InkInsetCardStyle).</param>
+    public ImportKeyNoteView(ImportNoteModel importNote, Func<string> currentKeyName, bool inSettings)
     {
         model = importNote ?? throw new ArgumentNullException(nameof(importNote));
         this.currentKeyName = currentKeyName ?? throw new ArgumentNullException(nameof(currentKeyName));
         InitializeComponent();
+        if (inSettings)
+        {
+            Card.Style = (Style)Application.Current.Resources["InkInsetCardStyle"];
+        }
         model.PropertyChanged += (_, _) => Render();
         Render();
     }

@@ -97,7 +97,7 @@ internal sealed class AppScreens(CoreStore store, ScreenModels models, Router ro
     /// <summary>Settings' sections, in the plan's order.</summary>
     private List<SettingsSectionEntry> SettingsSections()
     {
-        var importNote = new ImportKeyNoteView(models.ImportNote, () => DictationModel.Key(models.Dictation.CurrentKey)?.Name ?? DictationModel.Cap(models.Dictation.CurrentKey));
+        var importNote = new ImportKeyNoteView(models.ImportNote, () => DictationModel.Key(models.Dictation.CurrentKey)?.Name ?? DictationModel.Cap(models.Dictation.CurrentKey), inSettings: true);
         // Inkwell 0.2's history, in General, looked for each time Settings shows it.
         var import02 = new Import02Card(models.Import02, inSettings: true);
         import02.Loaded += (_, _) => models.Import02.Check();

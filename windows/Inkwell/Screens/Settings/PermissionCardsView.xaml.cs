@@ -13,11 +13,16 @@ public sealed partial class PermissionCardsView : UserControl
     private readonly PermissionsModel permissions;
     private readonly Dictionary<PermissionCard, PermissionRow> rows = [];
 
-    public PermissionCardsView(PermissionsModel permissions)
+    /// <param name="inSettings">Settings > Permissions: inside the section's card, so flat (InkInsetCardStyle).</param>
+    public PermissionCardsView(PermissionsModel permissions, bool inSettings)
     {
         ArgumentNullException.ThrowIfNull(permissions);
         this.permissions = permissions;
         InitializeComponent();
+        if (inSettings)
+        {
+            Frame.Style = (Style)Application.Current.Resources["InkInsetCardStyle"];
+        }
         var all = PermissionCards.All;
         for (var i = 0; i < all.Count; i++)
         {

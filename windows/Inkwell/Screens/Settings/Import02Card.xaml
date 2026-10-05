@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Inkwell 0.2's history (the Mac's Import02Card): where it stands in words, Import while there is
-     something to import, and why an import failed. On the first run's step, and in Settings > Voice
-     beside the key note, as a card, while there is something to say. -->
+     something to import, and why an import failed. On the first run's step, and in Settings > General
+     as a card, while there is something to say. -->
 <UserControl
     x:Class="Inkwell.Screens.Import02Card"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"

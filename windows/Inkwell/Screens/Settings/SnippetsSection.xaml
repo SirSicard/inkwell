@@ -15,15 +15,21 @@
             <TextBlock AutomationProperties.HeadingLevel="Level2" Style="{StaticResource InkHeadingStyle}" Text="Snippets" />
             <TextBlock VerticalAlignment="Bottom" Margin="0,0,0,2" Style="{StaticResource InkCaptionStyle}" Text="Say a trigger, get the text" />
         </StackPanel>
-        <StackPanel Orientation="Horizontal" Spacing="10" Visibility="{x:Bind local:SettingsFormat.Shows(Model.Failure), Mode=OneWay}">
+        <!-- The failure wraps beside Start over (a Grid: a horizontal panel would never wrap it). -->
+        <Grid ColumnSpacing="10" Visibility="{x:Bind local:SettingsFormat.Shows(Model.Failure), Mode=OneWay}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
             <TextBlock VerticalAlignment="Center" Style="{StaticResource InkAlertTextStyle}" Text="{x:Bind Model.Failure, Mode=OneWay}" />
             <Button
+                Grid.Column="1"
                 Click="OnStartOver"
                 Content="{x:Bind local:SnippetsSection.StartOverTitle}"
                 ToolTipService.ToolTip="{x:Bind local:SnippetsSection.StartOverHelp}"
                 AutomationProperties.HelpText="{x:Bind local:SnippetsSection.StartOverHelp}"
                 Visibility="{x:Bind Model.Unreadable, Mode=OneWay}" />
-        </StackPanel>
+        </Grid>
         <TextBlock Style="{StaticResource InkCaptionStyle}" Text="{x:Bind local:SnippetsSection.FromImportText}" Visibility="{x:Bind Model.FromImport, Mode=OneWay}" />
         <TextBlock x:Name="Empty" Style="{StaticResource InkCaptionStyle}" Text="{x:Bind local:SnippetsSection.EmptyText}" />
         <ContentControl x:Name="RowsHost" HorizontalContentAlignment="Stretch" IsTabStop="False">

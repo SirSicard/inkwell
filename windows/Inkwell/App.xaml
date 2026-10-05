@@ -190,6 +190,16 @@
                 <Setter Property="CornerRadius" Value="{StaticResource GlowCardCornerRadius}" />
                 <Setter Property="Padding" Value="22,18" />
             </Style>
+            <!-- A card inside a card (Settings' section cards hold the permission cards and the 0.2
+                 notes): flat, no second acrylic, a hairline, and the 14 px corners of Appearance's
+                 rows. High Contrast's brushes make it the same solid card as InkCardStyle. -->
+            <Style x:Key="InkInsetCardStyle" TargetType="Border">
+                <Setter Property="Background" Value="{ThemeResource InkCardBrush}" />
+                <Setter Property="BorderBrush" Value="{ThemeResource InkCardBorderBrush}" />
+                <Setter Property="BorderThickness" Value="1" />
+                <Setter Property="CornerRadius" Value="14" />
+                <Setter Property="Padding" Value="12" />
+            </Style>
             <!-- Pill buttons: the answer in the button fill, every other button on a light wash. -->
             <Style x:Key="InkAccentButtonStyle" TargetType="Button" BasedOn="{StaticResource AccentButtonStyle}">
                 <Setter Property="CornerRadius" Value="{StaticResource GlowPillCornerRadius}" />

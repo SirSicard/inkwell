@@ -1,20 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Settings (the canvas's Settings board): a list of the sections on the left, and one scrolling
      page with every section top to bottom. Choosing a section in the list scrolls to it; scrolling
-     marks the section in view. Each section brings its own Level 2 heading; a hairline with 40
-     above and 24 below starts every section after the first, so where one ends and the next
-     begins shows (as the Mac's Settings). -->
+     marks the section in view. Each section sits on its own card, Glow's card as Today's
+     (InkCardStyle: translucent over the orb, solid in High Contrast), with its Level 2 heading
+     inside, so in dark mode one section does not run into the next. -->
 <UserControl
     x:Class="Inkwell.Screens.SettingsScreen"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-    <UserControl.Resources>
-        <Style x:Key="SectionHairlineStyle" TargetType="Border">
-            <Setter Property="Height" Value="1" />
-            <Setter Property="Margin" Value="0,40,0,24" />
-            <Setter Property="Background" Value="{ThemeResource InkSeparatorBrush}" />
-        </Style>
-    </UserControl.Resources>
     <Grid>
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="188" />
@@ -28,8 +21,8 @@
                 SelectionMode="Single" />
         </Border>
         <ScrollViewer x:Name="Scroller" Grid.Column="1" ViewChanged="OnScrolled">
-            <StackPanel x:Name="Sections" Padding="40,28">
-                <TextBlock Margin="0,0,0,26" AutomationProperties.HeadingLevel="Level1" Style="{StaticResource InkScreenTitleStyle}" Text="Settings" />
+            <StackPanel x:Name="Sections" Padding="40,28" Spacing="16">
+                <TextBlock Margin="0,0,0,10" AutomationProperties.HeadingLevel="Level1" Style="{StaticResource InkScreenTitleStyle}" Text="Settings" />
             </StackPanel>
         </ScrollViewer>
     </Grid>
