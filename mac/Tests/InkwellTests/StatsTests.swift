@@ -504,6 +504,7 @@ final class MilestoneCelebrationTests: XCTestCase {
     /// change of screen moves nothing and nothing is drawn; let go, it wanders again.
     func testTheGlowSitsOnTheOrbWhereverItHasWanderedAndHoldsItThere() async throws {
         try XCTSkipUnless(InkRenderer.isSupported, "no Metal device")
+        try XCTSkipIf(NSScreen.screens.isEmpty, "no display: no link to end the glide")
         let view = wanderingOrb()
         let orb = OrbHold()
         orb.attach(view)
@@ -540,6 +541,7 @@ final class MilestoneCelebrationTests: XCTestCase {
     /// arrives, read only once it has.
     func testHeldBeforeItComesOnScreenTheOrbStillGlidesAndTheGlowWaitsForIt() async throws {
         try XCTSkipUnless(InkRenderer.isSupported, "no Metal device")
+        try XCTSkipIf(NSScreen.screens.isEmpty, "no display: no link to end the glide")
         let view = wanderingOrb()
         let orb = OrbHold()
         orb.attach(view)
@@ -560,6 +562,7 @@ final class MilestoneCelebrationTests: XCTestCase {
     /// let go, coming on screen moves it again.
     func testALitGlowKeepsTheOrbWhenTheWindowIsCoveredAndUncovered() async throws {
         try XCTSkipUnless(InkRenderer.isSupported, "no Metal device")
+        try XCTSkipIf(NSScreen.screens.isEmpty, "no display: no link to end the glide")
         let view = wanderingOrb()
         let orb = OrbHold()
         orb.attach(view)
@@ -590,8 +593,9 @@ final class MilestoneCelebrationTests: XCTestCase {
         do {
             let spot = try await bounded(Task { await orb.hold() }, "the orb's spot", within: .milliseconds(300))
             XCTFail("arrived with no tick: \(String(describing: spot))")
-        } catch let late as Unsettled {
-            XCTAssertEqual(late.description, "the orb's spot: not within 0.3 seconds")
+        } catch let late as NotWithin {
+            XCTAssertEqual(late.what, "the orb's spot")
+            XCTAssertEqual(late.limit, .milliseconds(300))
         }
         orb.release()
         XCTAssertFalse(view.holdsStill)
@@ -664,7 +668,7 @@ final class MilestoneCelebrationTests: XCTestCase {
         loader.warm()
         let start = ContinuousClock.now
         while loader.outcome == nil {
-            guard ContinuousClock.now - start < limit else { throw Unsettled(what: "the pipeline", limit: limit) }
+            guard ContinuousClock.now - start < limit else { throw NotWithin(what: "the pipeline", limit: limit) }
             try await Task.sleep(for: .milliseconds(20))
         }
         _ = try XCTUnwrap(loader.outcome).get()
@@ -685,11 +689,11 @@ final class MilestoneCelebrationTests: XCTestCase {
         let value = await task.value
         timer.cancel()
         // The timer ran to its end only if it cancelled the task.
-        if (try? await timer.value) != nil { throw Unsettled(what: what, limit: limit) }
+        if (try? await timer.value) != nil { throw NotWithin(what: what, limit: limit) }
         return value
     }
 
-    private struct Unsettled: Error, CustomStringConvertible {
+    private struct NotWithin: Error, CustomStringConvertible {
         let what: String
         let limit: Duration
         var description: String { "\(what): not within \(limit)" }
