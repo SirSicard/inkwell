@@ -25,6 +25,17 @@ public enum OnboardingStep
     Ready,
 }
 
+/// <summary>Where polish's consent step shows in the Polish step: under what asked for it.</summary>
+public enum PolishStepPlace
+{
+    /// <summary>Under the switch (and its line).</summary>
+    UnderSwitch,
+    /// <summary>Under Use Groq, in the own key's disclosure.</summary>
+    UnderGroqUse,
+    /// <summary>Under the other providers' Use, in the own key's disclosure.</summary>
+    UnderOthersUse,
+}
+
 public sealed class OnboardingModel : ObservableModel
 {
     private static readonly OnboardingStep[] Steps = Enum.GetValues<OnboardingStep>();
@@ -157,6 +168,40 @@ public sealed class OnboardingModel : ObservableModel
     public bool ShowsSkip => Step != OnboardingStep.Ready;
 
     public bool ShowsBack => Step != OnboardingStep.Welcome;
+
+    /// <summary>
+    /// Skip, Back and Continue work: not while polish's consent step is up on the Polish step, as
+    /// nothing moves behind the Mac's alert. The step's Cancel (or Escape) or its agreeing button
+    /// answers it first. Off the Polish step the card can't be seen, so it holds nothing (Escape
+    /// still cancels it); a step Settings asked for is its own dialog and never holds the sheet.
+    /// </summary>
+    public static bool CanNavigate(ConsentModel polishConsent, OnboardingStep step)
+    {
+        ArgumentNullException.ThrowIfNull(polishConsent);
+        return step != OnboardingStep.Polish || !polishConsent.IsShowingStep(ConsentHost.Onboarding);
+    }
+
+    /// <summary>
+    /// Where polish's step shows: right under what asked for it, the switch or the Use in view
+    /// (Use Groq, or the other providers' Use). With the own key's disclosure closed a Use step
+    /// would be hidden inside it, so it shows under the switch.
+    /// </summary>
+    public static PolishStepPlace PolishStepPlaceFor(bool askedBySwitch, bool ownKeyOpen, bool others) =>
+        askedBySwitch || !ownKeyOpen ? PolishStepPlace.UnderSwitch
+        : others ? PolishStepPlace.UnderOthersUse
+        : PolishStepPlace.UnderGroqUse;
+
+    /// <summary>
+    /// Where a step asked for at <paramref name="asked"/> shows now: there while those rows show,
+    /// so it never moves under a Use that did not ask; under the switch while they are hidden (the
+    /// disclosure closed, or the other set of rows shown), so it is never hidden.
+    /// </summary>
+    public static PolishStepPlace PolishStepShownAt(PolishStepPlace asked, bool ownKeyOpen, bool others) => asked switch
+    {
+        PolishStepPlace.UnderGroqUse when ownKeyOpen && !others => asked,
+        PolishStepPlace.UnderOthersUse when ownKeyOpen && others => asked,
+        _ => PolishStepPlace.UnderSwitch,
+    };
 
     /// <summary>Start on the last step; on the import step, Not now until something came over.</summary>
     public string NextTitle => Step switch
