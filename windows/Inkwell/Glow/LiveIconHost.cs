@@ -18,7 +18,6 @@ using Inkwell.Core.Glow;
 using Inkwell.Core.Screens;
 using Inkwell.Ink;
 using Microsoft.UI;
-using Microsoft.UI.Dispatching;
 using WinUIEx;
 
 namespace Inkwell;
@@ -45,14 +44,14 @@ internal sealed class LiveIconHost : IDisposable
     /// <summary>Failures logged, by what failed: each once, however often a frame retries it.</summary>
     private readonly HashSet<string> logged = [];
 
-    public LiveIconHost(nint window, DropModel drop, CoreStore store, GlowTheme theme, TrayIcon tray, string iconPath, DispatcherQueue ui, Action<bool> record)
+    public LiveIconHost(nint window, DropModel drop, CoreStore store, GlowTheme theme, TrayIcon tray, string iconPath, Action<bool> record)
     {
         this.drop = drop;
         this.store = store;
         this.theme = theme;
         this.tray = tray;
         this.iconPath = iconPath;
-        icon = new LiveIcon(new DispatcherTicker(ui));
+        icon = new LiveIcon(new NoTicker());
         try
         {
             hook = new WindowHook(window);
@@ -372,27 +371,20 @@ internal sealed class LiveIconHost : IDisposable
         }
     }
 
-    /// <summary>The pulse's clock: a dispatcher timer on the UI thread, made only while it runs.</summary>
-    private sealed class DispatcherTicker(DispatcherQueue ui) : ILiveIconTicker
+    /// <summary>
+    /// No clock: the shell's icons are held still (LiveIconLook.OnShell), so LiveIcon never wants
+    /// one here. A pulse handed in by mistake would show its first frame and stay still.
+    /// </summary>
+    private sealed class NoTicker : ILiveIconTicker
     {
-        private DispatcherQueueTimer? timer;
-
-        public bool Running => timer is not null;
+        public bool Running => false;
 
         public void Start(TimeSpan interval, Action tick)
         {
-            Cancel();
-            timer = ui.CreateTimer();
-            timer.Interval = interval;
-            timer.IsRepeating = true;
-            timer.Tick += (_, _) => tick();
-            timer.Start();
         }
 
         public void Cancel()
         {
-            timer?.Stop();
-            timer = null;
         }
     }
 }

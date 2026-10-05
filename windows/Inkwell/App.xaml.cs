@@ -259,7 +259,7 @@ public partial class App : Application
         tray.ContextMenu += (_, e) => e.Flyout = TrayMenuFlyout();
         tray.IsVisible = true;
         liveIcon = new LiveIconHost(
-            (nint)Win32Interop.GetWindowFromWindowId(window.AppWindow.Id), drop, store, glow, tray, IconPath, window.DispatcherQueue,
+            (nint)Win32Interop.GetWindowFromWindowId(window.AppWindow.Id), drop, store, glow, tray, IconPath,
             start =>
             {
                 if (start)

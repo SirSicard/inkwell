@@ -48,8 +48,11 @@ on the `legacy/0.2` branch, and its architecture is in [legacy/ARCHITECTURE-0.2.
    when the window comes on screen or is uncovered, when its screen changes, and when the window
    becomes key after 2.5 min in one spot. No polling timers: a window left alone draws nothing
    (the shell budget's idle phase never activates the window). The live icon's recording pulse is
-   a state animation, not polling: it runs only while a meeting records and someone can see the
-   screen, and stops the moment either ends.
+   the Mac's only: a state animation, not polling, it runs only while a meeting records and someone
+   can see the screen, and stops the moment either ends. On Windows the tray icon and the taskbar
+   badge show the state still: each frame there would be a call into Explorer (Shell_NotifyIcon,
+   ITaskbarList3's overlay) on the UI thread, seven a second, and a hung Explorer would stall the
+   app.
 10. **Engines per job**, chosen by measurement (word error rate on public human-labelled sets:
     AMI meetings and FLEURS English). The models are listed in [MODEL-WEIGHTS.md](MODEL-WEIGHTS.md).
     - Dictation final and meeting final: Qwen3-ASR 1.7B via llama.cpp (Metal on the Mac, Vulkan or

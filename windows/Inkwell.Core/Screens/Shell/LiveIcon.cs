@@ -110,6 +110,9 @@ public interface ILiveIconTicker
 /// <summary>The icons' state and their redraws. UI thread.</summary>
 public sealed class LiveIcon(ILiveIconTicker ticker)
 {
+    // The pulse (Pulse, Breath, the ticker) is the Mac's LiveIcon, ported with its tests: kept so
+    // the looks stay one decision (For), though Windows' shell never shows it (OnShell).
+
     /// <summary>The pulse's frame rate: a breath reads as smooth at 7 fps, at a fraction of a display's rate.</summary>
     public const double PulseFps = 7;
 
