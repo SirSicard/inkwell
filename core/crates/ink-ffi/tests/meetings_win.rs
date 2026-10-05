@@ -28,8 +28,8 @@ use ink_core::{
 };
 use ink_engines::{ModelDir, Registry};
 use ink_ffi::capture::{FarHears, WinDevices, WinMeetingCapture};
+use ink_ffi::devices::{InputChoice, MicReason, Picked};
 use ink_ffi::runtime::{Core, MeetingPlatform, Parts};
-use ink_platform_win::capture::{Endpoint, MicRouteReason};
 
 const WAIT: Duration = Duration::from_secs(30);
 
@@ -75,22 +75,22 @@ impl ReplayDevices {
 struct Devices(Arc<ReplayDevices>);
 
 impl WinDevices for Devices {
-    fn route_mic(
-        &self,
-        headset_mic: bool,
-    ) -> Result<Option<(Endpoint, MicRouteReason)>, PlatformError> {
-        self.0.ask(format!("headset {headset_mic}"));
-        let usb = Endpoint {
-            info: DeviceInfo {
+    fn pick_mic(&self, choice: &InputChoice) -> Result<Picked, String> {
+        let what = match choice {
+            InputChoice::Auto => "auto",
+            InputChoice::Device(_) => "a device",
+        };
+        self.0.ask(format!("pick {what}"));
+        Ok(Picked {
+            device: DeviceInfo {
                 id: DeviceId("{0.0.1.00000000}.{usb-mic}".into()),
                 name: "Microphone (USB Audio)".into(),
                 transport: Transport::Usb,
                 is_default: true,
             },
-            container: None,
-            rate: Some(48_000),
-        };
-        Ok(Some((usb, MicRouteReason::DefaultInput)))
+            reason: MicReason::Auto(ink_core::AutoReason::DefaultInput),
+            wanted: None,
+        })
     }
 
     fn open_mic(&self, device: &DeviceId) -> Result<Box<dyn AudioSource>, PlatformError> {
@@ -282,7 +282,7 @@ fn a_teams_call_is_offered_recorded_and_blotted_into_a_record() {
     assert_eq!(
         r.asked(),
         [
-            "headset false",
+            "pick auto",
             "mic {0.0.1.00000000}.{usb-mic}",
             // The offer's own process reached the plan.
             "far: ms-teams.exe (pid Some(300))",
