@@ -231,11 +231,9 @@ struct OnboardingView: View {
                     .foregroundStyle(polish.isProblem ? Theme.alert : Theme.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityHidden(true)
-                DisclosureGroup(isExpanded: $ownKey) {
+                LabelledDisclosure(title: "Use Groq's free model", isExpanded: $ownKey) {
                     GroqKeyRows(cloud: cloud, polish: polish)
                         .padding(.top, 6)
-                } label: {
-                    Text("Use Groq's free model")
                 }
             }
             .foregroundStyle(Theme.text)
@@ -272,6 +270,60 @@ struct OnboardingView: View {
         .font(Typography.body)
         .foregroundStyle(Theme.text)
         .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+/// A disclosure opened and closed from its title's row as well as its arrow: on the Mac a
+/// DisclosureGroup answers only its arrow, and a click on the title did nothing.
+struct LabelledDisclosure<Content: View>: View {
+    let title: String
+    @Binding var isExpanded: Bool
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $isExpanded) {
+            content
+        } label: {
+            Text(title)
+        }
+        .disclosureGroupStyle(RowDisclosureStyle())
+    }
+}
+
+/// The disclosure's row, arrow, title and the width past it, as one plain button: one control
+/// for VoiceOver, named by the title, that says whether it is open (SwiftUI has no expanded trait
+/// on the Mac, so the value does), and Space presses it. Drawn as the Mac's own disclosure is: a
+/// small tertiary chevron that turns down when open, the title beside it, 4 pt above and below
+/// the row, and the content under it, not indented (measured against DisclosureGroup's own).
+struct RowDisclosureStyle: DisclosureGroupStyle {
+    /// The chevron's column and the gap after it, as the system's disclosure lays them out.
+    static let chevronWidth: CGFloat = 7
+    static let chevronGap: CGFloat = 4.5
+
+    func makeBody(configuration: Configuration) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                withAnimation { configuration.isExpanded.toggle() }
+            } label: {
+                HStack(spacing: Self.chevronGap) {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.tertiary)
+                        .rotationEffect(.degrees(configuration.isExpanded ? 90 : 0))
+                        .frame(width: Self.chevronWidth)
+                        .accessibilityHidden(true)
+                    configuration.label
+                }
+                .padding(.vertical, 4)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityValue(configuration.isExpanded ? "Expanded" : "Collapsed")
+            if configuration.isExpanded {
+                configuration.content
+            }
+        }
     }
 }
 
