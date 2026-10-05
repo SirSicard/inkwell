@@ -35,6 +35,13 @@
             AutomationProperties.AccessibilityView="Raw"
             Backdrop="{ThemeResource InkWindowBrush}"
             IsHitTestVisible="False" />
+        <!-- A milestone's glow, over the orb wherever it has wandered and under the screens
+             (MilestoneView): a composition visual hosted here, since a XAML shape in this place was
+             drawn under the orb's swapchain. Decorative: Narrator hears the milestone's line. -->
+        <Canvas
+            x:Name="GlowLayer"
+            AutomationProperties.AccessibilityView="Raw"
+            IsHitTestVisible="False" />
         <Grid>
             <Grid.RowDefinitions>
                 <RowDefinition Height="48" />

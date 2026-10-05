@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Settings > Stats: whether milestones are celebrated, and the typing speed time saved is measured
+     against, as the Mac's StatsSettingsSection. Both live in the core's store (stats.celebrate,
+     stats.typing_wpm), read when the core is ready. -->
+<UserControl
+    x:Class="Inkwell.Screens.StatsSettingsSection"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:core="using:Inkwell.Core.Screens">
+    <StackPanel Spacing="10">
+        <TextBlock AutomationProperties.HeadingLevel="Level2" Style="{StaticResource InkHeadingStyle}" Text="Stats" />
+        <Grid ColumnSpacing="12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="150" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <TextBlock
+                Margin="0,6,0,0"
+                VerticalAlignment="Top"
+                AutomationProperties.AccessibilityView="Raw"
+                Style="{StaticResource InkBodyStyle}"
+                Text="{x:Bind core:StatsModel.CelebrateTitle}" />
+            <StackPanel Grid.Column="1" Spacing="4">
+                <ToggleSwitch
+                    x:Name="Celebrate"
+                    MinWidth="0"
+                    AutomationProperties.HelpText="{x:Bind core:StatsModel.CelebrateDetail}"
+                    AutomationProperties.Name="{x:Bind core:StatsModel.CelebrateTitle}"
+                    IsOn="{x:Bind Model.Celebrate, Mode=OneWay}"
+                    OffContent=""
+                    OnContent=""
+                    Toggled="OnCelebrateToggled" />
+                <TextBlock AutomationProperties.AccessibilityView="Raw" Style="{StaticResource InkCaptionStyle}" Text="{x:Bind core:StatsModel.CelebrateDetail}" />
+            </StackPanel>
+        </Grid>
+        <Grid ColumnSpacing="12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="150" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <TextBlock
+                Margin="0,6,0,0"
+                VerticalAlignment="Top"
+                AutomationProperties.AccessibilityView="Raw"
+                Style="{StaticResource InkBodyStyle}"
+                Text="{x:Bind core:StatsModel.TypingTitle}" />
+            <StackPanel Grid.Column="1" Spacing="4">
+                <StackPanel Orientation="Horizontal" Spacing="8">
+                    <!-- 10 to 200 in steps of 5, as the Mac's Stepper; a typed speed is taken whole. -->
+                    <NumberBox
+                        x:Name="TypingWpm"
+                        MinWidth="120"
+                        AutomationProperties.HelpText="{x:Bind core:StatsModel.TypingDetail}"
+                        AutomationProperties.Name="{x:Bind core:StatsModel.TypingTitle}"
+                        LargeChange="5"
+                        Maximum="{x:Bind core:StatsModel.MaxTypingWpm}"
+                        Minimum="{x:Bind core:StatsModel.MinTypingWpm}"
+                        SmallChange="5"
+                        SpinButtonPlacementMode="Inline"
+                        ValueChanged="OnTypingWpmChanged" />
+                    <TextBlock
+                        VerticalAlignment="Center"
+                        AutomationProperties.AccessibilityView="Raw"
+                        Style="{StaticResource InkBodyStyle}"
+                        Text="wpm" />
+                </StackPanel>
+                <TextBlock AutomationProperties.AccessibilityView="Raw" Style="{StaticResource InkCaptionStyle}" Text="{x:Bind core:StatsModel.TypingDetail}" />
+            </StackPanel>
+        </Grid>
+        <TextBlock
+            Style="{StaticResource InkAlertTextStyle}"
+            Text="{x:Bind core:StatsModel.SettingsFailedText}"
+            Visibility="{x:Bind Model.SettingsFailed, Mode=OneWay}" />
+        <Grid ColumnSpacing="12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="150" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <TextBlock FontWeight="SemiBold" Style="{StaticResource InkBodyStyle}" Text="Where" />
+            <TextBlock
+                Grid.Column="1"
+                Foreground="{ThemeResource InkSecondaryTextBrush}"
+                Style="{StaticResource InkBodyStyle}"
+                Text="{x:Bind core:StatsModel.WhereText}" />
+        </Grid>
+    </StackPanel>
+</UserControl>

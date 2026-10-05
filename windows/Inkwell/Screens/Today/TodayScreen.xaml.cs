@@ -527,6 +527,8 @@ public sealed partial class TodayScreen : UserControl
 
     private void OnOpenOwed(object sender, RoutedEventArgs e) => open(Route.Owed);
 
+    private void OnOpenStats(object sender, RoutedEventArgs e) => open(Route.Stats);
+
     // Stats
 
     private void RenderStats(LibraryCalendar calendar)
@@ -539,6 +541,9 @@ public sealed partial class TodayScreen : UserControl
             // The interface's face: mono is for timestamps and versions (App.xaml).
             Stats.Children.Add(new TextBlock { Text = line, Style = StyleOf("InkCaptionStyle"), FontSize = 11.5 });
         }
+        Stats.Children.Add(new TextBlock { Text = TodayText.StatsLink, Style = StyleOf("InkCaptionStyle"), FontSize = 11.5 });
+        // Its words without the arrow, which Narrator would read out.
+        AutomationProperties.SetName(StatsLink, lines.Count == 0 ? "Stats" : string.Join(". ", lines));
     }
 
     // Layout

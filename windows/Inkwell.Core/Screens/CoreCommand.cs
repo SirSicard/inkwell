@@ -395,6 +395,26 @@ public abstract record CoreCommand
         private protected override IEnumerable<(string, object)> Fields() => [("cmd", Name), ("id", Ref)];
     }
 
+    /// <summary>
+    /// The Stats screen's numbers (stats.counted with <paramref name="Ref"/>, or a command.failed
+    /// with it as the id), counted on the user's calendar: their zone's UTC offsets over time and
+    /// the ISO weekday their weeks start on (StatsModel.CalendarFields).
+    /// </summary>
+    public sealed record StatsGet(IReadOnlyList<UtcOffset> UtcOffsets, int WeekStart, string Ref) : CoreCommand
+    {
+        public override string Name => "stats.get";
+        private protected override IEnumerable<(string, object)> Fields() =>
+            [("cmd", Name), ("utc_offsets", UtcOffsets.Select(o => o.Fields()).ToList()), ("week_start", WeekStart), ("id", Ref)];
+    }
+
+    /// <summary>The milestones reached since the last check, each reported once ever: milestones.reached with <paramref name="Ref"/>. Takes stats.get's calendar.</summary>
+    public sealed record MilestonesCheck(IReadOnlyList<UtcOffset> UtcOffsets, int WeekStart, string Ref) : CoreCommand
+    {
+        public override string Name => "milestones.check";
+        private protected override IEnumerable<(string, object)> Fields() =>
+            [("cmd", Name), ("utc_offsets", UtcOffsets.Select(o => o.Fields()).ToList()), ("week_start", WeekStart), ("id", Ref)];
+    }
+
     /// <summary>Settings > Snippets: answered by snippets.listed with <paramref name="Ref"/>.</summary>
     public sealed record SnippetsList(string Ref) : CoreCommand
     {
@@ -486,6 +506,16 @@ public abstract record CoreCommand
 public readonly record struct RecordCursor(long StartedAtUnixMs, string Record);
 
 /// <summary>A snippet as Settings edits it.</summary>
+/// <summary>A UTC offset from the moment it took effect (stats.get's and milestones.check's utc_offsets).</summary>
+public sealed record UtcOffset(long FromUnixMs, int Minutes)
+{
+    internal SortedDictionary<string, object> Fields() => new(StringComparer.Ordinal)
+    {
+        ["from_unix_ms"] = FromUnixMs,
+        ["minutes"] = Minutes,
+    };
+}
+
 public sealed record SnippetDraft(string Id, string Trigger, string Expansion, string Category = "", bool Enabled = true)
 {
     public SnippetDraft(SnippetInfo info)
@@ -581,6 +611,10 @@ public enum ShellSetting
     AppearanceMotion,
     /// <summary>"on" (the default) or "off": local-only mode (Settings > AI's "Nothing leaves this computer").</summary>
     LlmLocalOnly,
+    /// <summary>The typing speed the Stats screen measures time saved against: a whole number of words a minute, 10 to 200 (40 unless set).</summary>
+    StatsTypingWpm,
+    /// <summary>"on" (the default) or "off": a milestone reached is celebrated.</summary>
+    StatsCelebrate,
 }
 
 public static class ShellSettings
@@ -608,6 +642,8 @@ public static class ShellSettings
         ShellSetting.AppearanceEdgeGlow => "appearance.edge_glow",
         ShellSetting.AppearanceMotion => "appearance.motion",
         ShellSetting.LlmLocalOnly => "llm.local_only",
+        ShellSetting.StatsTypingWpm => "stats.typing_wpm",
+        ShellSetting.StatsCelebrate => "stats.celebrate",
         _ => throw new ArgumentOutOfRangeException(nameof(setting)),
     };
 

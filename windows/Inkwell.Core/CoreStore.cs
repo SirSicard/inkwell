@@ -105,6 +105,15 @@ public sealed record LiveMeeting(string Record)
 /// <summary>The final pass's steps done so far: each comes once, in this order (diarizing only with several far voices).</summary>
 public readonly record struct BlotProgress(bool Transcribed, bool Diarized, bool Summarized)
 {
+    /// <summary>The sides transcribed so far, 0 to 2 (each reports once): the live icon's ring counts each as a step, as the Mac's does.</summary>
+    public int SidesTranscribed => (MicTranscribed ? 1 : 0) + (FarTranscribed ? 1 : 0);
+
+    /// <summary>Your side's final transcription is done.</summary>
+    public bool MicTranscribed { get; init; }
+
+    /// <summary>The far end's is.</summary>
+    public bool FarTranscribed { get; init; }
+
     /// <summary>The steps done, in words: "transcribed · speakers sorted · summarized"; null before the first.</summary>
     public string? Words
     {
@@ -422,7 +431,15 @@ public sealed class CoreStore : ObservableModel
                 break;
             // The final pass's progress (Today's live card shows it while the meeting blots).
             case MeetingTranscribed transcribed:
-                UpdateMeeting(transcribed.Record, m => m with { Blotted = m.Blotted with { Transcribed = true } });
+                UpdateMeeting(transcribed.Record, m => m with
+                {
+                    Blotted = m.Blotted with
+                    {
+                        Transcribed = true,
+                        MicTranscribed = m.Blotted.MicTranscribed || transcribed.Pass.Channel == Channel.Mic,
+                        FarTranscribed = m.Blotted.FarTranscribed || transcribed.Pass.Channel == Channel.Far,
+                    },
+                });
                 break;
             case MeetingDiarized diarized:
                 UpdateMeeting(diarized.Record, m => m with { Blotted = m.Blotted with { Diarized = true } });

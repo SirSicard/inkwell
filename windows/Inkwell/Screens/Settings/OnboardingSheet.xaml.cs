@@ -155,9 +155,11 @@ public sealed partial class OnboardingSheet : ContentDialog
     /// <summary>The orbs in the colours shown.</summary>
     private void ShowLook()
     {
-        WelcomeOrb.Look = theme.Look;
+        // The first run's orbs rest untinted: leaning toward the dots lightens them on the paper until
+        // the disc is gone (the Mac's OnboardingView.orbPalette).
+        WelcomeOrb.Look = theme.Look with { RestTint = 0 };
         WelcomeOrb.AlwaysStill = theme.AlwaysStill;
-        ReadyOrb.Look = theme.Look;
+        ReadyOrb.Look = theme.Look with { RestTint = 0 };
         ReadyOrb.AlwaysStill = theme.AlwaysStill;
         ReadyOrb.State = ink?.State ?? InkState.Idle;
     }

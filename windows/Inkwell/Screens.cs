@@ -14,6 +14,9 @@ internal sealed class AppScreens(CoreStore store, ScreenModels models, Router ro
     /// <summary>Whether the window is on screen (the window updates it): Up next's minute redraws only then.</summary>
     public WindowPresence Presence { get; } = new();
 
+    /// <summary>The main window's handle, which pickers it opens belong to (Stats' share card).</summary>
+    public Func<nint> WindowHandle { get; init; } = () => 0;
+
     /// <summary>The screens' models over the controller, with the app's own services.</summary>
     public static ScreenModels Models(CoreController core, DispatcherQueue ui, IUpdater? updater = null)
     {
@@ -60,6 +63,7 @@ internal sealed class AppScreens(CoreStore store, ScreenModels models, Router ro
             models.RecordControls, models.Meetings, models.Live, models.Catalogue),
         Route.Library => new LibraryScreen(models.Library, () => models.Ai.SummaryOffNote, Presence),
         Route.Owed => new OwedScreen(models.Owed, (record, ms) => OpenRecord(record, ms, play: true)),
+        Route.Stats => new StatsScreen(models.Stats, theme, Presence, WindowHandle),
         Route.Live => new LiveScreen(store, models.Live, models.Meetings, Presence, models.Catalogue),
         Route.Settings => new SettingsScreen(SettingsSections()),
         _ => throw new ArgumentOutOfRangeException(nameof(route)),
@@ -108,6 +112,7 @@ internal sealed class AppScreens(CoreStore store, ScreenModels models, Router ro
             new("Voice commands", new VoiceCommandsSection(models.VoiceCommands)),
             new("AI", new AiSection(models.Ai, models.Cloud)),
             new("Meetings", new MeetingsSection(models.Meetings)),
+            new("Stats", new StatsSettingsSection(models.Stats)),
             new("Models", new ModelsSection(models.Catalogue)),
             new("Storage", new StorageSection(models.Storage, models.Meetings)),
             new("About", new AboutSection(models.About)),

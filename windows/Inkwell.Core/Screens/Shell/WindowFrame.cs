@@ -18,4 +18,35 @@ public readonly record struct WindowFrame(int X, int Y, int Width, int Height)
         var y = Math.Clamp(Y, workArea.Y, workArea.Y + workArea.Height - height);
         return new WindowFrame(x, y, width, height);
     }
+
+    /// <summary>How many points across and down CoveredBy samples.</summary>
+    private const int CoverSamples = 7;
+
+    /// <summary>
+    /// Whether <paramref name="above"/> (the windows over this one) hide all of it: every one of a
+    /// grid of points across it, edges included, lies inside one of them. A grid, not exact
+    /// geometry: a sliver left showing between two windows may count as covered, which is all the
+    /// orb's wander needs (WindowCover).
+    /// </summary>
+    public bool CoveredBy(IReadOnlyList<WindowFrame> above)
+    {
+        ArgumentNullException.ThrowIfNull(above);
+        if (Width <= 0 || Height <= 0 || above.Count == 0)
+        {
+            return false;
+        }
+        for (var i = 0; i < CoverSamples; i++)
+        {
+            for (var j = 0; j < CoverSamples; j++)
+            {
+                var px = X + (Width - 1) * i / (CoverSamples - 1);
+                var py = Y + (Height - 1) * j / (CoverSamples - 1);
+                if (!above.Any(a => px >= a.X && px < a.X + a.Width && py >= a.Y && py < a.Y + a.Height))
+                {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
 }

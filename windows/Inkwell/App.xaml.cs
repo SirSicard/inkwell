@@ -6,9 +6,9 @@
 // tray icon's state dot follow the appearance settings. Before any of it, Microsoft's terms
 // (TermsStep, TermsWindow): until they are agreed to, nothing else is made, shown or started.
 //
-// The tray icon shows the state (idle, dictating in your colour, recording in theirs, a problem
-// in the alert colour: TrayGlyph draws the dot) and its menu is made when it opens (TrayMenu): a
-// left click opens the window. The automatic update check, when on, runs once here at launch.
+// The tray icon and the window's taskbar button show the state (LiveIconHost: dictating in your
+// colour, recording in theirs and breathing, the final pass's progress, a problem in the alert
+// colour) and the tray's menu is made when it opens (TrayMenu): a left click opens the window. The automatic update check, when on, runs once here at launch.
 //
 // From the start, the screens' log and the core's log lines go to the local log in the library's
 // folder (LocalLog, "logs"), and an exception that ends the app leaves a crash note there.
@@ -31,14 +31,15 @@ public partial class App : Application
     private TermsWindow? terms;
     private MainWindow? window;
     private TrayIcon? tray;
+    /// <summary>Held for the app's life: its hook follows what covers the window.</summary>
+    private WindowCover? windowCover;
     private CoreController? core;
     private ScreenModels? screens;
     private ShellInk? ink;
     private GlowTheme? theme;
     private DropModel? dropModel;
-    /// <summary>The tray icon's state icons, made for the colours shown (TrayGlyph), by state.</summary>
-    private readonly Dictionary<TrayState, nint> trayIcons = [];
-    private TrayState? trayShown;
+    /// <summary>The tray icon's and the taskbar button's live state (made with the tray icon).</summary>
+    private LiveIconHost? liveIcon;
     /// <summary>What stops the Drop working now, or null: kept for the tray icon made after it.</summary>
     private string? inkProblem;
     private bool quitting;
@@ -167,7 +168,6 @@ public partial class App : Application
         glow.Changed += () =>
         {
             shownInk.SetLook(glow.Look, glow.DropLook, glow.AlwaysStill);
-            ColoursChanged();
         };
         shownInk.SetLook(glow.Look, glow.DropLook, glow.AlwaysStill);
         // What the Drop says, after the store has taken each batch.
@@ -179,7 +179,6 @@ public partial class App : Application
         drop.Changed += () =>
         {
             shellInk.Show(drop.Line, drop.Ink);
-            ShowTrayState();
         };
         var store = core.Store;
         var applying = false;
@@ -206,16 +205,27 @@ public partial class App : Application
             }
             drop.Apply(store, batch);
         };
-        var made = new AppScreens(core.Store, models, router, glow, shownInk);
+        var shownWindow = window;
+        var made = new AppScreens(core.Store, models, router, glow, shownInk)
+        {
+            WindowHandle = () => (nint)Microsoft.UI.Win32Interop.GetWindowFromWindowId(shownWindow.AppWindow.Id),
+        };
         window.Attach(core.Store, router, made.Screen, made.Search, models.Meetings, models.Owed);
         made.AttachFirstRun(window.Content as FrameworkElement);
-        // Up next's minute redraws only while the window is on screen (rule 9).
-        window.VisibilityChanged += (_, e) => made.Presence.Update(e.Visible, Minimized(window), occlusionVisible: true);
+        window.ShowMilestones(models.Stats, made.Presence);
+        // Up next's minute redraws only while the window is on screen (rule 9): shown, not
+        // minimised, and not hidden behind other windows (WindowCover).
+        var cover = new WindowCover((nint)Microsoft.UI.Win32Interop.GetWindowFromWindowId(window.AppWindow.Id));
+        windowCover = cover;
+        cover.Changed += covered => made.Presence.Update(window.AppWindow.IsVisible, Minimized(window), occlusionVisible: !covered);
+        // Uncovered, the orb at rest goes to a new spot, as on coming on screen.
+        cover.Uncovered += window.WindowUncovered;
+        window.VisibilityChanged += (_, e) => made.Presence.Update(e.Visible, Minimized(window), occlusionVisible: !cover.Covered);
         window.AppWindow.Changed += (sender, e) =>
         {
             if (e.DidPresenterChange || e.DidVisibilityChange)
             {
-                made.Presence.Update(sender.IsVisible, Minimized(window), occlusionVisible: true);
+                made.Presence.Update(sender.IsVisible, Minimized(window), occlusionVisible: !cover.Covered);
                 // A shortcut being recorded is the window's: hidden or minimised, it is cancelled.
                 if (!sender.IsVisible || Minimized(window))
                 {
@@ -223,6 +233,10 @@ public partial class App : Application
                 }
             }
             window.FrameChanged();
+            if (e.DidPositionChange || e.DidSizeChange)
+            {
+                window.PlaceChanged();
+            }
         };
         // Coming back to the app re-checks what may have changed outside it (permissions, the keys).
         window.Activated += (_, e) =>
@@ -230,6 +244,8 @@ public partial class App : Application
             if (e.WindowActivationState != WindowActivationState.Deactivated)
             {
                 models.AppBecameActive();
+                window.WindowActivated();
+                liveIcon?.AppActive();
             }
             else
             {
@@ -241,13 +257,25 @@ public partial class App : Application
         tray = new TrayIcon(1, IconPath, "Inkwell");
         tray.Selected += (_, _) => ShowWindow();
         tray.ContextMenu += (_, e) => e.Flyout = TrayMenuFlyout();
-        tray.Tooltip = TrayTooltip(inkProblem);
         tray.IsVisible = true;
-        ShowTrayState();
+        liveIcon = new LiveIconHost(
+            (nint)Win32Interop.GetWindowFromWindowId(window.AppWindow.Id), drop, store, glow, tray, IconPath, window.DispatcherQueue,
+            start =>
+            {
+                if (start)
+                {
+                    models.Meetings.RecordNow();
+                }
+                else
+                {
+                    models.Meetings.Stop();
+                }
+            });
+        liveIcon.InkProblem(inkProblem);
         window.Activate();
         window.FitToWorkArea();
         // On screen from the start: the window's own change events may not come for the first show.
-        made.Presence.Update(window.AppWindow.IsVisible, Minimized(window), occlusionVisible: true);
+        made.Presence.Update(window.AppWindow.IsVisible, Minimized(window), occlusionVisible: !cover.Covered);
         core.Start();
         // Once, at launch, when the user turned the automatic check on (never on a timer).
         _ = models.Updates.CheckAtLaunch();
@@ -337,65 +365,6 @@ public partial class App : Application
         router.Open(Route.Settings);
     }
 
-    /// <summary>The tray icon for the Drop's state now: its dot in the colours shown.</summary>
-    private void ShowTrayState()
-    {
-        if (tray is null || dropModel is null)
-        {
-            return;
-        }
-        var state = TrayMenu.State(dropModel.Ink);
-        if (state == trayShown)
-        {
-            return;
-        }
-        if (!trayIcons.TryGetValue(state, out var icon))
-        {
-            try
-            {
-                icon = TrayGlyph.Make(IconPath, DotColour(state));
-            }
-            catch (InkRendererException e)
-            {
-                // The icon keeps the state it showed; the tooltip and the Drop still say it.
-                InkLog.Write(e.Message);
-                return;
-            }
-            trayIcons[state] = icon;
-        }
-        tray.SetIcon(Win32Interop.GetIconIdFromIcon(icon));
-        trayShown = state;
-    }
-
-    /// <summary>The colours changed: the icons are drawn again; the old ones go once the new one shows (the shell keeps its own copy).</summary>
-    private void ColoursChanged()
-    {
-        var old = trayIcons.Values.ToList();
-        trayIcons.Clear();
-        trayShown = null;
-        ShowTrayState();
-        foreach (var icon in old)
-        {
-            TrayGlyph.Destroy(icon);
-        }
-    }
-
-    /// <summary>A state's dot: your colour, theirs, or the alert colour; none at rest.</summary>
-    private (float R, float G, float B)? DotColour(TrayState state)
-    {
-        if (theme is null)
-        {
-            return null;
-        }
-        return state switch
-        {
-            TrayState.Dictating => theme.Look.YouA,
-            TrayState.Recording => theme.Look.ThemA,
-            TrayState.Problem => theme.DropLook.Alert,
-            _ => null,
-        };
-    }
-
     /// <summary>
     /// UI thread. The Drop's problem, where it stays seen: the window's status line, and the tray
     /// icon's tooltip, which is there while the window is hidden.
@@ -404,18 +373,18 @@ public partial class App : Application
     {
         inkProblem = problem;
         window?.ShowInkFailure(problem);
-        if (tray is not null)
-        {
-            tray.Tooltip = TrayTooltip(problem);
-        }
+        liveIcon?.InkProblem(problem);
     }
 
-    /// <summary>The tray icon's tooltip: "Inkwell", or what stops the Drop (Windows keeps 128 characters).</summary>
-    internal static string TrayTooltip(string? problem)
+    /// <summary>
+    /// The tray icon's tooltip, which Narrator reads: the state (LiveIcon.Spoken), or what stops the
+    /// Drop (Windows keeps 128 characters).
+    /// </summary>
+    internal static string TrayTooltip(string? problem, DropInk state)
     {
         if (problem is null)
         {
-            return "Inkwell";
+            return LiveIcon.Spoken(state);
         }
         var text = $"Inkwell. The Drop: {problem}";
         return text.Length <= 127 ? text : string.Concat(text.AsSpan(0, 126), "\u2026");
@@ -450,13 +419,12 @@ public partial class App : Application
         {
             ink?.Dispose();
             ink = null;
+            liveIcon?.Dispose();
+            liveIcon = null;
+            windowCover?.Dispose();
+            windowCover = null;
             tray?.Dispose();
             tray = null;
-            foreach (var (_, icon) in trayIcons)
-            {
-                TrayGlyph.Destroy(icon);
-            }
-            trayIcons.Clear();
             window.Close();
             Exit();
         });

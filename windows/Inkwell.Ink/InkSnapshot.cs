@@ -46,11 +46,13 @@ public static unsafe class InkSnapshot
     /// Draws <paramref name="state"/> at time <paramref name="t"/> into a canvas of the given
     /// pixels, with <paramref name="look"/>'s colours (default: day, Indigo &amp; Coral) and the orb
     /// at <paramref name="placement"/> (default: the centre), over <paramref name="backdrop"/> as
-    /// a SwapChainPanel draws it (default: transparent, as the Drop does). UI thread (or any one
+    /// a SwapChainPanel draws it (default: transparent, as the Drop does), the final pass blotting
+    /// as far as <paramref name="blotDepth"/> (the Drop's 1 unless given). UI thread (or any one
     /// thread that owns the pipeline).
     /// </summary>
     public static InkImage Render(InkPipeline pipeline, InkState state, double t, int width, int height,
-        InkVoice? voice = null, GlowLook? look = null, InkPlacement? placement = null, (float R, float G, float B)? backdrop = null)
+        InkVoice? voice = null, GlowLook? look = null, InkPlacement? placement = null, (float R, float G, float B)? backdrop = null,
+        double blotDepth = 1)
     {
         ArgumentNullException.ThrowIfNull(pipeline);
         if (width < 2 || height < 2)
@@ -62,6 +64,7 @@ public static unsafe class InkSnapshot
             State = state,
             CanvasWidth = width,
             CanvasHeight = height,
+            BlotDepth = blotDepth,
         };
         simulation.ApplyFixed(t, voice ?? InkVoice.Synthetic);
         var uniforms = simulation.Uniforms(placement ?? InkPlacement.Centre, look ?? GlowLook.Default, moving: true);

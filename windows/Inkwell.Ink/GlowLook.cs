@@ -1,7 +1,9 @@
 // The colours the ink and the Drop paint with, as the shell resolves them from the appearance
 // settings and the mode's tokens (Inkwell.Core's Glow): the orb's two shades of each voice, the
 // idle orb and the blotted ink; and the Drop's pill, which follows the mode. Each channel 0..1.
-// Until the shell gives its own, the day mode's defaults (Indigo & Coral).
+// Until the shell gives its own, the day mode's defaults (Indigo & Coral). At rest the orb leans
+// from idle toward the dots by RestTint (0..1): its first shade toward yours, its second toward
+// theirs; 0 rests in idle alone (the Mac's OrbPalette.restTint).
 namespace Inkwell.Ink;
 
 /// <summary>The orb's colours.</summary>
@@ -12,8 +14,16 @@ public sealed record GlowLook(
     (float R, float G, float B) ThemA,
     (float R, float G, float B) ThemB,
     (float R, float G, float B) Idle,
-    (float R, float G, float B) Ink)
+    (float R, float G, float B) Ink,
+    float RestTint = 0)
 {
+    /// <summary>
+    /// How far the orb at rest leans toward the dots, so each preset clearly shows at rest: the
+    /// Mac's GlowColours.restTint, chosen with the main window's 0.7 behind text so that text keeps
+    /// 4.5:1 and secondary text 3:1 over it with every preset in both modes.
+    /// </summary>
+    public const float ShellRestTint = 0.6f;
+
     /// <summary>Day, Indigo &amp; Coral.</summary>
     public static GlowLook Default { get; } = new(
         false,
