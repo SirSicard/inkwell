@@ -9,13 +9,18 @@
     <UserControl.Resources>
         <!-- Each row: its label, then its control with the caption under it, at the 150 the other
              sections' labels take. A label beside a control that carries its own name is not read
-             twice (Raw); Dots and the colours keep their Level 3 headings. -->
+             twice (Raw); Dots and the colours keep their Level 3 headings, in the eyebrow's type. -->
         <Style x:Key="RowLabelStyle" TargetType="TextBlock" BasedOn="{StaticResource InkBodyStyle}">
             <Setter Property="Margin" Value="0,6,0,0" />
             <Setter Property="VerticalAlignment" Value="Top" />
         </Style>
+        <Style x:Key="RowEyebrowStyle" TargetType="TextBlock" BasedOn="{StaticResource InkEyebrowStyle}">
+            <Setter Property="Margin" Value="0,6,0,0" />
+            <Setter Property="VerticalAlignment" Value="Top" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
     </UserControl.Resources>
-    <StackPanel Spacing="14">
+    <StackPanel Spacing="10">
         <TextBlock AutomationProperties.HeadingLevel="Level2" Style="{StaticResource InkHeadingStyle}" Text="Appearance" />
 
         <Grid ColumnSpacing="12">
@@ -41,7 +46,7 @@
                 <ColumnDefinition Width="150" />
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
-            <TextBlock AutomationProperties.HeadingLevel="Level3" Style="{StaticResource RowLabelStyle}" Text="Dots" />
+            <TextBlock AutomationProperties.HeadingLevel="Level3" Style="{StaticResource RowEyebrowStyle}" Text="Dots" />
             <StackPanel Grid.Column="1" MaxWidth="560" HorizontalAlignment="Left" Spacing="6">
                 <Grid x:Name="Presets" ColumnSpacing="8" RowSpacing="8">
                     <Grid.ColumnDefinitions>
@@ -58,7 +63,7 @@
                 <ColumnDefinition Width="150" />
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
-            <TextBlock x:Name="ColoursHeading" AutomationProperties.HeadingLevel="Level3" Style="{StaticResource RowLabelStyle}" />
+            <TextBlock x:Name="ColoursHeading" AutomationProperties.HeadingLevel="Level3" Style="{StaticResource RowEyebrowStyle}" />
             <StackPanel Grid.Column="1" MaxWidth="560" HorizontalAlignment="Left" Spacing="6">
                 <StackPanel x:Name="ColourRows" Spacing="8" />
                 <TextBlock
@@ -76,6 +81,7 @@
             <StackPanel Grid.Column="1" Spacing="4">
                 <ToggleSwitch
                     x:Name="EdgeSwitch"
+                    MinWidth="0"
                     AutomationProperties.Name="Glow the window's edge"
                     OffContent=""
                     OnContent=""

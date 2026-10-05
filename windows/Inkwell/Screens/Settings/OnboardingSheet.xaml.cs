@@ -93,10 +93,10 @@ public sealed partial class OnboardingSheet : ContentDialog
         this.import02 = import02;
         this.log = log;
         InitializeComponent();
-        CardsHost.Content = new PermissionCardsView(permissions);
+        CardsHost.Content = new PermissionCardsView(permissions, inSettings: false);
         ImportTitle.Text = Import02Model.StepTitle;
         ImportCardHost.Content = new Import02Card(import02, inSettings: false);
-        ImportNoteHost.Content = new ImportKeyNoteView(importNote, KeyName);
+        ImportNoteHost.Content = new ImportKeyNoteView(importNote, KeyName, inSettings: false);
         PermissionsTitle.Text = OnboardingModel.PermissionsTitle;
         PermissionsNote.Text = OnboardingModel.PermissionsNote;
         ModelsTitle.Text = OnboardingModel.ModelsTitle;

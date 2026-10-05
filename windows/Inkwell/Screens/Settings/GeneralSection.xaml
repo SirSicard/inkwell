@@ -26,6 +26,7 @@
             <StackPanel Grid.Column="1" Spacing="4">
                 <ToggleSwitch
                     x:Name="StartupSwitch"
+                    MinWidth="0"
                     OffContent=""
                     OnContent=""
                     Toggled="OnStartupToggled" />
@@ -59,21 +60,30 @@
             <StackPanel Grid.Column="1" Spacing="4">
                 <ToggleSwitch
                     x:Name="AutoCheckSwitch"
+                    MinWidth="0"
                     OffContent=""
                     OnContent=""
                     Toggled="OnAutoCheckToggled" />
                 <TextBlock x:Name="AutoCheckCaption" Style="{StaticResource InkCaptionStyle}" />
                 <TextBlock x:Name="AutoCheckFailure" Style="{StaticResource InkAlertTextStyle}" />
-                <!-- The line is a live region: Narrator reads each change. -->
-                <StackPanel Margin="0,4,0,0" Orientation="Horizontal" Spacing="12">
-                    <Button x:Name="UpdatesButton" Click="OnUpdatesAct" />
+                <!-- The line is a live region: Narrator reads each change. It wraps in what the button
+                     leaves (a Grid, not a horizontal panel, which would never wrap it); the button's
+                     margin, not column spacing, so a hidden button leaves no gap. The row collapses
+                     when both are hidden (Render). -->
+                <Grid x:Name="UpdatesRow" Margin="0,4,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Button x:Name="UpdatesButton" Margin="0,0,12,0" Click="OnUpdatesAct" />
                     <TextBlock
                         x:Name="UpdatesLine"
+                        Grid.Column="1"
                         VerticalAlignment="Center"
                         AutomationProperties.LiveSetting="Polite"
                         Style="{StaticResource InkCaptionStyle}"
                         TextWrapping="Wrap" />
-                </StackPanel>
+                </Grid>
             </StackPanel>
         </Grid>
 

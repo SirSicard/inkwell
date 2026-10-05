@@ -41,8 +41,15 @@
                                     </DataTemplate>
                                 </ItemsRepeater.ItemTemplate>
                             </ItemsRepeater>
-                            <StackPanel Orientation="Horizontal" Spacing="6">
-                                <ItemsRepeater ItemsSource="{x:Bind Apps}" Visibility="{x:Bind HasApps}">
+                            <!-- The tiles, then their names wrapping in what is left of the card (a Grid:
+                                 a horizontal panel would never wrap them). The tiles' margin, not column
+                                 spacing, so no apps leaves no gap. -->
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <ItemsRepeater Margin="0,0,6,0" ItemsSource="{x:Bind Apps}" Visibility="{x:Bind HasApps}">
                                     <ItemsRepeater.Layout>
                                         <StackLayout Orientation="Horizontal" Spacing="6" />
                                     </ItemsRepeater.Layout>
@@ -52,8 +59,8 @@
                                         </DataTemplate>
                                     </ItemsRepeater.ItemTemplate>
                                 </ItemsRepeater>
-                                <TextBlock VerticalAlignment="Center" MaxLines="2" Style="{StaticResource InkCaptionStyle}" Text="{x:Bind AppsText}" />
-                            </StackPanel>
+                                <TextBlock Grid.Column="1" VerticalAlignment="Center" MaxLines="2" Style="{StaticResource InkCaptionStyle}" Text="{x:Bind AppsText}" />
+                            </Grid>
                         </StackPanel>
                     </Grid>
                 </DataTemplate>

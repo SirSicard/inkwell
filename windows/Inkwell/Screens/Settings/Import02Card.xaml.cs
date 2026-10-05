@@ -12,8 +12,9 @@ public sealed partial class Import02Card : UserControl
     private readonly Import02Model model;
     private readonly bool inSettings;
 
-    /// <param name="inSettings">Settings > Voice: a card, shown only while there is something to say.
-    /// Otherwise the first run's step, which shows only then.</param>
+    /// <param name="inSettings">Settings > General: a card inside the section's card (flat,
+    /// InkInsetCardStyle), shown only while there is something to say. Otherwise the first run's
+    /// step, which shows only then.</param>
     public Import02Card(Import02Model import02, bool inSettings)
     {
         model = import02 ?? throw new ArgumentNullException(nameof(import02));
@@ -23,8 +24,7 @@ public sealed partial class Import02Card : UserControl
         AutomationProperties.SetHelpText(ImportButton, Import02Model.ImportHint);
         if (inSettings)
         {
-            Frame.Style = (Style)Application.Current.Resources["InkCardStyle"];
-            Frame.Padding = new Thickness(12);
+            Frame.Style = (Style)Application.Current.Resources["InkInsetCardStyle"];
         }
         Loaded += (_, _) =>
         {

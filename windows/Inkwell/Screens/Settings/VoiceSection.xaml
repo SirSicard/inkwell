@@ -5,7 +5,8 @@
 <UserControl
     x:Class="Inkwell.Screens.VoiceSection"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:Inkwell.Screens">
     <UserControl.Resources>
         <!-- Each row: its label, then its controls with the caption under them (as Meetings and AI). -->
         <Style x:Key="RowLabelStyle" TargetType="TextBlock" BasedOn="{StaticResource InkBodyStyle}">
@@ -33,6 +34,7 @@
             <StackPanel Grid.Column="1" Spacing="4">
                 <ToggleSwitch
                     x:Name="DictationSwitch"
+                    MinWidth="0"
                     AutomationProperties.Name="Dictation"
                     OffContent=""
                     OnContent=""
@@ -41,8 +43,9 @@
             </StackPanel>
         </Grid>
 
-        <!-- A key's row: the key, Record, the key as a cap, and how it is used beside it; what the
-             key's check said under them. -->
+        <!-- A key's row: the key, Record and the key as a cap, wrapping between them where the card
+             is narrow; how the key is used, then what its check said, under them. The cap sits in a
+             row-high cell so it centres on the controls' line. -->
         <Grid ColumnSpacing="12">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="150" />
@@ -50,15 +53,17 @@
             </Grid.ColumnDefinitions>
             <TextBlock Style="{StaticResource RowLabelStyle}" Text="Dictate" />
             <StackPanel Grid.Column="1" Spacing="4">
-                <StackPanel Orientation="Horizontal" Spacing="12">
+                <local:WrapPanel RowSpacing="8" Spacing="12">
                     <ComboBox x:Name="KeyBox" MinWidth="170" AutomationProperties.Name="Dictate" SelectionChanged="OnKeyChosen" />
                     <!-- Any key: the next press, checked by the core (ShortcutRecorderModel). -->
                     <Button x:Name="RecordKeyButton" Click="OnRecordKey" />
-                    <Border AutomationProperties.AccessibilityView="Raw" Style="{StaticResource KeyCapStyle}">
-                        <TextBlock x:Name="KeyCap" FontFamily="{StaticResource InkMonoFontFamily}" FontSize="12" Foreground="{ThemeResource InkTextBrush}" />
-                    </Border>
-                    <TextBlock VerticalAlignment="Center" Style="{StaticResource InkCaptionStyle}" Text="hold, speak, let go" />
-                </StackPanel>
+                    <Grid Height="32">
+                        <Border AutomationProperties.AccessibilityView="Raw" Style="{StaticResource KeyCapStyle}">
+                            <TextBlock x:Name="KeyCap" FontFamily="{StaticResource InkMonoFontFamily}" FontSize="12" Foreground="{ThemeResource InkTextBrush}" />
+                        </Border>
+                    </Grid>
+                </local:WrapPanel>
+                <TextBlock Style="{StaticResource InkCaptionStyle}" Text="hold, speak, let go" />
                 <TextBlock x:Name="KeyMessage" TextWrapping="Wrap" Style="{StaticResource InkCaptionStyle}" />
             </StackPanel>
         </Grid>
@@ -70,14 +75,16 @@
             </Grid.ColumnDefinitions>
             <TextBlock Style="{StaticResource RowLabelStyle}" Text="Edit a selection" />
             <StackPanel Grid.Column="1" Spacing="4">
-                <StackPanel Orientation="Horizontal" Spacing="12">
+                <local:WrapPanel RowSpacing="8" Spacing="12">
                     <ComboBox x:Name="EditKeyBox" MinWidth="170" AutomationProperties.Name="Edit a selection" SelectionChanged="OnEditKeyChosen" />
                     <Button x:Name="RecordEditButton" Click="OnRecordEdit" />
-                    <Border x:Name="EditKeyCapBorder" AutomationProperties.AccessibilityView="Raw" Style="{StaticResource KeyCapStyle}">
-                        <TextBlock x:Name="EditKeyCap" FontFamily="{StaticResource InkMonoFontFamily}" FontSize="12" Foreground="{ThemeResource InkTextBrush}" />
-                    </Border>
-                    <TextBlock VerticalAlignment="Center" Style="{StaticResource InkCaptionStyle}" Text="select text, hold, say what to change" />
-                </StackPanel>
+                    <Grid Height="32">
+                        <Border x:Name="EditKeyCapBorder" AutomationProperties.AccessibilityView="Raw" Style="{StaticResource KeyCapStyle}">
+                            <TextBlock x:Name="EditKeyCap" FontFamily="{StaticResource InkMonoFontFamily}" FontSize="12" Foreground="{ThemeResource InkTextBrush}" />
+                        </Border>
+                    </Grid>
+                </local:WrapPanel>
+                <TextBlock Style="{StaticResource InkCaptionStyle}" Text="select text, hold, say what to change" />
                 <TextBlock x:Name="EditMessage" TextWrapping="Wrap" Style="{StaticResource InkCaptionStyle}" />
             </StackPanel>
         </Grid>
