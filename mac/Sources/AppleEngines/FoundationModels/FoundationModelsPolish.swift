@@ -185,7 +185,25 @@ public final class FoundationModelsPolish: InkLanguageModel {
 
     /// The on-device model: a fresh session per request (polish keeps no history), with the
     /// request's system prompt as its instructions, or the one a prewarm prepared for them.
+    ///
+    /// **Guardrails.** A plain-text request runs under `.permissiveContentTransformations`,
+    /// Apple's guardrails for transforming text the user provides: under the default ones a
+    /// dictation with sensitive content can throw a guardrail violation (code 11), and the take
+    /// goes out unpolished. Plain text is polish, and also voice edit and Ask: the request names
+    /// no task, so the three cannot be told apart here, and each hands the model the user's own
+    /// words to work on (the dictation, the selection, the meeting's transcript). The SDK says the
+    /// model may still refuse in that mode, answering with a refusal as text: the core's polish
+    /// task checks its answer before it is typed; voice edit's and Ask's answers are not checked
+    /// that way. Requests generated to a schema (a summary, commitments) keep the default
+    /// guardrails: the permissive mode covers only `String` answers and behaves as the default for
+    /// the rest. The registered model name stays `SystemLanguageModel.default`: the model is the
+    /// same, and the consent names it.
     public final class SystemModel: PolishBackend {
+        /// The guardrails `request` runs under.
+        static func guardrail(for request: InkLlmRequest) -> Guardrail {
+            request.jsonSchema == nil ? .permissiveContentTransformations : .standard
+        }
+
         #if canImport(FoundationModels)
             /// The session a prewarm prepared, with its instructions; used once.
             private let prepared = Mutex<(instructions: String?, session: LanguageModelSession)?>(nil)
@@ -195,7 +213,9 @@ public final class FoundationModelsPolish: InkLanguageModel {
 
         public func prewarm(instructions: String?) {
             #if canImport(FoundationModels)
-                let session = LanguageModelSession(model: .default, instructions: instructions)
+                // Prepared for the next polish, a plain-text request.
+                let session = LanguageModelSession(
+                    model: Guardrail.permissiveContentTransformations.model, instructions: instructions)
                 // Returns at once; the model loads in the background.
                 session.prewarm()
                 prepared.withLock { $0 = (instructions, session) }
@@ -204,7 +224,8 @@ public final class FoundationModelsPolish: InkLanguageModel {
 
         public func respond(_ request: InkLlmRequest, schema: SchemaNode) async throws -> String {
             #if canImport(FoundationModels)
-                let session = LanguageModelSession(model: .default, instructions: request.system)
+                let session = LanguageModelSession(
+                    model: Self.guardrail(for: request).model, instructions: request.system)
                 let options = GenerationOptions(
                     temperature: request.temperature, maximumResponseTokens: request.maxTokens)
                 let generation = try schema.generationSchema()
@@ -220,7 +241,7 @@ public final class FoundationModelsPolish: InkLanguageModel {
                 let session = prepared.withLock { p -> LanguageModelSession? in
                     defer { p = nil }
                     return p?.instructions == request.system ? p?.session : nil
-                } ?? LanguageModelSession(model: .default, instructions: request.system)
+                } ?? LanguageModelSession(model: Self.guardrail(for: request).model, instructions: request.system)
                 let options = GenerationOptions(
                     temperature: request.temperature, maximumResponseTokens: request.maxTokens)
                 return try await session.respond(to: request.user, options: options).content
@@ -228,6 +249,29 @@ public final class FoundationModelsPolish: InkLanguageModel {
                 throw InkEngineError.unavailable(code: AppleIntelligence.Reason.unsupported.rawValue)
             #endif
         }
+    }
+
+    /// Which of the SDK's guardrails a session runs under, named here because the SDK's
+    /// `Guardrails` cannot be compared: a test reads the choice.
+    enum Guardrail: Equatable {
+        /// `SystemLanguageModel.Guardrails.default`.
+        case standard
+        /// `SystemLanguageModel.Guardrails.permissiveContentTransformations`.
+        case permissiveContentTransformations
+
+        #if canImport(FoundationModels)
+            /// One instance, so a prewarmed session and the one a polish makes without it are on
+            /// the same model.
+            private static let permissive = SystemLanguageModel(guardrails: .permissiveContentTransformations)
+
+            /// The on-device model under these guardrails.
+            var model: SystemLanguageModel {
+                switch self {
+                case .standard: .default
+                case .permissiveContentTransformations: Self.permissive
+                }
+            }
+        #endif
     }
 
     /// A backend answering with a closure, with nothing to prewarm.
