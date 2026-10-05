@@ -79,8 +79,9 @@ public sealed unsafe partial class WindowHook : IDisposable
             }
             catch (Exception e)
             {
-                // Never into the window's procedure: named, and the message goes on.
-                InkLog.Write($"the window's message hook failed: {e.GetType().Name}: {e.Message}");
+                // Never into the window's procedure: named by its type (never its message, which
+                // the log must not hold), and the message goes on.
+                InkLog.Write($"the window's message hook failed: {e.GetType().Name}");
             }
         }
         return DefSubclassProc(hwnd, message, wParam, lParam);

@@ -152,7 +152,8 @@ internal sealed class LiveIconHost : IDisposable
     {
         if (logged.Add($"{what}:{e.GetType().Name}"))
         {
-            InkLog.Write($"the live icon couldn't {what}: {e.GetType().Name}: {e.Message}");
+            // By its type only: an exception's message never reaches the log.
+            InkLog.Write($"the live icon couldn't {what}: {e.GetType().Name}");
         }
     }
 
