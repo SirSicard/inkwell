@@ -80,11 +80,22 @@ pub fn polish(
 }
 
 /// The answer without the tags a model echoed from the request: one opening tag at its start and
-/// one closing tag at its end, each on its own. Tags anywhere else are left for [`check`].
+/// one closing tag at its end, in any case. Tags anywhere else are left for [`check`].
 fn strip_tags(answer: &str) -> &str {
     let mut out = answer.trim();
-    out = out.strip_prefix(OPEN).unwrap_or(out).trim_start();
-    out = out.strip_suffix(CLOSE).unwrap_or(out).trim_end();
+    if out
+        .get(..OPEN.len())
+        .is_some_and(|t| t.eq_ignore_ascii_case(OPEN))
+    {
+        out = out[OPEN.len()..].trim_start();
+    }
+    let end = out.len().saturating_sub(CLOSE.len());
+    if out
+        .get(end..)
+        .is_some_and(|t| t.eq_ignore_ascii_case(CLOSE))
+    {
+        out = out[..end].trim_end();
+    }
     out
 }
 
@@ -92,39 +103,40 @@ fn strip_tags(answer: &str) -> &str {
 ///
 /// **Under the default prompt** the answer must be a cleanup: what polish legitimately does is
 /// drop words (fillers, false starts, repeats), fix punctuation and capitalisation (invisible
-/// here: only words are compared), write numbers as digits, and correct a misheard word or name
-/// (usually spelt like what was heard: "Smyth" for "Smith", which [`alike`] matches). It almost
-/// never adds a word. So, with `kept` the words of the answer that line up in order with words
-/// said ([`kept`]):
+/// here: only words are compared), write out or contract a word ([`words`] treats "we're" and
+/// "we are" alike), write numbers as digits, and correct a misheard word or name (usually spelt
+/// like what was heard: "Smyth" for "Smith", which [`alike`] matches). It almost never adds a
+/// word. So, leaving out words with digits ("twenty five" written "25" is neither new nor kept,
+/// and "555" said and kept counts once), and with `kept` the answer's words that line up in
+/// order with words said ([`kept`]):
 ///
 /// - at most a fifth of the answer's words (and always one) may be new: an answer or a refusal
 ///   is mostly words nobody said ("The capital of France is Paris." to "what's the capital of
 ///   France": "is" and "Paris" in six);
 /// - at least a quarter of what was said must be kept: an answer that drops the question
-///   ("Paris.") keeps nothing of it, while the most filler-heavy take keeps its content. Below
-///   four words nothing need be kept, so "okay" may become "OK"; an answer of one word to a
-///   question of three gets through, the one gap here;
+///   ("Paris.", "1989") keeps nothing of it. Below four words nothing need be kept, so "okay"
+///   may become "OK"; so an answer of one word to a question of three gets through;
 /// - the answer may not be longer than what was said by more than a quarter (and three words):
 ///   cleanup shortens, and an answer that repeats the question and then answers it is longer.
 ///
-/// Digits count as neither new nor kept ("twenty five" written "25").
+/// What this refuses wrongly is a grammar fix that changes several words of a short dictation
+/// ("me and him is going" to "he and I are going"): that take goes in as said, with the warning.
 ///
 /// **Under a custom prompt** none of that holds. 1.0 offers no prompt of its own beside the
 /// default, but it imports 0.2's modes, and 0.2 let the user write any polish prompt per mode:
 /// a translation, a formal email or a summary shares few words with what was said, and the
 /// transforms the research notes list (translate, summarise, change the tone) would too. There,
 /// only an answer that talks about itself or the request is refused ([`talks_about_itself`]),
-/// plus one far longer than any rewrite of the dictation (four times its words and forty more).
+/// which knows English only, plus one far longer than a rewrite of the dictation could be (ten
+/// times its words and 150 more: a formal email from five words is about a hundred).
 ///
 /// Errors name the rule, never the text (transcripts never reach logs or errors).
 fn check(said: &str, answer: &str, default: bool) -> Result<(), LlmError> {
     let said_words = words(said);
     let answer_words = words(answer);
-    if said_words.is_empty() {
-        // Nothing to compare with (a take of only punctuation): there is nothing to lose either.
-        return Ok(());
-    }
-    if answer.contains(OPEN) || answer.contains(CLOSE) || talks_about_itself(&said_words, answer) {
+    let lower = answer.to_lowercase();
+    let tagged = |tag: &str| lower.contains(tag) && !said.to_lowercase().contains(tag);
+    if tagged(OPEN) || tagged(CLOSE) || talks_about_itself(&said_words, answer, &answer_words) {
         return Err(bad(
             "polish",
             "the answer spoke about itself or the request",
@@ -132,7 +144,7 @@ fn check(said: &str, answer: &str, default: bool) -> Result<(), LlmError> {
     }
     let (n_said, n_answer) = (said_words.len(), answer_words.len());
     if !default {
-        if n_answer > n_said * 4 + 40 {
+        if n_answer > n_said * 10 + 150 {
             return Err(bad(
                 "polish",
                 "the answer was far longer than the dictation",
@@ -143,19 +155,19 @@ fn check(said: &str, answer: &str, default: bool) -> Result<(), LlmError> {
     if n_answer > n_said + (n_said / 4).max(3) {
         return Err(bad("polish", "the answer was longer than the dictation"));
     }
-    let digits = answer_words
-        .iter()
-        .filter(|w| w.chars().any(|c| c.is_ascii_digit()))
-        .count();
+    let has_digit = |w: &&String| w.chars().any(|c| c.is_ascii_digit());
+    let said_words: Vec<&String> = said_words.iter().filter(|w| !has_digit(w)).collect();
+    let answer_words: Vec<&String> = answer_words.iter().filter(|w| !has_digit(w)).collect();
     let kept = kept(&said_words, &answer_words);
-    let new = n_answer - kept - digits;
-    if new > (n_answer / 5).max(1) {
+    // `kept` is at most the answer's words, each matched once.
+    let new = answer_words.len() - kept;
+    if new > (answer_words.len() / 5).max(1) {
         return Err(bad(
             "polish",
             "the answer was not a cleanup of the dictation",
         ));
     }
-    if kept < n_said / 4 && digits == 0 {
+    if kept < said_words.len() / 4 {
         return Err(bad(
             "polish",
             "the answer kept almost nothing of the dictation",
@@ -164,20 +176,28 @@ fn check(said: &str, answer: &str, default: bool) -> Result<(), LlmError> {
     Ok(())
 }
 
-/// Phrases in which a model speaks of itself or of the request rather than rewriting the words.
-/// Only these, and only when the dictation did not say them: a dictated apology or a mention of
-/// AI is the user's. Kept to phrases a rewrite of someone's words has no reason to produce
-/// ("I'm sorry" is not one: a formal rewrite of "sorry" produces it).
+/// Phrases in which a model speaks of itself or of the request rather than rewriting the words,
+/// as [`words`] writes them. Only these, and only when the dictation did not say them: a
+/// dictated apology or a mention of AI is the user's. Kept to phrases a rewrite of someone's
+/// words has no reason to produce ("I'm sorry" is not one: a formal rewrite of "sorry" produces
+/// it), so most say "I": "we cannot assist" is a business's words, "I cannot assist" a model's.
 const SELF_TALK: &[&str] = &[
     "foundation model",
     "language model",
     "as an ai",
     "an ai assistant",
     "i am an ai",
-    "im an ai",
+    "i can not assist",
+    "i am unable to assist",
+    "i can not help with that",
+    "i am unable to help with that",
+    "i can not comply",
     "fulfill this request",
     "fulfil this request",
+    "fulfill that request",
+    "fulfill your request",
     "with this request",
+    "with that request",
     "the text you provided",
     "the provided text",
     "the dictation",
@@ -189,47 +209,95 @@ const SELF_TALK: &[&str] = &[
     "the corrected text",
 ];
 
+/// The words a model opens with when it introduces its answer ("Sure! Here you go:").
+const INTRODUCTIONS: &[&str] = &["here", "sure", "certainly", "okay", "ok"];
+
 /// Whether `answer` speaks of itself or the request: a [`SELF_TALK`] phrase the dictation did not
-/// say, or a first line introducing what follows ("Here is the rewritten text:").
-fn talks_about_itself(said_words: &[String], answer: &str) -> bool {
-    let answer_words = words(answer);
+/// say, or an opening that introduces what follows: a colon in its first line after one of the
+/// [`INTRODUCTIONS`] (one that ends a clause), when the dictation did not start with that word.
+fn talks_about_itself(said_words: &[String], answer: &str, answer_words: &[String]) -> bool {
     let said = format!(" {} ", said_words.join(" "));
     let spoken = format!(" {} ", answer_words.join(" "));
     let phrase = SELF_TALK.iter().any(|p| {
         let p = format!(" {p} ");
         spoken.contains(&p) && !said.contains(&p)
     });
-    let first_line = answer.lines().next().unwrap_or("").trim_end();
-    let introduces = first_line.ends_with(':')
-        && matches!(
-            answer_words.first().map(String::as_str),
-            Some("here" | "heres")
-        )
-        && said_words
-            .first()
-            .is_none_or(|w| w != "here" && w != "heres");
+    let opening = answer_words.first().map(String::as_str);
+    // A colon that ends a clause, not one in a time ("Here at 3:30.").
+    let introduces = answer
+        .lines()
+        .next()
+        .is_some_and(|l| l.contains(": ") || l.trim_end().ends_with(':'))
+        && opening.is_some_and(|w| INTRODUCTIONS.contains(&w))
+        && said_words.first().map(String::as_str) != opening;
     phrase || introduces
 }
 
-/// The words of `text`, lowercased, without punctuation or apostrophes ("What's" is "whats"). A
-/// Chinese or Japanese character is a word of its own, since those scripts put no spaces between
-/// words; any other script without spaces ends up as one long word, which [`alike`] still matches
-/// to a lightly edited copy of itself.
+/// The words of `text`, lowercased, without punctuation. English contractions and spoken forms
+/// are written out ("we're" is "we are", "can't" and "cannot" are "can not", "gonna" is "going
+/// to"), since polish may write either, and a possessive or "is" contracted loses its "'s"
+/// ("what's" is "what"); other apostrophes are dropped ("aujourd'hui" is "aujourdhui"). A Chinese
+/// or Japanese character is a word of its own, since those scripts put no spaces between words;
+/// any other script without spaces ends up as one long word, which [`alike`] still matches to a
+/// lightly edited copy of itself.
 fn words(text: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut word = String::new();
     for c in text.chars().flat_map(char::to_lowercase) {
         if is_ideograph(c) {
-            out.extend((!word.is_empty()).then(|| std::mem::take(&mut word)));
+            push_word(&mut out, &std::mem::take(&mut word));
             out.push(c.to_string());
         } else if c.is_alphanumeric() {
             word.push(c);
-        } else if c != '\'' && c != '\u{2019}' {
-            out.extend((!word.is_empty()).then(|| std::mem::take(&mut word)));
+        } else if c == '\'' || c == '\u{2019}' {
+            // Inside a word only: a quotation mark around one is punctuation.
+            if !word.is_empty() {
+                word.push('\'');
+            }
+        } else {
+            push_word(&mut out, &std::mem::take(&mut word));
         }
     }
-    out.extend((!word.is_empty()).then_some(word));
+    push_word(&mut out, &word);
     out
+}
+
+/// Pushes `raw` (lowercased, apostrophes as `'`) as [`words`] writes it.
+fn push_word(out: &mut Vec<String>, raw: &str) {
+    let raw = raw.trim_end_matches('\'');
+    let spoken: &[&str] = match raw {
+        "" => &[],
+        "gonna" => &["going", "to"],
+        "wanna" => &["want", "to"],
+        "gotta" => &["got", "to"],
+        "kinda" => &["kind", "of"],
+        "sorta" => &["sort", "of"],
+        "cannot" | "can't" => &["can", "not"],
+        "won't" => &["will", "not"],
+        "i'm" => &["i", "am"],
+        _ => &[],
+    };
+    if !spoken.is_empty() {
+        out.extend(spoken.iter().map(|w| (*w).to_owned()));
+        return;
+    }
+    let (stem, rest) = [
+        ("n't", Some("not")),
+        ("'re", Some("are")),
+        ("'ll", Some("will")),
+        ("'ve", Some("have")),
+        ("'d", Some("would")),
+        ("'s", None),
+    ]
+    .iter()
+    .find_map(|(suffix, full)| Some((raw.strip_suffix(suffix)?, *full)))
+    .filter(|(stem, _)| !stem.is_empty())
+    .unwrap_or((raw, None));
+    let stem = stem.replace('\'', "");
+    if !stem.is_empty() {
+        out.push(stem);
+    }
+    out.extend(rest.map(str::to_owned));
 }
 
 /// Han characters, and Japanese kana.
@@ -240,7 +308,7 @@ fn is_ideograph(c: char) -> bool {
 /// How many words of `answer` line up, in order, with words `said` (a longest common subsequence
 /// under [`alike`]). In order, so an answer made of the question's words rearranged around a new
 /// one ("the capital of France is Paris") is not a cleanup of it.
-fn kept(said: &[String], answer: &[String]) -> usize {
+fn kept(said: &[&String], answer: &[&String]) -> usize {
     // One row of the table at a time: dictations run to hundreds of words, not thousands.
     let mut row = vec![0usize; answer.len() + 1];
     for s in said {
@@ -265,9 +333,15 @@ fn alike(a: &str, b: &str) -> bool {
     if a == b {
         return true;
     }
+    // Lengths first: most pairs of words differ too much in length to be one misheard as the
+    // other, and a long dictation compares every word with every other.
+    let (la, lb) = (a.chars().count(), b.chars().count());
+    let allowed = la.max(lb) / 3;
+    if allowed == 0 || la.abs_diff(lb) > allowed {
+        return false;
+    }
     let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
-    let allowed = a.len().max(b.len()) / 3;
-    allowed > 0 && a.len().abs_diff(b.len()) <= allowed && distance(&a, &b) <= allowed
+    distance(&a, &b) <= allowed
 }
 
 /// The edit distance between two words.
@@ -371,12 +445,34 @@ mod tests {
     }
 
     #[test]
+    fn a_number_answering_a_dictated_question_is_a_failure() {
+        assert!(refused(polished(
+            "",
+            "what year did the berlin wall fall",
+            "1989"
+        )));
+        assert!(refused(polished("", "what is two plus two", "4")));
+    }
+
+    #[test]
+    fn a_dictation_of_no_words_gets_no_refusal_typed_either() {
+        let refusal = "I am a foundation model developed by Apple. I cannot fulfill this request.";
+        assert!(refused(polished("", "?", refusal)));
+        assert!(refused(polished(
+            "",
+            "...",
+            "I'm not sure what you mean, could you say more?"
+        )));
+    }
+
+    #[test]
     fn echoed_tags_are_stripped() {
         let said = "so the meeting is at noon";
         for answer in [
             "<dictation>So the meeting is at noon.</dictation>",
             "<dictation>\nSo the meeting is at noon.\n</dictation>\n",
             "So the meeting is at noon.</dictation>",
+            "<Dictation>So the meeting is at noon.</Dictation>",
         ] {
             assert_eq!(
                 polished("", said, answer).unwrap(),
@@ -421,6 +517,25 @@ mod tests {
                 "it costs twenty five dollars and starts at three thirty",
                 "It costs $25 and starts at 3:30.",
             ),
+            // Contractions and spoken forms written out, and the other way round.
+            (
+                "we're gonna want to meet at noon",
+                "We are going to want to meet at noon.",
+            ),
+            (
+                "I wanna talk about the roadmap",
+                "I want to talk about the roadmap.",
+            ),
+            (
+                "tell dr jones I am going to be late",
+                "Tell Dr. Jones I'm going to be late.",
+            ),
+            // Digits said, kept.
+            ("call me on 555 1234", "Call me on 555 1234."),
+            ("meet at 3:30", "Meet at 3:30."),
+            ("so here at 3:30 then", "Here at 3:30, then."),
+            ("I have 2 kids and 3 dogs", "I have 2 kids and 3 dogs."),
+            ("19 dollars and 99 cents", "$19.99"),
             // An apology dictated is the user's words, not the model's.
             (
                 "sorry I can't make it as an AI researcher I'm busy that week",
@@ -453,6 +568,18 @@ mod tests {
                 "tell sam I'm running late",
                 "Hi Sam,\n\nI wanted to let you know that I'm running a little late.\n\nBest regards",
             ),
+            // A whole email from five words.
+            (
+                "Write a formal email.",
+                "tell sam I'm running late",
+                "Dear Sam,\n\nI hope this message finds you well. I am writing to let you know that \
+                 I am running somewhat behind schedule this morning and will not be able to arrive \
+                 at the agreed time. I sincerely apologise for any inconvenience this may cause, \
+                 and I will keep you informed of my progress. Should anything need my attention \
+                 before I arrive, please do not hesitate to contact me by phone or by email, and I \
+                 will respond as soon as I am able to do so.\n\nThank you for your patience and \
+                 understanding.\n\nKind regards",
+            ),
         ] {
             assert_eq!(
                 polished(prompt, said, answer).as_deref(),
@@ -469,6 +596,9 @@ mod tests {
             "As an AI language model, I can't send messages for you.",
             "Here is the rewritten text:\nHi Sam, I'm running late.",
             "I'm sorry, but I cannot fulfill this request.",
+            "I'm sorry, but I can't assist with that.",
+            "Sure! Here you go: Hi Sam, I'm running late.",
+            "Certainly! Here's a polite version: Hi Sam, I'm running late.",
         ] {
             assert!(
                 refused(polished("Rewrite as a short, polite email.", said, answer)),
