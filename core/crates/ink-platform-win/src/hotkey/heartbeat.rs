@@ -15,7 +15,7 @@
 //! reinstalls are capped ([`ReinstallBudget`]: three in ten minutes); past the cap the hotkey is
 //! reported lost once, rather than churn. A reinstall puts our hook first again, which ends
 //! the false misses of that kind. A reinstall never cancels a hold: if its release was really
-//! missed, the core's stuck-hold watchdog ends it.
+//! missed, the key's next press ends it (`machine`), or the core's stuck-hold watchdog does.
 //!
 //! Pure over tick-counter milliseconds (which wrap every 49.7 days, hence the wrapping maths).
 #![cfg(windows)]

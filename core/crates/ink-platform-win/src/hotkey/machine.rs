@@ -14,8 +14,27 @@
 //! the hold lasts while the whole chord is down: one of its modifiers coming up ends it as surely
 //! as its key does. The modifier's own key-up passes through (the app saw it go down), and the
 //! key, still down, keeps its repeats and its key-up swallowed: they were the hotkey's, and an app
-//! getting them would type spaces nobody asked for. A function key alone has no modifiers to let
-//! go of.
+//! getting them would type spaces nobody asked for (until it comes up, the key is **trailing**). A
+//! function key alone has no modifiers to let go of.
+//!
+//! **A press is a key-down of a key that was not already down (decided).** The hook's event has
+//! no repeat flag, and the key state cannot stand in for one while the hotkey is ours: a key-down
+//! the hook swallows never reaches it (measured: a held, swallowed key reads as up at each of its
+//! repeats). So while a hold or its trail is on, a key-down of the key is a repeat if it comes
+//! within [`repeat_gap_ms`] of the key's last one (the longest interval the keyboard settings
+//! allow between repeats, with a margin), or if the key state reads it as down already (Windows
+//! removed the hook mid-hold, so the repeats in between reached the OS, and the gap means
+//! nothing). Anything later is a fresh press: the key came up where the hook could not see it (the
+//! lock screen, the secure desktop after Ctrl+Alt+Del, an app running as administrator). That ends
+//! the hold there, `Released` (then `Pressed`, if the press is the hotkey again), or the trail
+//! silently, and the press is judged on its own: nothing the user types next is eaten, and their
+//! next dictation starts on its press. A press back within the gap still reads as a repeat and is
+//! swallowed, as before. Outside a hold the key's events reached the OS, and a key-down is judged
+//! as a press, as it always was.
+//!
+//! **After a panic in the core's sink** the hook abandons the hold ([`HoldMachine::reset`]) and
+//! sends `Cancelled`, but the key still down becomes trailing, a held modifier's too: its repeats
+//! reach no app and start no hold, and its key-up is swallowed like its press was.
 //!
 //! **The stray modifier tap.** A swallowed chord key leaves its modifiers looking pressed and
 //! released on their own: Windows then opens the Start menu (Win), activates a menu bar (Alt) or
@@ -29,12 +48,17 @@ use super::binding::Binding;
 /// One key event from the hook, reduced to what the decision needs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum HookInput {
-    /// `WM_KEYDOWN` or `WM_SYSKEYDOWN` (auto-repeats included: the hook cannot tell them apart).
+    /// `WM_KEYDOWN` or `WM_SYSKEYDOWN`, auto-repeats included.
     KeyDown {
         /// The virtual key.
         vk: u32,
         /// The chord modifiers down at the time ([`super::binding::modifier`] bits).
         modifiers: u8,
+        /// The key state reads the key as down already: a repeat of a key the OS saw (one the
+        /// hook passed on). A swallowed key reads as up at its repeats too.
+        reads_down: bool,
+        /// The event's time on the tick counter, in milliseconds.
+        at_ms: u32,
     },
     /// `WM_KEYUP` or `WM_SYSKEYUP`.
     KeyUp {
@@ -50,6 +74,9 @@ pub(crate) enum HookInput {
 pub(crate) enum Edge {
     Pressed,
     Released,
+    /// `Released`, then `Pressed`: the key came up where the hook could not see it, and this is
+    /// its next press.
+    ReleasedThenPressed,
 }
 
 /// The decision for one event.
@@ -63,22 +90,49 @@ pub(crate) struct Verdict {
     pub(crate) mask: bool,
 }
 
+/// The longest pause between two key-downs of a held key that is still a repeat, from the
+/// keyboard settings: the repeat delay (`SPI_GETKEYBOARDDELAY`, 0 to 3, about 250 ms to a second)
+/// or the slowest repeat rate (about 2.5 a second), whichever is longer, and FilterKeys' own delay
+/// and rate when it is on and they are longer (up to 20 s each; both zero under BounceKeys, so
+/// they never shorten it). Microsoft says the hardware may stray from these, so the gap is half
+/// as long again.
+pub(crate) fn repeat_gap_ms(delay_setting: u32, filter_keys: Option<(u32, u32)>) -> u32 {
+    const SLOWEST_REPEAT_MS: u32 = 400;
+    let delay_ms = (delay_setting.min(3) + 1) * 250;
+    let (filter_delay_ms, filter_repeat_ms) = filter_keys.unwrap_or_default();
+    let longest = delay_ms
+        .max(SLOWEST_REPEAT_MS)
+        .max(filter_delay_ms)
+        .max(filter_repeat_ms);
+    longest.saturating_mul(3) / 2
+}
+
+/// The gap when the settings cannot be read: the longest without FilterKeys.
+pub(crate) const FALLBACK_REPEAT_GAP_MS: u32 = 1_500;
+
 /// Whether the hotkey is held, and the rules above. `Copy`, so the hook keeps it in a `Cell`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct HoldMachine {
     binding: Binding,
     held: bool,
-    /// A chord's key is still down after a modifier ended the hold: its repeats and key-up are
-    /// ours to swallow, without another edge.
+    /// The hotkey's key is still down after its hold ended without it (a modifier of the chord
+    /// came up, or the sink panicked): its repeats and key-up are ours to swallow, without
+    /// another edge, until it comes up or is pressed afresh.
     trailing: bool,
+    /// When the hotkey's key last went down (or repeated), on the tick counter.
+    last_down_ms: u32,
+    /// See [`repeat_gap_ms`].
+    repeat_gap_ms: u32,
 }
 
 impl HoldMachine {
-    pub(crate) const fn new(binding: Binding) -> Self {
+    pub(crate) const fn new(binding: Binding, repeat_gap_ms: u32) -> Self {
         Self {
             binding,
             held: false,
             trailing: false,
+            last_down_ms: 0,
+            repeat_gap_ms,
         }
     }
 
@@ -86,52 +140,47 @@ impl HoldMachine {
         self.held
     }
 
-    /// Forgets any hold (the core may have missed an edge: its sink panicked).
+    /// The keyboard settings changed: see [`repeat_gap_ms`].
+    pub(crate) fn set_repeat_gap(&mut self, repeat_gap_ms: u32) {
+        self.repeat_gap_ms = repeat_gap_ms;
+    }
+
+    /// Abandons the hold (the core may have missed an edge: its sink panicked). A key still down
+    /// stays ours until it comes up: its repeats start nothing and reach no app.
     pub(crate) fn reset(&mut self) {
+        self.trailing |= self.held;
         self.held = false;
-        self.trailing = false;
     }
 
     /// Decides one event.
     pub(crate) fn on(&mut self, input: HookInput) -> Verdict {
         match (self.binding, input) {
-            (Binding::Modifier(key), HookInput::KeyDown { vk, .. }) if vk == key.vk() => {
-                self.transition(true)
+            (
+                Binding::Modifier(key),
+                HookInput::KeyDown {
+                    vk,
+                    reads_down,
+                    at_ms,
+                    ..
+                },
+            ) if vk == key.vk() => self.key_down(reads_down, at_ms, true, false),
+            (
+                Binding::Chord(chord),
+                HookInput::KeyDown {
+                    vk,
+                    modifiers,
+                    reads_down,
+                    at_ms,
+                },
+            ) if vk == chord.vk => {
+                // The key with other modifiers is the app's.
+                let starts = chord.matches(vk, modifiers);
+                self.key_down(reads_down, at_ms, starts, chord.modifiers != 0)
             }
             (Binding::Modifier(key), HookInput::KeyUp { vk, .. }) if vk == key.vk() => {
-                self.transition(false)
+                self.key_up()
             }
-            (Binding::Chord(chord), HookInput::KeyDown { vk, modifiers }) if vk == chord.vk => {
-                if self.held || self.trailing {
-                    // Auto-repeat of the held chord, or of its key after a modifier ended the
-                    // hold (the hook cannot tell a repeat from a press: the key has not come up).
-                    Verdict {
-                        swallow: true,
-                        edge: None,
-                        mask: false,
-                    }
-                } else if chord.matches(vk, modifiers) {
-                    Verdict {
-                        mask: chord.modifiers != 0,
-                        ..self.transition(true)
-                    }
-                } else {
-                    // The key with other modifiers: the app's.
-                    Verdict::default()
-                }
-            }
-            (Binding::Chord(chord), HookInput::KeyUp { vk, .. }) if vk == chord.vk => {
-                if self.trailing {
-                    self.trailing = false;
-                    Verdict {
-                        swallow: true,
-                        edge: None,
-                        mask: false,
-                    }
-                } else {
-                    self.transition(false)
-                }
-            }
+            (Binding::Chord(chord), HookInput::KeyUp { vk, .. }) if vk == chord.vk => self.key_up(),
             (Binding::Chord(chord), HookInput::KeyUp { modifiers, .. })
                 if self.held && modifiers & chord.modifiers != chord.modifiers =>
             {
@@ -149,18 +198,45 @@ impl HoldMachine {
         }
     }
 
-    fn transition(&mut self, down: bool) -> Verdict {
-        let edge = match (self.held, down) {
-            (false, true) => Some(Edge::Pressed),
-            (true, false) => Some(Edge::Released),
-            // A repeated down: still held, still ours to swallow.
-            (true, true) => None,
-            // A release whose press we never saw: the app's.
-            (false, false) => return Verdict::default(),
-        };
-        self.held = down;
+    /// A key-down of the hotkey's key. `starts`: it is the hotkey (a chord's exact modifiers are
+    /// down); `mask`: a hold it starts asks for the mask key.
+    fn key_down(&mut self, reads_down: bool, at_ms: u32, starts: bool, mask: bool) -> Verdict {
+        let since_ms = at_ms.wrapping_sub(self.last_down_ms);
+        self.last_down_ms = at_ms;
+        if (self.held || self.trailing) && (reads_down || since_ms <= self.repeat_gap_ms) {
+            // A repeat of the held key, or of the trailing one: still ours, no edge.
+            return Verdict {
+                swallow: true,
+                edge: None,
+                mask: false,
+            };
+        }
+        // A press. A hold or trail still on means the key came up unseen: that ends here, and
+        // this press is judged on its own.
+        let lost = self.held;
+        self.held = starts;
+        self.trailing = false;
         Verdict {
-            swallow: true,
+            swallow: starts,
+            edge: match (lost, starts) {
+                (false, true) => Some(Edge::Pressed),
+                (true, true) => Some(Edge::ReleasedThenPressed),
+                (true, false) => Some(Edge::Released),
+                (false, false) => None,
+            },
+            mask: starts && mask,
+        }
+    }
+
+    /// A key-up of the hotkey's key: the end of its hold, or of its trail, or the app's (its press
+    /// was).
+    fn key_up(&mut self) -> Verdict {
+        let edge = self.held.then_some(Edge::Released);
+        let swallow = self.held || self.trailing;
+        self.held = false;
+        self.trailing = false;
+        Verdict {
+            swallow,
             edge,
             mask: false,
         }
@@ -169,15 +245,50 @@ impl HoldMachine {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+
     use super::super::binding::{modifier, vk};
     use super::*;
 
-    fn machine(token: &str) -> HoldMachine {
-        HoldMachine::new(Binding::parse(token).expect("valid token"))
+    /// The gap at Windows' default repeat delay (setting 1, about 500 ms).
+    const GAP: u32 = 750;
+
+    thread_local! {
+        /// The test's tick counter: each test runs on its own thread.
+        static NOW_MS: Cell<u32> = const { Cell::new(0) };
     }
 
+    /// The tick counter, `ms` on.
+    fn after(ms: u32) -> u32 {
+        NOW_MS.with(|now| {
+            now.set(now.get().wrapping_add(ms));
+            now.get()
+        })
+    }
+
+    fn machine(token: &str) -> HoldMachine {
+        HoldMachine::new(Binding::parse(token).expect("valid token"), GAP)
+    }
+
+    /// A press, well after anything before it.
     fn down(vk: u32, modifiers: u8) -> HookInput {
-        HookInput::KeyDown { vk, modifiers }
+        down_after(10_000, vk, modifiers)
+    }
+
+    /// A key-down `ms` after the last event, of a key that reads as up: a press, or a repeat of a
+    /// key the hook swallows.
+    fn down_after(ms: u32, vk: u32, modifiers: u8) -> HookInput {
+        HookInput::KeyDown {
+            vk,
+            modifiers,
+            reads_down: false,
+            at_ms: after(ms),
+        }
+    }
+
+    /// An auto-repeat as the hook sees one of a key it swallows: soon after the last, reading as up.
+    fn repeat(vk: u32, modifiers: u8) -> HookInput {
+        down_after(33, vk, modifiers)
     }
 
     /// A key coming up with nothing left down.
@@ -222,7 +333,7 @@ mod tests {
         assert_eq!(m.on(down(vk::RCONTROL, modifier::CTRL)), PRESSED);
         assert!(m.is_held());
         assert_eq!(
-            m.on(down(vk::RCONTROL, modifier::CTRL)),
+            m.on(repeat(vk::RCONTROL, modifier::CTRL)),
             SWALLOW,
             "auto-repeat"
         );
@@ -266,7 +377,7 @@ mod tests {
             "Ctrl+Shift released alone would switch the layout"
         );
         // Repeats swallow even after a modifier lets go.
-        assert_eq!(m.on(down(vk::SPACE, modifier::CTRL)), SWALLOW);
+        assert_eq!(m.on(repeat(vk::SPACE, modifier::CTRL)), SWALLOW);
         assert_eq!(m.on(up(vk::SPACE)), RELEASED);
     }
 
@@ -287,9 +398,9 @@ mod tests {
         assert_eq!(m.on(up_with(vk::LSHIFT, modifier::CTRL)), released_passing);
         assert!(!m.is_held());
         // The key, still down, repeats with what is left of the modifiers: swallowed, no edge.
-        assert_eq!(m.on(down(vk::SPACE, modifier::CTRL)), SWALLOW);
+        assert_eq!(m.on(repeat(vk::SPACE, modifier::CTRL)), SWALLOW);
         assert_eq!(
-            m.on(down(vk::SPACE, both)),
+            m.on(repeat(vk::SPACE, both)),
             SWALLOW,
             "not a new press while it is down"
         );
@@ -358,13 +469,16 @@ mod tests {
         assert_eq!(m.on(up(vk::RMENU)), RELEASED);
     }
 
+    /// A modifier let go of first, then the sink panicked: the key still down stays ours.
     #[test]
-    fn reset_forgets_a_trailing_key() {
+    fn reset_keeps_a_trailing_key_swallowed() {
         let mut m = machine("ctrl+space");
         m.on(down(vk::SPACE, modifier::CTRL));
         m.on(up(vk::LCONTROL));
         m.reset();
-        assert_eq!(m.on(up(vk::SPACE)), PASS, "the app gets the key-up now");
+        assert_eq!(m.on(repeat(vk::SPACE, 0)), SWALLOW, "no space typed");
+        assert_eq!(m.on(up(vk::SPACE)), SWALLOW, "its press was ours");
+        assert_eq!(m.on(down(vk::SPACE, 0)), PASS, "a later space types");
     }
 
     #[test]
@@ -376,7 +490,7 @@ mod tests {
             let mut m = machine(token);
             assert_eq!(m.on(down(key, mods)), PRESSED_MASKED, "{token}");
             assert_eq!(
-                m.on(down(key, mods)),
+                m.on(repeat(key, mods)),
                 SWALLOW,
                 "{token}: repeats ask for nothing"
             );
@@ -392,12 +506,238 @@ mod tests {
         assert_eq!(m.on(down(0x7C, modifier::SHIFT)), PASS);
     }
 
+    /// The sink panicked mid-hold (risk b): the hold is forgotten, but the chord key, still down,
+    /// keeps its repeats and key-up swallowed and starts no hold until it is pressed again.
     #[test]
-    fn reset_forgets_the_hold() {
-        let mut m = machine("right_shift");
-        m.on(down(vk::RSHIFT, modifier::SHIFT));
+    fn after_a_reset_a_held_chord_stays_swallowed_until_its_key_comes_up() {
+        let mut m = machine("ctrl+space");
+        assert_eq!(m.on(down(vk::SPACE, modifier::CTRL)), PRESSED_MASKED);
         m.reset();
         assert!(!m.is_held());
-        assert_eq!(m.on(up(vk::RSHIFT)), PASS, "the app gets the release now");
+        assert_eq!(
+            m.on(repeat(vk::SPACE, modifier::CTRL)),
+            SWALLOW,
+            "a repeat is no new hold, and no space for the app"
+        );
+        assert_eq!(m.on(up(vk::SPACE)), SWALLOW, "no edge: the core was told");
+        assert_eq!(m.on(down(vk::SPACE, modifier::CTRL)), PRESSED_MASKED);
+        assert_eq!(m.on(up(vk::SPACE)), RELEASED);
+    }
+
+    /// The same for a modifier held on its own: its repeats used to start a new hold at once.
+    #[test]
+    fn after_a_reset_a_held_modifier_stays_swallowed_until_it_comes_up() {
+        let mut m = machine("right_shift");
+        assert_eq!(m.on(down(vk::RSHIFT, modifier::SHIFT)), PRESSED);
+        m.reset();
+        assert!(!m.is_held());
+        assert_eq!(m.on(repeat(vk::RSHIFT, modifier::SHIFT)), SWALLOW);
+        assert!(!m.is_held(), "no new hold");
+        assert_eq!(m.on(up(vk::RSHIFT)), SWALLOW, "its press was ours");
+        assert_eq!(m.on(down(vk::RSHIFT, modifier::SHIFT)), PRESSED);
+    }
+
+    #[test]
+    fn reset_with_nothing_held_changes_nothing() {
+        let mut m = machine("right_shift");
+        m.reset();
+        assert_eq!(m.on(up(vk::RSHIFT)), PASS);
+        assert_eq!(m.on(down(vk::RSHIFT, modifier::SHIFT)), PRESSED);
+    }
+
+    /// Risk a: Shift let go of first, then the key-up of Space never reached the hook (the screen
+    /// was locked). The next space the user types is theirs.
+    #[test]
+    fn a_lost_key_up_after_a_modifier_first_release_eats_no_later_press() {
+        let mut m = machine("ctrl+shift+space");
+        let both = modifier::CTRL | modifier::SHIFT;
+        m.on(down(vk::SPACE, both));
+        m.on(up_with(vk::LSHIFT, modifier::CTRL));
+        assert_eq!(m.on(repeat(vk::SPACE, modifier::CTRL)), SWALLOW);
+        // Space comes up on the lock screen, unseen; Ctrl comes up afterwards.
+        assert_eq!(m.on(up(vk::LCONTROL)), PASS);
+        assert_eq!(m.on(down(vk::SPACE, 0)), PASS, "the user's space types");
+        assert_eq!(m.on(repeat(vk::SPACE, 0)), PASS, "and so do its repeats");
+        assert_eq!(m.on(up(vk::SPACE)), PASS);
+    }
+
+    /// The same, but the next press is the hotkey: a new hold, at once.
+    #[test]
+    fn a_lost_key_up_after_a_modifier_first_release_lets_the_next_hold_start() {
+        let mut m = machine("ctrl+shift+space");
+        let both = modifier::CTRL | modifier::SHIFT;
+        m.on(down(vk::SPACE, both));
+        m.on(up_with(vk::LSHIFT, modifier::CTRL));
+        assert_eq!(m.on(down(vk::SPACE, both)), PRESSED_MASKED);
+        assert_eq!(m.on(repeat(vk::SPACE, both)), SWALLOW);
+        assert_eq!(m.on(up(vk::SPACE)), RELEASED);
+    }
+
+    /// A held chord whose key-up was lost: the next press of its key ends the old hold and, being
+    /// the hotkey again, starts the new one, so the user's next dictation works.
+    #[test]
+    fn a_lost_key_up_of_a_held_chord_ends_the_hold_at_the_next_press() {
+        let mut m = machine("ctrl+space");
+        m.on(down(vk::SPACE, modifier::CTRL));
+        // Space and Ctrl come up unseen.
+        assert_eq!(
+            m.on(down(vk::SPACE, modifier::CTRL)),
+            Verdict {
+                edge: Some(Edge::ReleasedThenPressed),
+                ..PRESSED_MASKED
+            }
+        );
+        assert!(m.is_held());
+        assert_eq!(m.on(repeat(vk::SPACE, modifier::CTRL)), SWALLOW);
+        assert_eq!(m.on(up(vk::SPACE)), RELEASED);
+    }
+
+    /// The same, but the next press is a plain space: the old hold ends, and the space is the
+    /// app's.
+    #[test]
+    fn a_lost_key_up_of_a_held_chord_does_not_eat_a_plain_press() {
+        let mut m = machine("ctrl+space");
+        m.on(down(vk::SPACE, modifier::CTRL));
+        assert_eq!(
+            m.on(down(vk::SPACE, 0)),
+            Verdict {
+                swallow: false,
+                edge: Some(Edge::Released),
+                mask: false,
+            }
+        );
+        assert!(!m.is_held());
+        assert_eq!(m.on(up(vk::SPACE)), PASS);
+    }
+
+    /// A modifier held on its own whose key-up was lost: its next press is a new hold.
+    #[test]
+    fn a_lost_key_up_of_a_held_modifier_ends_the_hold_at_the_next_press() {
+        let mut m = machine("right_control");
+        m.on(down(vk::RCONTROL, modifier::CTRL));
+        assert_eq!(
+            m.on(down(vk::RCONTROL, modifier::CTRL)),
+            Verdict {
+                edge: Some(Edge::ReleasedThenPressed),
+                ..PRESSED
+            }
+        );
+        assert_eq!(m.on(up(vk::RCONTROL)), RELEASED);
+    }
+
+    /// A held key that is swallowed reads as up at every repeat; its repeats are still repeats,
+    /// the first one after the longest repeat delay included.
+    #[test]
+    fn a_swallowed_keys_repeats_are_told_apart_by_their_timing() {
+        let mut m = HoldMachine::new(
+            Binding::parse("right_control").unwrap(),
+            repeat_gap_ms(3, None),
+        );
+        assert_eq!(m.on(down(vk::RCONTROL, modifier::CTRL)), PRESSED);
+        assert_eq!(
+            m.on(down_after(1_000, vk::RCONTROL, modifier::CTRL)),
+            SWALLOW,
+            "the first repeat, a second on"
+        );
+        for _ in 0..60 {
+            assert_eq!(m.on(repeat(vk::RCONTROL, modifier::CTRL)), SWALLOW);
+        }
+        assert!(m.is_held());
+        assert_eq!(m.on(up(vk::RCONTROL)), RELEASED);
+    }
+
+    /// The gap's edge: a key-down within it is a repeat, one just past it a new press (the key-up
+    /// was lost in between).
+    #[test]
+    fn a_key_down_past_the_gap_is_a_press() {
+        let mut m = machine("ctrl+space");
+        m.on(down(vk::SPACE, modifier::CTRL));
+        assert_eq!(m.on(down_after(GAP, vk::SPACE, modifier::CTRL)), SWALLOW);
+        assert_eq!(
+            m.on(down_after(GAP + 1, vk::SPACE, modifier::CTRL)),
+            Verdict {
+                edge: Some(Edge::ReleasedThenPressed),
+                ..PRESSED_MASKED
+            }
+        );
+    }
+
+    /// Windows removed the hook mid-hold and the heartbeat put it back: the repeats in between
+    /// reached the OS, so the key reads as down, and a key-down however late is a repeat.
+    #[test]
+    fn a_key_down_that_reads_down_is_a_repeat_however_late() {
+        let mut m = machine("right_alt");
+        assert_eq!(m.on(down(vk::RMENU, modifier::ALT)), PRESSED);
+        let late = HookInput::KeyDown {
+            vk: vk::RMENU,
+            modifiers: modifier::ALT,
+            reads_down: true,
+            at_ms: after(60_000),
+        };
+        assert_eq!(m.on(late), SWALLOW);
+        assert!(m.is_held());
+        assert_eq!(m.on(up(vk::RMENU)), RELEASED);
+    }
+
+    /// Outside a hold a key-down is judged as a press, as before: the key state is the OS's word
+    /// on a key the hook passed on, and only then.
+    #[test]
+    fn outside_a_hold_a_key_down_is_judged_as_a_press() {
+        let mut m = machine("right_control");
+        let reads_down = HookInput::KeyDown {
+            vk: vk::RCONTROL,
+            modifiers: modifier::CTRL,
+            reads_down: true,
+            at_ms: after(10),
+        };
+        assert_eq!(m.on(reads_down), PRESSED);
+    }
+
+    /// The trail of a chord after a panic uses the same timing.
+    #[test]
+    fn a_trailing_keys_late_press_ends_the_trail() {
+        let mut m = machine("ctrl+space");
+        m.on(down(vk::SPACE, modifier::CTRL));
+        m.reset();
+        assert_eq!(m.on(repeat(vk::SPACE, modifier::CTRL)), SWALLOW);
+        assert_eq!(
+            m.on(down_after(GAP + 1, vk::SPACE, modifier::CTRL)),
+            PRESSED_MASKED,
+            "the key-up was lost: a new hold, and no Released (the core had its Cancelled)"
+        );
+    }
+
+    #[test]
+    fn the_gap_follows_the_keyboard_settings() {
+        assert_eq!(repeat_gap_ms(1, None), 750, "Windows' default delay");
+        assert_eq!(
+            repeat_gap_ms(0, None),
+            600,
+            "the slowest repeat rate is longer"
+        );
+        assert_eq!(repeat_gap_ms(3, None), FALLBACK_REPEAT_GAP_MS);
+        assert_eq!(
+            repeat_gap_ms(9, None),
+            FALLBACK_REPEAT_GAP_MS,
+            "out of range"
+        );
+        assert_eq!(repeat_gap_ms(1, Some((2_000, 500))), 3_000, "FilterKeys");
+        assert_eq!(repeat_gap_ms(1, Some((300, 20_000))), 30_000);
+        assert_eq!(
+            repeat_gap_ms(1, Some((0, 0))),
+            750,
+            "BounceKeys zeroes them: they never shorten the gap"
+        );
+    }
+
+    /// The tick counter wraps every 49.7 days; a repeat across the wrap is still a repeat.
+    #[test]
+    fn a_repeat_across_the_tick_wrap_is_a_repeat() {
+        NOW_MS.with(|now| now.set(u32::MAX - 20));
+        let mut m = machine("right_control");
+        assert_eq!(m.on(down_after(0, vk::RCONTROL, modifier::CTRL)), PRESSED);
+        assert_eq!(m.on(repeat(vk::RCONTROL, modifier::CTRL)), SWALLOW);
+        assert_eq!(m.on(repeat(vk::RCONTROL, modifier::CTRL)), SWALLOW);
+        assert_eq!(m.on(up(vk::RCONTROL)), RELEASED);
     }
 }
