@@ -68,6 +68,12 @@ extension CatalogueModel {
         case failed(String)
     }
 
+    /// Every choice the step offers is on this Mac: there before the first run, or downloaded
+    /// since. A listed model no choice names never holds it back, as the step cannot fetch it.
+    var allOnThisMac: Bool {
+        !choices.isEmpty && choices.allSatisfy { state(of: $0) == .installed }
+    }
+
     /// The choices the catalogue can serve (every model each names is listed), in order.
     var choices: [Choice] {
         guard listed else { return [] }
