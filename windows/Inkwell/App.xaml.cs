@@ -220,11 +220,17 @@ public partial class App : Application
         cover.Changed += covered => made.Presence.Update(window.AppWindow.IsVisible, Minimized(window), occlusionVisible: !covered);
         // Uncovered, the orb at rest goes to a new spot, as on coming on screen.
         cover.Uncovered += window.WindowUncovered;
-        window.VisibilityChanged += (_, e) => made.Presence.Update(e.Visible, Minimized(window), occlusionVisible: !cover.Covered);
+        window.VisibilityChanged += (_, e) =>
+        {
+            // Hidden in the tray, nothing on the desktop wakes the app to measure.
+            cover.WindowShown(e.Visible);
+            made.Presence.Update(e.Visible, Minimized(window), occlusionVisible: !cover.Covered);
+        };
         window.AppWindow.Changed += (sender, e) =>
         {
             if (e.DidPresenterChange || e.DidVisibilityChange)
             {
+                cover.WindowShown(sender.IsVisible);
                 made.Presence.Update(sender.IsVisible, Minimized(window), occlusionVisible: !cover.Covered);
                 // A shortcut being recorded is the window's: hidden or minimised, it is cancelled.
                 if (!sender.IsVisible || Minimized(window))
@@ -275,6 +281,7 @@ public partial class App : Application
         window.Activate();
         window.FitToWorkArea();
         // On screen from the start: the window's own change events may not come for the first show.
+        cover.WindowShown(window.AppWindow.IsVisible);
         made.Presence.Update(window.AppWindow.IsVisible, Minimized(window), occlusionVisible: !cover.Covered);
         core.Start();
         // Once, at launch, when the user turned the automatic check on (never on a timer).
