@@ -74,7 +74,10 @@ pub fn request(selection: &str, instruction: &str) -> LlmRequest {
 /// delete the selection and look as if the feature ate the user's text. So is one in which the
 /// model speaks of itself or the request ("I cannot fulfill this request."), checked as polish
 /// checks an answer under a custom prompt ([`polish::speaks_of_itself`]): pasted, a refusal would
-/// replace the user's text. Phrases the selection or the instruction said are the user's.
+/// replace the user's text. Phrases the selection or the instruction said are the user's. An
+/// edit that legitimately opens with an introduction ("Here is the plan: the launch moves to
+/// May.", a translation of "Aquí tienes:") is refused too: the selection stays, and the user can
+/// ask again, which costs less than a preamble pasted into their text.
 pub fn apply_edit(
     llm: &dyn Llm,
     selection: &str,
@@ -195,6 +198,17 @@ mod tests {
                 "As an AI researcher I study language models",
                 "add a comma",
                 "As an AI researcher, I study language models.",
+            ),
+            // The text's own words, with an article or in the singular.
+            (
+                "dictation is slow",
+                "make it a full sentence",
+                "The dictation is slow.",
+            ),
+            (
+                "language models is good at this",
+                "fix the grammar",
+                "A language model is good at this.",
             ),
             (
                 "we cant do friday",
