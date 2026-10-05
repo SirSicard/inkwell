@@ -38,6 +38,8 @@ struct ReplayCapture {
     opened_for: Mutex<Vec<Option<String>>>,
     /// An app's own sound cannot be tapped: everything this "Mac" plays is recorded instead.
     tap_fails: std::sync::atomic::AtomicBool,
+    /// An app is heard by loopback of its output device, as Windows hears most apps.
+    device_loopback: std::sync::atomic::AtomicBool,
     /// Frames delivered to capture by the latest meeting's mic and far end.
     delivered: [Arc<AtomicU64>; 2],
 }
@@ -141,9 +143,23 @@ impl MeetingCapture for ReplayCapture {
                 Some(_) if self.tap_fails.load(std::sync::atomic::Ordering::Relaxed) => {
                     FarScope::EverythingInstead("no audio process for that app".into())
                 }
+                Some(_)
+                    if self
+                        .device_loopback
+                        .load(std::sync::atomic::Ordering::Relaxed) =>
+                {
+                    FarScope::Everything
+                }
                 Some(_) => FarScope::App,
             },
         })
+    }
+
+    /// As Windows' plan: an app heard by device loopback is known before anything opens.
+    fn planned_far(&self, _app: &AppRef) -> Option<FarScope> {
+        self.device_loopback
+            .load(std::sync::atomic::Ordering::Relaxed)
+            .then_some(FarScope::Everything)
     }
 }
 
@@ -210,6 +226,7 @@ fn rig_with(label: &str, seconds: f64, clock: Arc<dyn Clock>, store: Arc<dyn Sto
         clock: clock.clone(),
         opened_for: Mutex::default(),
         tap_fails: Default::default(),
+        device_loopback: Default::default(),
         delivered: Default::default(),
     });
     let detector = Arc::new(FakeDetector::default());
@@ -2301,9 +2318,104 @@ fn unreadable_choices_are_set_aside_and_only_replaced_when_asked() {
         r#"{"cmd":"meetings.calls.set","app":"com.example.call","policy":"never","replace_unreadable":true,"id":"r"}"#,
     );
     let listed = d.answer("meetings.calls", "r");
-    assert!(listed.get("message").is_none(), "{listed}");
+    // Started over under Always: the default is Ask now, written, and said.
+    assert_eq!(listed["default"], "ask", "{listed}");
+    assert!(
+        listed["message"].as_str().unwrap().contains("Ask now"),
+        "{listed}"
+    );
+    assert_eq!(
+        store
+            .setting(ink_ffi::calls::DEFAULT_KEY)
+            .unwrap()
+            .as_deref(),
+        Some("ask")
+    );
     assert_eq!(listed["apps"][0]["policy"], "never");
     d.r.events.wait_type("meeting.detection_ended", WAIT);
     d.r.events.assert_valid();
     d.r.core.shutdown();
+}
+
+/// An Always app whose own sound cannot be recorded alone (the Mac's tap fails, so everything it
+/// plays would be recorded; or Windows hears it by loopback of its output device) is never
+/// recorded by itself: it is offered, saying why, and no meeting.started comes. Windows' plan
+/// says so before anything opens; the Mac's tap only once opened, so its capture is opened and
+/// closed unstarted. A tap on Record records it, as today, with the fallback said.
+#[test]
+fn an_always_app_that_cannot_be_recorded_alone_is_offered_instead() {
+    use std::sync::atomic::Ordering::Relaxed;
+    for (label, mac) in [("not-alone-mac", true), ("not-alone-win", false)] {
+        let d = Driven::new(label, memory_store());
+        if mac {
+            d.r.capture.tap_fails.store(true, Relaxed);
+        } else {
+            d.r.capture.device_loopback.store(true, Relaxed);
+        }
+        d.listening(true);
+        d.command(r#"{"cmd":"meetings.calls.set","app":"com.example.call","policy":"always"}"#);
+        d.hold("com.example.call", "Example Call");
+        let offered = d.r.events.wait_type("meeting.detected", WAIT);
+        assert_eq!(offered["app"], "com.example.call");
+        assert_eq!(
+            offered["message"].as_str(),
+            Some(ink_ffi::control::NOT_ALONE),
+            "{label}"
+        );
+        assert_eq!(
+            d.r.events.count("meeting.started"),
+            0,
+            "{label}: nothing started"
+        );
+        let opened: &[Option<String>] = if mac {
+            &[Some("com.example.call".to_owned())]
+        } else {
+            &[]
+        };
+        assert_eq!(
+            *d.r.capture.opened_for.lock().unwrap(),
+            opened,
+            "{label}: opened only where only opening tells, and never started"
+        );
+        // The user's tap records it, everything included, and says so.
+        d.command(r#"{"cmd":"meeting.start","app":"com.example.call"}"#);
+        let started = d.r.events.wait_type("meeting.started", WAIT);
+        assert!(started.get("auto").is_none());
+        assert_eq!(started["far_end"], "everything", "{label}");
+        d.command(r#"{"cmd":"meeting.stop"}"#);
+        d.r.events.wait_type("meeting.finished", WAIT);
+        d.r.events.assert_valid();
+        d.r.core.shutdown();
+    }
+}
+
+/// A meeting whose worker failed (its record could not be made, so it never started) refuses
+/// Stop and delete at once: the shell is never left waiting for a meeting.discarded that cannot
+/// come.
+#[test]
+fn a_meeting_that_failed_to_start_refuses_to_be_deleted() {
+    let store = FailingStore::new(Arc::new(ink_store::SqliteStore::open_in_memory().unwrap()));
+    let r = rig_with("discard-failed", 5.0, clock(), store.clone());
+    store.fail(&["create_record"]);
+    let run =
+        ink_ffi::meeting::MeetingRun::start(r.core.shared(), Vec::new(), Default::default(), None)
+            .unwrap();
+    let failed = r.events.wait_type("meeting.failed", WAIT);
+    assert!(
+        failed["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("the meeting could not start"),
+        "{failed}"
+    );
+    let until = std::time::Instant::now() + WAIT;
+    while !run.is_over() && std::time::Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(run.is_over());
+    assert!(!run.discard(), "refused: nothing will be deleted");
+    run.join();
+    assert_eq!(r.events.count("meeting.discarded"), 0);
+    r.events.assert_valid();
+    r.core.shutdown();
 }

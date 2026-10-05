@@ -290,7 +290,8 @@ impl DiscardGate {
         )
     }
 
-    /// **Worker**, out of the live phase: true to finish the meeting, false to delete it.
+    /// **Worker**, out of the live phase, or failing before it: true to finish the meeting (or
+    /// to fail it), false to delete it. Once it has answered, [`ask`](Self::ask) is false.
     fn finish(&self) -> bool {
         self.state
             .compare_exchange(OPEN, FINISHING, Ordering::AcqRel, Ordering::Acquire)
@@ -465,8 +466,10 @@ impl MeetingRun {
     /// it (then it is kept, and finished). Decided once, with the worker ([`DiscardGate`]), so the
     /// answer is what happens. The intent is written beside the audio at once, so a crash from
     /// here deletes it at the next launch rather than finishing it.
+    /// A worker that is over (it failed, panicked or finished) never deletes: false, so the shell
+    /// never waits for a `meeting.discarded` that cannot come.
     pub fn discard(&self) -> bool {
-        if !self.discard.ask() {
+        if self.is_over() || !self.discard.ask() {
             return false;
         }
         // Before the chain has started there is no record yet, and the worker writes the marker
@@ -943,6 +946,8 @@ fn worker(
         let mut chain = match MeetingChain::start(services, settings, vad, sink, start) {
             Ok(chain) => chain,
             Err(e) => {
+                // Decided: it fails (a delete asked now is refused, no meeting.discarded comes).
+                discard.finish();
                 let _ = go.send(None);
                 over.store(true, Ordering::Release);
                 failed(shared, None, &format!("the meeting could not start: {e}"));
@@ -1057,6 +1062,8 @@ fn worker(
         }
     }));
     if body.is_err() {
+        // Decided: it failed. A delete asked before this keeps its marker for the next launch.
+        discard.finish();
         over.store(true, Ordering::Release);
         // The payload is not logged: it could quote what was said (I5).
         log::error!("the meeting worker panicked; the meeting stops here");
@@ -1262,5 +1269,98 @@ mod tests {
         );
         core.shutdown();
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A meeting whose worker is over (here: nothing to capture, so it ends at once and its pass
+    /// finishes or fails) refuses Stop and delete: the shell is told at once, never left waiting
+    /// for a `meeting.discarded` that cannot come. The worker decided before it was over, so the
+    /// gate refuses too, whatever the order.
+    #[test]
+    fn a_meeting_whose_worker_is_over_refuses_to_be_deleted() {
+        let dir = std::env::temp_dir().join(format!("ink-ffi-over-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let clock = Arc::new(MockClock::new(5_000_000_000, 1_790_146_800_000));
+        let (core, events) = testing::core(clock, dir.clone());
+        let run =
+            MeetingRun::start(core.shared(), Vec::new(), MeetingInfo::default(), None).unwrap();
+        let until = Instant::now() + Duration::from_secs(10);
+        while !run.is_over() && Instant::now() < until {
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert!(run.is_over(), "{:?}", events.lock().unwrap());
+        assert!(!run.discard(), "over: refused");
+        assert!(
+            !run.discard.ask(),
+            "and decided by the worker before it was over"
+        );
+        run.join();
+        assert!(
+            !events
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|e| e["type"] == "meeting.discarded")
+        );
+        core.shutdown();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn marker_says_discard(dir: &Path) -> Option<bool> {
+        let text = std::fs::read_to_string(dir.join(crate::recovery::LIVE_FILE)).ok()?;
+        let v: Value = serde_json::from_str(&text).ok()?;
+        Some(v.get("discard").and_then(Value::as_bool) == Some(true))
+    }
+
+    #[test]
+    fn the_discard_gate_decides_once_between_the_user_and_the_worker() {
+        let g = DiscardGate::default();
+        assert!(g.ask());
+        assert!(g.ask(), "asked again: still deleted");
+        assert!(!g.finish(), "the worker deletes it");
+        let g = DiscardGate::default();
+        assert!(g.finish(), "the worker came out first");
+        assert!(!g.ask(), "kept, and the user is told");
+    }
+
+    #[test]
+    fn the_gate_writes_the_marker_the_decision_says() {
+        let dir = std::env::temp_dir().join(format!("ink-ffi-gate-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let record = RecordId("r".into());
+        let g = DiscardGate::default();
+        g.write_marker(&dir, &record).unwrap();
+        assert_eq!(marker_says_discard(&dir), Some(false), "open: live");
+        assert!(g.ask());
+        g.write_marker(&dir, &record).unwrap();
+        assert_eq!(
+            marker_says_discard(&dir),
+            Some(true),
+            "discarding: to be deleted"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The worker's first marker races the user's delete: once `ask` said it will be deleted, the
+    /// marker on disk always says so, whichever wrote last.
+    #[test]
+    fn a_delete_asked_is_never_overwritten_by_the_workers_first_marker() {
+        let root = std::env::temp_dir().join(format!("ink-ffi-gate-race-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let record = RecordId("r".into());
+        for i in 0..200 {
+            let dir = root.join(i.to_string());
+            std::fs::create_dir_all(&dir).unwrap();
+            let gate = Arc::new(DiscardGate::default());
+            let worker = {
+                let (gate, dir, record) = (gate.clone(), dir.clone(), record.clone());
+                thread::spawn(move || gate.write_marker(&dir, &record).unwrap())
+            };
+            assert!(gate.ask());
+            gate.write_marker(&dir, &record).unwrap();
+            worker.join().unwrap();
+            assert_eq!(marker_says_discard(&dir), Some(true), "round {i}");
+        }
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

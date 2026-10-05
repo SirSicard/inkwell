@@ -164,7 +164,8 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       the recording ends, no final pass runs, and the record and its audio are deleted as if
  *       never made ("meeting.stopped", then "meeting.discarded"). Later it is refused with code
  *       "delete_window_over": stop it, then delete it from the library. Its answer is what
- *       happens: refused when the meeting had already stopped and is being finished.
+ *       happens: refused when the meeting had already stopped and is being finished, or had
+ *       failed, so no "meeting.discarded" is waited for that cannot come.
  *   {"cmd":"meeting.dismiss","app":"<app id>"}
  *       "Not this one": the offer ends ("meeting.detection_ended" with "dismissed") and that app
  *       is not offered again until it releases the microphone.
@@ -189,14 +190,18 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       and set to always stays offered: send meeting.start for it ("Always for this app").
  *       Answers "meetings.calls" with the "id" as "ref". While the stored choices cannot be read
  *       ("meetings.calls" has a "message"), it is refused with code "list_unreadable" unless it
- *       says "replace_unreadable":true, which starts the list over with this choice.
+ *       says "replace_unreadable":true, which starts the list over with this choice (and, under
+ *       a default of always, sets the default to ask, said in the answer's "message").
  *   Detection listens while any app could be offered or recorded (the default call policy,
  *   "meetings.calls.default", is not never, or an app is chosen always or ask): "meeting.detection"
  *   says whether it listens. An app that has held the microphone for 3 s is offered
  *   ("meeting.detected"; "meeting.detection_ended" takes the offer back) when its policy is ask,
- *   recorded when it is always (offered instead, with a "message", when that start fails, or
- *   after the user stopped a recording by hand during this call), and left alone when it is
- *   never. Unasked "meetings.calls" says the list changed (a new app seen, the default set).
+ *   recorded when it is always (offered instead, with a "message", when that start fails or its
+ *   own sound cannot be recorded alone, so the recording would hold everything this computer
+ *   plays; and offered after the user stopped a recording by hand during this call), and left
+ *   alone when it is never. On Windows an app's identity is compared and kept in lowercase,
+ *   in every event and command. Unasked "meetings.calls" says the list changed (a new app seen,
+ *   the default set).
  *
  *   The screens' commands run on their own thread, in order among themselves, so a model update
  *   holding the commands above never delays them. Each answers with the event named, or

@@ -398,13 +398,18 @@ this call"; questions about a live meeting (`meeting.ask`) run on `ink-ask`.
     until that app releases the microphone.
   - **Always** records it at once, through the same start as Record, so the recording indicator,
     the Live screen and the meeting's end are the same; `meeting.started` says `auto`, and the
-    Drop keeps its reminder to tell the others. After the user stops one by hand, that call is
-    offered rather than recorded again, until the app lets go.
+    Drop keeps its reminder to tell the others. Only when the app's own sound can be recorded
+    alone: where it cannot (the Mac's tap finds no process for it, Windows hears it by loopback of
+    its output device), the recording would hold everything the computer plays, so it is offered
+    instead and the offer says why. Windows' plan says so before anything opens; the Mac's tap
+    only once opened, and its capture is closed again unstarted. After the user stops one by
+    hand, that call is offered rather than recorded again, until the app lets go.
   - **Never** neither offers nor records.
 
   Nothing records without the user's Record or an Always choice the core could read: a stored
-  list it cannot read is set aside, and Always is then Ask. Apps are keyed by the identity
-  detection reports (bundle id, executable), at most 64, each listed with its name for Settings
+  list it cannot read is set aside, and Always is then Ask; starting it over under a default of
+  Always sets the default to Ask. Apps are keyed by the identity detection reports (bundle id;
+  executable in lowercase on Windows), at most 64, each listed with its name for Settings
   (`meetings.calls`). The old switch "Offer to record calls" (`meetings.detect`) is the default
   now: off was migrated to Never at launch, and the setting answers for the default until the
   shells move. A meeting recorded for an app ends 15 s after the app lets go of the microphone;
@@ -418,7 +423,9 @@ this call"; questions about a live meeting (`meeting.ask`) run on `ink-ask`.
   language model), then the store's secure delete of the record and the removal of its audio
   directory. The intent is written into the crash marker first, so a crash on the way still
   deletes it at the next launch. After the minute only Stop is left (`delete_window_over`); the
-  record can be deleted from the library once it is finished.
+  record can be deleted from the library once it is finished. A meeting already being finished,
+  or whose worker failed, refuses it at once: which of the user and the worker decides is settled
+  once (`DiscardGate`), so the answer is what happens.
 - **Capture.** On the Mac: the routed mic's own IOProc (the built-in mic with Bluetooth output,
   unless `meetings.headset_mic`) and a process tap of the meeting's app, else of everything this
   Mac plays except Inkwell. On Windows: the routed mic (WASAPI), and for the far end process

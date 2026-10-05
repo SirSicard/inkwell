@@ -17,7 +17,7 @@
 //! | A meeting started without an app ("Record now") never ends by itself | there is nothing to watch |
 //! | Past the hold, an app's policy decides: Always records it at once ([`Action::Record`]), Ask offers it, Never does neither | the user chose for this app, in the Drop or in Settings |
 //! | An Always start goes through the same start as Record | so it shows, records and ends as a meeting the user started: nothing records unseen |
-//! | An Always app is offered instead, until it releases the mic, after the user stopped a recording by hand while it held the mic, when its start failed, when its recording ended by itself while it still held the mic, or when it already held the mic past the hold as its policy changed | recording again by itself would undo the user's stop, or start over and over; a failed start is said, and Record can try again; a click in Settings never starts a recording |
+//! | An Always app is offered instead, until it releases the mic, after the user stopped a recording by hand while it held the mic, when its start failed (or would record more than its own sound), when its recording ended by itself while it still held the mic, or when a policy change made it Always after its hold had passed | recording again by itself would undo the user's stop, or start over and over; a failed start is said, and Record can try again; a click in Settings never starts a recording |
 //! | An Always app past its hold is recorded even while another app is offered: that offer is withdrawn first | an unanswered question never keeps a call the user chose to record from being recorded |
 //! | A policy changed applies at once: the offered app set to Never is withdrawn as if dismissed; one set to Always stays offered; a held app that was Never is judged afresh (offered, never recorded) | the choice takes effect on this call; an offer being answered is the user's |
 //! | A policy never stops a recording | only the user, or its app letting go, does |
@@ -136,14 +136,21 @@ impl Detection {
     /// The policies changed at `now_ns` (see the module docs: they apply at once, and never stop
     /// a recording).
     pub fn set_policies(&mut self, policies: CallPolicies, now_ns: u64) -> Vec<Action> {
+        // An app the change makes Always, already past its hold by the clock: its call goes on
+        // now, so it is asked about, never recorded by the change. An app that was Always before
+        // keeps its place (one queued behind another recording is still recorded after it).
+        let became_always: Vec<String> = self
+            .held
+            .values()
+            .filter(|h| {
+                now_ns >= h.since_ns.saturating_add(ns(DETECT_HOLD))
+                    && self.policies.policy(&h.app.id) != CallPolicy::Always
+                    && policies.policy(&h.app.id) == CallPolicy::Always
+            })
+            .map(|h| h.app.id.clone())
+            .collect();
+        self.asked_instead.extend(became_always);
         self.policies = policies;
-        // A call already past its hold is asked about, never recorded by the change.
-        self.asked_instead.extend(
-            self.held
-                .values()
-                .filter(|h| h.seen)
-                .map(|h| h.app.id.clone()),
-        );
         let mut actions = Vec::new();
         if let Some(offered) = &self.offered
             && self.policies.policy(&offered.id) == CallPolicy::Never
@@ -686,6 +693,27 @@ mod tests {
                 .is_empty()
         );
         assert_eq!(d.tick(3 * S), vec![Action::Record(app("meet"))]);
+    }
+
+    #[test]
+    fn an_always_app_queued_behind_a_recording_is_still_recorded_after_an_unrelated_change() {
+        let mut d = with(CallPolicy::Ask, &[("zoom", CallPolicy::Always)]);
+        d.started(None, 0);
+        d.signal(uses("zoom"), S);
+        assert!(d.tick(10 * S).is_empty(), "one meeting at a time");
+        assert!(
+            d.set_policies(
+                policies(
+                    CallPolicy::Ask,
+                    &[("zoom", CallPolicy::Always), ("chat", CallPolicy::Never)]
+                ),
+                20 * S
+            )
+            .is_empty()
+        );
+        // The first ends by itself (not by hand): Zoom, Always all along, is recorded.
+        d.ended(false);
+        assert_eq!(d.tick(30 * S), vec![Action::Record(app("zoom"))]);
     }
 
     #[test]

@@ -33,7 +33,7 @@ use ink_core::{AppRef, EventSink, MeetingDetector, MeetingSignal, RecordId};
 use serde_json::Value;
 
 use crate::calls::{CallPolicies, CallPolicy, Seen};
-use crate::capture::MeetingCapture;
+use crate::capture::{FarScope, MeetingCapture};
 use crate::detection::{Action, DELETE_WINDOW, Detection};
 use crate::events::{self, event};
 use crate::meeting::{Ending, MeetingInfo};
@@ -42,6 +42,41 @@ use crate::runtime::{Runs, Shared, lock, start_meeting};
 /// The switch "Offer to record calls" (`on`, the default, or `off`), which the default call policy
 /// replaces: off is Never ([`crate::calls`], which migrates it and answers for it).
 pub const DETECT_KEY: &str = "meetings.detect";
+
+/// Why an Always app is offered rather than recorded when its own sound cannot be recorded alone
+/// (the Mac's fallback to everything it plays, or Windows' device loopback): `meeting.detected`'s
+/// message. A recording that takes in other apps' sound, and other people's, starts only on a tap.
+pub const NOT_ALONE: &str =
+    "Inkwell can only record everything this computer plays for this app, so it asks first";
+
+/// Why [`State::open_and_start`] started nothing.
+enum NotStarted {
+    /// An Always app's far end would not be the app alone ([`NOT_ALONE`]): nothing was started,
+    /// and capture, if it was opened to learn so, is closed again.
+    NotAlone,
+    /// The start failed: why (the platform's words, never audio).
+    Failed(String),
+}
+
+impl From<String> for NotStarted {
+    fn from(why: String) -> Self {
+        Self::Failed(why)
+    }
+}
+
+/// `signal` with its app's identity as the core keeps it ([`crate::calls::identity`]: lowercased
+/// on Windows), so detection, the policies and every event compare and say it one way.
+fn identified(signal: MeetingSignal) -> MeetingSignal {
+    let keep = |app: AppRef| AppRef {
+        id: crate::calls::identity(&app.id),
+        ..app
+    };
+    match signal {
+        MeetingSignal::MicInUse { app } => MeetingSignal::MicInUse { app: keep(app) },
+        MeetingSignal::MicReleased { app } => MeetingSignal::MicReleased { app: keep(app) },
+        other => other,
+    }
+}
 
 /// The setting: record the Bluetooth headset's own mic, not the built-in one (`on` or `off`, the
 /// default).
@@ -274,10 +309,14 @@ impl State {
 
     fn handle(&mut self, msg: Msg) {
         match msg {
-            Msg::Start { id, app, title } => self.start(id.as_deref(), app, title),
+            Msg::Start { id, app, title } => {
+                let app = app.as_deref().map(crate::calls::identity);
+                self.start(id.as_deref(), app, title);
+            }
             Msg::Stop { id } => self.stop(id.as_deref()),
             Msg::Discard { id } => self.discard(id.as_deref()),
             Msg::Dismiss { id, app } => {
+                let app = crate::calls::identity(&app);
                 let offered = self.detection.offered().is_some_and(|o| o.id == app);
                 self.detection.dismiss(&app);
                 if offered {
@@ -307,7 +346,7 @@ impl State {
             } => self.choose(id.as_deref(), &app, policy, replace_unreadable),
             Msg::Signal(signal) => {
                 let now = self.shared.clock.now_ns();
-                let actions = self.detection.signal(signal, now);
+                let actions = self.detection.signal(identified(signal), now);
                 self.act(actions);
             }
             Msg::CaptureEnded { by_hand } => {
@@ -476,14 +515,21 @@ impl State {
             );
         }
         let mut next = self.policies.clone();
-        if let Err(e) = next.choose(app, policy) {
-            return self.failed(NAME, id, &e);
+        let lowered = match next.choose(app, policy) {
+            Ok(lowered) => lowered,
+            Err(e) => return self.failed(NAME, id, &e),
+        };
+        // The default is the queries thread's to write: lowered here only while the store still
+        // says Always, so a default the user set meanwhile stands (its reload follows this).
+        let lowered = lowered
+            && crate::calls::read_default(self.shared.store.as_ref()) == Ok(CallPolicy::Always);
+        let list = next.to_json();
+        // The list and, when starting over lowered it, the default: both or neither.
+        let mut writes = vec![(crate::calls::APPS_KEY, list.as_str())];
+        if lowered {
+            writes.push((crate::calls::DEFAULT_KEY, CallPolicy::Ask.name()));
         }
-        if let Err(e) = self
-            .shared
-            .store
-            .set_setting(crate::calls::APPS_KEY, &next.to_json())
-        {
+        if let Err(e) = self.shared.store.set_settings(&writes) {
             return self.failed(NAME, id, &format!("couldn't save the choice: {e}"));
         }
         self.policies = next;
@@ -495,9 +541,22 @@ impl State {
         if self.listening {
             self.act(actions);
         }
-        self.shared
-            .events
-            .emit(crate::calls::listing(&self.policies, id));
+        let mut answer = crate::calls::listing(&self.policies, id);
+        if lowered {
+            log::info!("call policies: started over under Always; the default is Ask now");
+            answer["message"] = "the stored choices could not be read and were started over; the \
+                default was Always and is Ask now: set it to Always again to record every app"
+                .into();
+            // For a screen that shows the default (the queries thread answers it the same way).
+            self.shared.events.emit(event(
+                "setting.value",
+                &[
+                    ("key", Some(crate::calls::DEFAULT_KEY.into())),
+                    ("value", Some(CallPolicy::Ask.name().into())),
+                ],
+            ));
+        }
+        self.shared.events.emit(answer);
     }
 
     /// Starts or stops detection, and says so: every change, the first state (off included), and
@@ -570,19 +629,32 @@ impl State {
                 pid: None,
             },
         });
-        if let Err(e) = self.open_and_start(app, title, false) {
-            self.failed("meeting.start", id, &e);
+        match self.open_and_start(app, title, false) {
+            Ok(()) => {}
+            // Never for a start the user made: only a policy's start is refused for its scope.
+            Err(NotStarted::NotAlone) => self.failed("meeting.start", id, NOT_ALONE),
+            Err(NotStarted::Failed(e)) => self.failed("meeting.start", id, &e),
         }
     }
 
     /// [`Action::Record`]: an Always app's call, started exactly as `meeting.start` starts one
     /// (the same capture, record, events and end), with `auto` in `meeting.started`. A start that
-    /// fails is offered instead, with why.
+    /// fails, or would record more than the app's own sound, is offered instead, with why.
     fn record(&mut self, app: AppRef) {
         log::info!("meeting detection: an app the user always records holds the microphone");
         if let Err(e) = self.open_and_start(Some(app.clone()), None, true) {
-            log::warn!("meeting detection: the recording did not start by itself: {e}");
-            self.auto_failure = Some(format!("couldn't start recording by itself: {e}"));
+            self.auto_failure = Some(match e {
+                NotStarted::NotAlone => {
+                    log::info!(
+                        "meeting detection: an Always app's sound cannot be recorded alone; asking"
+                    );
+                    NOT_ALONE.to_owned()
+                }
+                NotStarted::Failed(e) => {
+                    log::warn!("meeting detection: the recording did not start by itself: {e}");
+                    format!("couldn't start recording by itself: {e}")
+                }
+            });
             let actions = self.detection.start_failed(&app);
             self.act(actions);
             // Said with the offer only; none came (the app let go meanwhile).
@@ -591,19 +663,30 @@ impl State {
     }
 
     /// Opens capture and starts the meeting, for `app` or none; `auto` when its policy started
-    /// it. Tells detection it started.
+    /// it, which it does only when the far end is the app alone. Tells detection it started.
     fn open_and_start(
         &mut self,
         app: Option<AppRef>,
         title: Option<String>,
         auto: bool,
-    ) -> Result<(), String> {
+    ) -> Result<(), NotStarted> {
         if lock(&self.runs)
             .meeting
             .as_ref()
             .is_some_and(|m| !m.is_over())
         {
-            return Err("a meeting is already running".into());
+            return Err(NotStarted::Failed("a meeting is already running".into()));
+        }
+        // Decided before anything opens where the platform knows (Windows' plan: device loopback
+        // for every app but Zoom and the browsers).
+        if auto
+            && let Some(app) = &app
+            && self
+                .capture
+                .planned_far(app)
+                .is_some_and(|far| far != FarScope::App)
+        {
+            return Err(NotStarted::NotAlone);
         }
         let headset_mic = self
             .shared
@@ -614,6 +697,14 @@ impl State {
             .as_deref()
             == Some("on");
         let opened = self.capture.open(app.as_ref(), headset_mic)?;
+        // Otherwise known only once opened (the Mac's tap may find no process for the app; Zoom
+        // or a browser on Windows may not be running), and decided before anything starts: the
+        // sides are opened, not started, and dropping them closes them. No meeting.started is
+        // said.
+        if auto && opened.far != FarScope::App {
+            drop(opened);
+            return Err(NotStarted::NotAlone);
+        }
         let window_ms = i64::try_from(DELETE_WINDOW.as_millis()).unwrap_or(i64::MAX);
         let info = MeetingInfo {
             title,
@@ -655,7 +746,12 @@ impl State {
                 Some("delete_window_over"),
             );
         }
-        // The answer is what happens: deleted, or (its worker already finishing it) kept.
+        // The answer is what happens: deleted, or (its worker already finishing it, or over)
+        // kept. Asked under the runs lock, which `discard` holds while it writes and syncs the
+        // crash marker (a write, two syncs and a rename: milliseconds). No deadlock: the worker
+        // takes the marker's lock but never the runs lock, so the two are only ever taken in
+        // this order. The cost is a short stall for whatever waits on the runs lock meanwhile (a
+        // start, a replay, recovery's look at the live record).
         let deleted = lock(&self.runs).meeting.as_ref().map(|m| m.discard());
         match deleted {
             Some(true) => {
@@ -666,7 +762,7 @@ impl State {
             Some(false) => self.failed(
                 NAME,
                 id,
-                "the meeting had already stopped and is being finished: delete it from the library",
+                "the meeting had already stopped, or failed: delete it from the library once it is there",
             ),
             None => self.failed(NAME, id, "no meeting is being recorded"),
         }
@@ -782,4 +878,36 @@ fn recovery_round(shared: &Arc<Shared>, live: Option<&RecordId>) {
         "meetings.recovered",
         &[("meetings", Some(recovered.into()))],
     ));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Where an identity enters the core it is kept one way: lowercased on Windows, as Windows
+    /// compares executables, and as given elsewhere; the name always as given.
+    #[test]
+    fn a_signals_identity_is_kept_as_the_core_compares_it() {
+        let app = AppRef {
+            id: "Zoom.EXE".into(),
+            name: "Zoom Workplace".into(),
+            pid: Some(7),
+        };
+        let MeetingSignal::MicInUse { app: kept } = identified(MeetingSignal::MicInUse { app })
+        else {
+            panic!("the same signal");
+        };
+        let id = if cfg!(windows) {
+            "zoom.exe"
+        } else {
+            "Zoom.EXE"
+        };
+        assert_eq!(kept.id, id);
+        assert_eq!(kept.name, "Zoom Workplace");
+        assert_eq!(kept.pid, Some(7));
+        let lost = MeetingSignal::Lost {
+            reason: "gone".into(),
+        };
+        assert!(matches!(identified(lost), MeetingSignal::Lost { .. }));
+    }
 }

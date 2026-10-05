@@ -4,15 +4,21 @@
 //!
 //! | Setting | Holds | Written by |
 //! |---|---|---|
-//! | [`DEFAULT_KEY`] | `ask` (also when unset), `always` or `never` | the shell, through `setting.set` (the queries thread) |
+//! | [`DEFAULT_KEY`] | `ask` (also when unset), `always` or `never` | the shell, through `setting.set` (the queries thread); and the meetings thread once, lowering Always to Ask as a list set aside is started over |
 //! | [`APPS_KEY`] | the apps seen and chosen for, as JSON | the meetings thread alone: `meetings.calls.set`, and the apps detection sees |
 //!
-//! Two keys, two writers: neither ever reads, changes and writes back what the other holds.
+//! Two keys, two writers: neither ever reads, changes and writes back what the other holds, but
+//! for that one lowering, which reads the stored default just before it writes (with the list,
+//! in one transaction) and writes only over Always. The store has no compare-and-set, so a
+//! default set in the instant between is lost to Ask: never to Always.
 //!
 //! - **Keyed by identity.** An app is the identity detection reports ([`AppRef::id`]: the bundle
-//!   id on the Mac, the executable on Windows), never its name, which only labels it. An identity
-//!   is 1 to [`MAX_APP_ID_BYTES`] bytes, without control or invisible format characters (bidi
-//!   overrides, zero-width marks) or white space at either end; names lose the same characters.
+//!   id on the Mac, the executable on Windows), never its name, which only labels it. On Windows
+//!   it is lowercased where it enters the core ([`identity`]), as Windows compares executables
+//!   without case (`Zoom.exe` and `zoom.exe` are one app, so a Never cannot be missed by a change
+//!   of case); its name is kept as given. An identity is 1 to [`MAX_APP_ID_BYTES`] bytes once
+//!   lowercased, without control or invisible format characters (bidi overrides, zero-width
+//!   marks) or white space at either end; names lose the same characters.
 //! - **Bounded.** At most [`MAX_APPS`] apps. A newly seen app beyond that takes the place of the
 //!   least recently seen app the user has not chosen for; one the user chose for is never pushed
 //!   out, and a choice for a new app when every place holds a choice is refused.
@@ -20,8 +26,10 @@
 //!   overwritten by what detection sees, and said in `meetings.calls`), and every app follows the
 //!   default with Always lowered to Ask: nothing records without a choice the core could read. A
 //!   choice then is refused (`list_unreadable`) unless it says to start the list over
-//!   (`replace_unreadable`), so no choice is lost without the user agreeing. A default that cannot
-//!   be read stops detection, as the switch it replaces did.
+//!   (`replace_unreadable`), so no choice is lost without the user agreeing. Starting over under
+//!   a default of Always lowers the default to Ask, written with the new list: the lost list may
+//!   have held the Nevers that kept apps out of Always, so the user sets Always again knowingly.
+//!   A default that cannot be read stops detection, as the switch it replaces did.
 //! - **The switch it replaces.** `meetings.detect` ("Offer to record calls") is the default now:
 //!   off is Never, on is Ask. [`migrate`] writes its stored value into [`DEFAULT_KEY`] once, at
 //!   launch, and the default is read from it while [`DEFAULT_KEY`] is unset. Until the shells move
@@ -52,6 +60,26 @@ pub const MAX_APP_ID_BYTES: usize = 255;
 
 /// The longest app name kept, in characters; a longer one is cut.
 pub const MAX_APP_NAME_CHARS: usize = 80;
+
+/// Whether identities are compared without case: on Windows, as it compares executables.
+const FOLD_CASE: bool = cfg!(windows);
+
+/// `app` as the core keeps an app's identity: lowercased on Windows ([`FOLD_CASE`]), as it is
+/// where it enters the core (detection's signals, the commands naming an app), so every
+/// comparison and every event says it one way. The platform's own lookups by executable ignore
+/// case, so the lowercased identity still finds the app's process and its output.
+pub fn identity(app: &str) -> String {
+    fold(app, FOLD_CASE)
+}
+
+/// `app`, lowercased when `on`.
+fn fold(app: &str, on: bool) -> String {
+    if on {
+        app.to_lowercase()
+    } else {
+        app.to_owned()
+    }
+}
 
 /// What happens when an app holds the microphone past detection's hold.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -120,6 +148,8 @@ pub struct CallPolicies {
     apps: BTreeMap<String, CallApp>,
     /// Why the stored list could not be read, while it is set aside.
     unreadable: Option<String>,
+    /// Identities kept and compared in lowercase ([`FOLD_CASE`]; tests set it either way).
+    fold_case: bool,
 }
 
 impl Default for CallPolicies {
@@ -136,7 +166,21 @@ impl CallPolicies {
             default,
             apps: BTreeMap::new(),
             unreadable: None,
+            fold_case: FOLD_CASE,
         }
+    }
+
+    /// As [`new`](Self::new), with identities compared without case or not, whatever the OS.
+    #[cfg(test)]
+    pub(crate) fn folding_case(mut self, fold: bool) -> Self {
+        self.fold_case = fold;
+        self
+    }
+
+    /// `app` as the list keys it. Checked after ([`check_app`]): lowercasing can lengthen an
+    /// identity, so the limit applies to what is kept.
+    fn key(&self, app: &str) -> String {
+        fold(app, self.fold_case)
     }
 
     /// `default` for every app, with the stored list set aside because of `why`.
@@ -157,7 +201,7 @@ impl CallPolicies {
     pub fn policy(&self, app: &str) -> CallPolicy {
         let policy = self
             .apps
-            .get(app)
+            .get(&self.key(app))
             .and_then(|a| a.policy)
             .unwrap_or(self.default);
         if self.unreadable.is_some() && policy == CallPolicy::Always {
@@ -193,21 +237,29 @@ impl CallPolicies {
     }
 
     /// The user chose `policy` for `app` (`None`: it follows the default again). A list set
-    /// aside is started over with this choice. Refused for an identity the list does not take,
-    /// and for a new app when every place holds a choice.
-    pub fn choose(&mut self, app: &str, policy: Option<CallPolicy>) -> Result<(), String> {
-        check_app(app)?;
+    /// aside is started over with this choice (the caller asked the user first), and a default of
+    /// Always is lowered to Ask then: true when it was, and the caller writes the default with the
+    /// list. Refused for an identity the list does not take, and for a new app when every place
+    /// holds a choice.
+    pub fn choose(&mut self, app: &str, policy: Option<CallPolicy>) -> Result<bool, String> {
+        let app = self.key(app);
+        check_app(&app)?;
+        let mut lowered = false;
         if self.unreadable.take().is_some() {
             log::warn!("call policies: the unreadable list was started over by a choice");
             self.apps.clear();
+            if self.default == CallPolicy::Always {
+                self.default = CallPolicy::Ask;
+                lowered = true;
+            }
         }
-        if let Some(entry) = self.apps.get_mut(app) {
+        if let Some(entry) = self.apps.get_mut(&app) {
             entry.policy = policy;
-            return Ok(());
+            return Ok(lowered);
         }
         if policy.is_none() {
             // Nothing chosen, and nothing to clear.
-            return Ok(());
+            return Ok(lowered);
         }
         if !self.make_room() {
             return Err(format!(
@@ -215,24 +267,25 @@ impl CallPolicies {
             ));
         }
         self.apps.insert(
-            app.to_owned(),
+            app.clone(),
             CallApp {
-                id: app.to_owned(),
+                id: app,
                 name: None,
                 policy,
                 seen_unix_ms: None,
             },
         );
-        Ok(())
+        Ok(lowered)
     }
 
     /// Detection saw `app` hold the microphone past its hold, at `now_unix_ms`.
     pub fn seen(&mut self, app: &AppRef, now_unix_ms: i64) -> Seen {
-        if self.unreadable.is_some() || check_app(&app.id).is_err() {
+        let id = self.key(&app.id);
+        if self.unreadable.is_some() || check_app(&id).is_err() {
             return Seen::NotKept;
         }
         let name = clean_name(&app.name);
-        if let Some(entry) = self.apps.get_mut(&app.id) {
+        if let Some(entry) = self.apps.get_mut(&id) {
             entry.seen_unix_ms = Some(now_unix_ms);
             if name.is_some() && entry.name != name {
                 entry.name = name;
@@ -245,9 +298,9 @@ impl CallPolicies {
             return Seen::NotKept;
         }
         self.apps.insert(
-            app.id.clone(),
+            id.clone(),
             CallApp {
-                id: app.id.clone(),
+                id,
                 name,
                 policy: None,
                 seen_unix_ms: Some(now_unix_ms),
@@ -307,6 +360,11 @@ impl CallPolicies {
     /// identity refused, a policy unknown, a duplicate, more than [`MAX_APPS`]) refuses it all: a
     /// list read in part could drop a Never and record what the user said not to.
     pub fn from_json(default: CallPolicy, text: &str) -> Result<Self, String> {
+        Self::from_json_in(Self::new(default), text)
+    }
+
+    /// [`from_json`](Self::from_json) into `empty`, which says how identities compare.
+    fn from_json_in(empty: Self, text: &str) -> Result<Self, String> {
         let v: Value =
             serde_json::from_str(text).map_err(|_| "the stored list is not JSON".to_owned())?;
         let entries = v
@@ -322,7 +380,8 @@ impl CallPolicies {
                 .get("app")
                 .and_then(Value::as_str)
                 .ok_or("a stored app has no identity")?;
-            check_app(id).map_err(|e| format!("a stored app: {e}"))?;
+            let id = empty.key(id);
+            check_app(&id).map_err(|e| format!("a stored app: {e}"))?;
             let policy = match entry.get("policy") {
                 None => None,
                 Some(p) => Some(
@@ -340,20 +399,16 @@ impl CallPolicies {
                 Some(t) => Some(t.as_i64().ok_or("a stored app's time is not a number")?),
             };
             let app = CallApp {
-                id: id.to_owned(),
+                id: id.clone(),
                 name,
                 policy,
                 seen_unix_ms,
             };
-            if apps.insert(id.to_owned(), app).is_some() {
+            if apps.insert(id, app).is_some() {
                 return Err("the stored list names an app twice".into());
             }
         }
-        Ok(Self {
-            default,
-            apps,
-            unreadable: None,
-        })
+        Ok(Self { apps, ..empty })
     }
 }
 
@@ -374,20 +429,53 @@ pub fn check_app(app: &str) -> Result<(), String> {
 }
 
 /// A character that reads as nothing or reorders what follows: a control character, a line or
-/// paragraph separator, a bidi mark or override, a zero-width mark, a soft hyphen. Kept out of
-/// identities and names, so two apps never look alike in the list.
+/// paragraph separator, any of Unicode's format characters (category Cf: bidi marks and
+/// overrides, zero-width marks and joiners, the soft hyphen, the interlinear annotation marks,
+/// tags, the Arabic and other prepended number marks), and what draws as nothing besides: the
+/// grapheme joiner, the variation selectors, the Hangul fillers, the blank Braille pattern.
+/// Refused in identities and dropped from names, so two apps never look alike in the list. By
+/// hand, as of Unicode 16: no crate in the lock gives the categories.
 fn hidden(c: char) -> bool {
     c.is_control()
         || matches!(
             c,
+            // Cf.
             '\u{00AD}'
+                | '\u{0600}'..='\u{0605}'
                 | '\u{061C}'
+                | '\u{06DD}'
+                | '\u{070F}'
+                | '\u{0890}'..='\u{0891}'
+                | '\u{08E2}'
                 | '\u{180E}'
                 | '\u{200B}'..='\u{200F}'
-                | '\u{2028}'..='\u{202E}'
+                | '\u{202A}'..='\u{202E}'
                 | '\u{2060}'..='\u{2064}'
                 | '\u{2066}'..='\u{206F}'
                 | '\u{FEFF}'
+                | '\u{FFF9}'..='\u{FFFB}'
+                | '\u{110BD}'
+                | '\u{110CD}'
+                | '\u{13430}'..='\u{1343F}'
+                | '\u{1BCA0}'..='\u{1BCA3}'
+                | '\u{1D173}'..='\u{1D17A}'
+                | '\u{E0001}'
+                | '\u{E0020}'..='\u{E007F}'
+                // Zl and Zp.
+                | '\u{2028}'..='\u{2029}'
+                // Not Cf, and drawn as nothing: the grapheme joiner, the variation selectors
+                // (and the tag block's unassigned rest), the Hangul fillers, blank Braille.
+                | '\u{034F}'
+                | '\u{180B}'..='\u{180D}'
+                | '\u{180F}'
+                | '\u{FE00}'..='\u{FE0F}'
+                | '\u{E0100}'..='\u{E01EF}'
+                | '\u{E0000}'
+                | '\u{E0002}'..='\u{E001F}'
+                | '\u{115F}'..='\u{1160}'
+                | '\u{3164}'
+                | '\u{FFA0}'
+                | '\u{2800}'
         )
 }
 
@@ -609,6 +697,14 @@ mod tests {
             "a\u{7}b",
             "zo\u{202E}om",
             "zo\u{200B}om",
+            "zo\u{200D}om",
+            "zo\u{FE0F}om",
+            "zo\u{E0041}om",
+            "zo\u{0600}om",
+            "zo\u{1D173}om",
+            "zo\u{E0100}om",
+            "zo\u{2029}om",
+            "\u{3164}",
             &"x".repeat(256),
         ] {
             let e = p.choose(bad, Some(CallPolicy::Always)).unwrap_err();
@@ -734,11 +830,15 @@ mod tests {
         assert_eq!(p.policy("chat"), CallPolicy::Ask);
         assert_eq!(p.seen(&app("zoom", "Zoom"), 1), Seen::NotKept);
         assert!(listing(&p, None)["message"].is_string());
-        // A choice starts the list over.
-        p.choose("zoom", Some(CallPolicy::Always)).unwrap();
+        // A choice starts the list over, and the default of Always is lowered to Ask with it.
+        assert_eq!(p.choose("zoom", Some(CallPolicy::Always)), Ok(true));
         assert!(p.unreadable().is_none());
         assert_eq!(p.policy("zoom"), CallPolicy::Always);
-        assert_eq!(p.policy("chat"), CallPolicy::Always, "the default again");
+        assert_eq!(
+            p.policy("chat"),
+            CallPolicy::Ask,
+            "never Always for all by a start over"
+        );
     }
 
     #[test]
@@ -826,5 +926,80 @@ mod tests {
             ])
         );
         assert!(v.get("message").is_none());
+    }
+
+    #[test]
+    fn on_windows_an_identity_is_one_app_whatever_its_case() {
+        let mut p = CallPolicies::new(CallPolicy::Always).folding_case(true);
+        p.choose("Zoom.exe", Some(CallPolicy::Never)).unwrap();
+        assert_eq!(p.policy("zoom.exe"), CallPolicy::Never);
+        assert_eq!(
+            p.policy("ZOOM.EXE"),
+            CallPolicy::Never,
+            "a Never is never missed"
+        );
+        assert_eq!(p.seen(&app("zoom.EXE", "Zoom Workplace"), 1), Seen::Renamed);
+        let apps = p.apps();
+        assert_eq!(apps.len(), 1);
+        assert_eq!(apps[0].id, "zoom.exe", "kept in lowercase");
+        assert_eq!(
+            apps[0].name.as_deref(),
+            Some("Zoom Workplace"),
+            "the name as given"
+        );
+        let stored = CallPolicies::new(CallPolicy::Ask).folding_case(true);
+        let twice = r#"{"apps": [{"app": "Zoom.exe"}, {"app": "zoom.exe"}]}"#;
+        assert!(CallPolicies::from_json_in(stored.clone(), twice).is_err());
+        let back = CallPolicies::from_json_in(stored, &p.to_json()).unwrap();
+        assert_eq!(back.policy("ZOOM.exe"), CallPolicy::Never);
+        // The Mac's bundle ids keep their case, as the platform reports them.
+        let mut mac = CallPolicies::new(CallPolicy::Ask).folding_case(false);
+        mac.choose("us.zoom.xos", Some(CallPolicy::Never)).unwrap();
+        assert_eq!(mac.policy("US.ZOOM.XOS"), CallPolicy::Ask);
+        assert_eq!(fold("Zoom.EXE", true), "zoom.exe");
+        assert_eq!(fold("Zoom.EXE", false), "Zoom.EXE");
+    }
+
+    /// Lowercasing can lengthen an identity ('İ' is two bytes, its lowercase three): the limit
+    /// applies to what is kept, so a list written is never one the next launch refuses.
+    #[test]
+    fn the_identity_limit_applies_once_lowercased() {
+        let long = "\u{130}".repeat(MAX_APP_ID_BYTES / 2);
+        assert!(check_app(&long).is_ok(), "fits as given");
+        assert!(fold(&long, true).len() > MAX_APP_ID_BYTES);
+        let mut win = CallPolicies::new(CallPolicy::Ask).folding_case(true);
+        assert!(win.choose(&long, Some(CallPolicy::Never)).is_err());
+        assert_eq!(win.seen(&app(&long, "Long"), 1), Seen::NotKept);
+        assert!(win.apps().is_empty());
+        let stored = json!({"apps": [{"app": long}]}).to_string();
+        assert!(CallPolicies::from_json_in(win.clone(), &stored).is_err());
+        let mut mac = CallPolicies::new(CallPolicy::Ask).folding_case(false);
+        assert!(mac.choose(&long, Some(CallPolicy::Never)).is_ok());
+    }
+
+    #[test]
+    fn starting_over_under_a_default_of_always_lowers_it_to_ask() {
+        let mut p = CallPolicies::set_aside(CallPolicy::Always, "unreadable".into());
+        assert_eq!(p.choose("zoom", Some(CallPolicy::Always)), Ok(true));
+        assert_eq!(p.default_policy(), CallPolicy::Ask);
+        assert_eq!(
+            p.policy("other"),
+            CallPolicy::Ask,
+            "never Always for all by a start over"
+        );
+        assert_eq!(p.policy("zoom"), CallPolicy::Always, "the choice made");
+        let mut p = CallPolicies::set_aside(CallPolicy::Never, "unreadable".into());
+        assert_eq!(p.choose("zoom", Some(CallPolicy::Ask)), Ok(false));
+        assert_eq!(p.default_policy(), CallPolicy::Never);
+        let mut readable = CallPolicies::new(CallPolicy::Always);
+        assert_eq!(readable.choose("zoom", Some(CallPolicy::Never)), Ok(false));
+        assert_eq!(readable.default_policy(), CallPolicy::Always);
+    }
+
+    #[test]
+    fn names_drop_joiners_and_blanks_that_draw_as_nothing() {
+        let mut p = CallPolicies::default();
+        p.seen(&app("a", "Te\u{200D}am\u{FE0F}s\u{3164}\u{2800}"), 1);
+        assert_eq!(p.apps()[0].name.as_deref(), Some("Teams"));
     }
 }

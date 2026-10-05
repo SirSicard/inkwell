@@ -91,6 +91,14 @@ pub trait MeetingCapture: Send + Sync {
     /// **Worker.** The mic and the far end for a meeting with `app` (`None`: everything this
     /// machine plays), opened and not started. `headset_mic`: the user's setting.
     fn open(&self, app: Option<&AppRef>, headset_mic: bool) -> Result<Opened, String>;
+
+    /// **Worker.** What the far end of `app` would record, when the platform knows without
+    /// opening anything: on Windows, everything for an app its plan gives device loopback.
+    /// `None` when only [`open`](Self::open) can tell (the default; the Mac's tap may find no
+    /// process for the app, and an app given process loopback may not be running).
+    fn planned_far(&self, _app: &AppRef) -> Option<FarScope> {
+        None
+    }
 }
 
 /// No devices: a platform without capture, or a test core.
@@ -419,6 +427,16 @@ mod win {
     }
 
     impl MeetingCapture for WinMeetingCapture {
+        fn planned_far(&self, app: &AppRef) -> Option<FarScope> {
+            // The plan's own list, compared as it compares it: any other app is heard by device
+            // loopback, whatever runs. One on the list is known only once opened (not running:
+            // everything instead).
+            let alone = ink_platform_win::capture::PROCESS_LOOPBACK_APPS
+                .iter()
+                .any(|exe| exe.eq_ignore_ascii_case(&app.id));
+            (!alone).then_some(FarScope::Everything)
+        }
+
         fn open(&self, app: Option<&AppRef>, headset_mic: bool) -> Result<Opened, String> {
             let (device, why) = self
                 .devices

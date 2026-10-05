@@ -382,7 +382,7 @@ public sealed record CallApp
 {
     /// <summary>
     /// Its identity, as detection reports it: a bundle id on the Mac, the executable (or the
-    /// package's app id) on Windows.
+    /// package's app id) on Windows, where it is kept in lowercase.
     /// </summary>
     [JsonPropertyName("app")]
     public required string App { get; init; }
@@ -2433,10 +2433,11 @@ public sealed record MeetingCommitments : InkEvent
 /// <summary>
 /// An app has held the microphone long enough to be a call, and no meeting is being recorded:
 /// the shell offers to record it (the consent Drop), and records only if the user says so
-/// (meeting.start with this app). Its policy is Ask (meetings.calls), or Always with a start
-/// that failed (message says why) or with a recording the user stopped by hand during this
-/// call. The Drop can also set the app's policy (meetings.calls.set): Always (then
-/// meeting.start) or Never.
+/// (meeting.start with this app). Its policy is Ask (meetings.calls), or Always when its
+/// recording could not start by itself (message says why: a start that failed, or a far end
+/// that would not be the app's sound alone), when the user stopped a recording by hand during
+/// this call, or when the app was made Always during this call. The Drop can also set the app's
+/// policy (meetings.calls.set): Always (then meeting.start) or Never.
 /// </summary>
 public sealed record MeetingDetected : InkEvent
 {
@@ -2453,8 +2454,11 @@ public sealed record MeetingDetected : InkEvent
     public required string AppName { get; init; }
 
     /// <summary>
-    /// Why it is offered rather than recorded, when its policy is Always and the recording
-    /// could not start by itself (the platform's error). Never content.
+    /// Why it is offered rather than recorded, when its policy is Always: its recording could
+    /// not start by itself (the platform's error), or its own sound cannot be recorded alone,
+    /// so the recording would hold everything this computer plays (the Mac's fallback, Windows'
+    /// device loopback): an Always app is recorded by itself only when its sound alone is.
+    /// Never content.
     /// </summary>
     [JsonPropertyName("message")]
     public string? Message { get; init; }
@@ -3014,7 +3018,8 @@ public sealed record MeetingStarted : InkEvent
     /// <summary>
     /// True when the app's call policy (Always) started it, without a tap: the shell says so
     /// where the recording shows, keeps the reminder to tell the others, and offers Stop and
-    /// Stop and delete. Absent for a start the user made.
+    /// Stop and delete. Absent for a start the user made. A policy start always records the
+    /// app's own sound alone (far_end app).
     /// </summary>
     [JsonPropertyName("auto")]
     public bool? Auto { get; init; }
@@ -3415,7 +3420,9 @@ public sealed record MeetingsCalls : InkEvent
     /// <summary>
     /// Why the stored choices could not be read, while they are set aside: every app follows
     /// the default then, with Always lowered to Ask, and meetings.calls.set is refused
-    /// (list_unreadable) unless it says replace_unreadable, which starts the list over.
+    /// (list_unreadable) unless it says replace_unreadable, which starts the list over. In the
+    /// answer to that start over under a default of Always: that the default is Ask now
+    /// (written), so the user sets Always again knowingly.
     /// </summary>
     [JsonPropertyName("message")]
     public string? Message { get; init; }

@@ -347,7 +347,8 @@ fn zoom_is_heard_alone_and_a_zoom_that_is_gone_falls_back_and_says_so() {
         .unwrap();
     assert!(r.events.wait_count("meeting.started", 2, WAIT));
     let fallback = r.events.wait_type("meeting.far_end_fallback", WAIT);
-    assert_eq!(fallback["app"], "Zoom.exe");
+    // The identity as the core keeps it on Windows: lowercased where it came in.
+    assert_eq!(fallback["app"], "zoom.exe");
     assert!(
         fallback["message"]
             .as_str()
@@ -365,7 +366,7 @@ fn zoom_is_heard_alone_and_a_zoom_that_is_gone_falls_back_and_says_so() {
     assert_eq!(second["far_end"], "everything");
     assert_eq!(
         r.asked()[r.asked().len() - 2..],
-        ["far: Zoom.exe (pid Some(211))", "far: the default output"]
+        ["far: zoom.exe (pid Some(211))", "far: the default output"]
     );
     std::thread::sleep(Duration::from_millis(500));
     r.core.command(r#"{"cmd":"meeting.stop"}"#).unwrap();
