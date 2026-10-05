@@ -1,17 +1,19 @@
 // Whether the main window is hidden behind others, as the Mac reads its window's occlusion state.
 // Windows tells a desktop app nothing of the kind, so this follows the events that change what
 // covers what: another window brought to the front, minimised or restored, or moved or resized by
-// the user; while it is covered, also a window closed, shown or hidden, moved or resized by code, or
-// cloaked (WinEvent hooks, out of context, on the UI thread: no polling; WindowCoverEvents chooses
-// them). At each one, the windows above this one in the z-order are measured against it
-// (WindowFrame.CoveredBy); a burst of window events once it settles. Windows that show nothing are
-// left out: hidden, minimised, cloaked (another virtual desktop, a suspended app) or click-through
-// overlays; so are this process's own (a dialog or menu over it). Hidden in the tray, it hooks
-// nothing, so nothing on the desktop wakes the app.
+// the user; while it is covered, also a window closed, hidden or cloaked (WinEvent hooks, out of
+// context, on the UI thread: no polling; WindowCoverEvents chooses them). A covering window moved or
+// maximised by code alone is not heard (that would be a wake for every move of the mouse): it
+// stays covered until the next of these. At each one, the windows above this one in the z-order
+// are measured against it (WindowFrame.CoveredBy); a burst of window events once it settles.
+// Windows that show nothing are left out: hidden, minimised, cloaked (another virtual desktop, a
+// suspended app) or click-through overlays; so are this process's own (a dialog or menu over it).
+// Hidden in the tray, it hooks nothing, so nothing on the desktop wakes the app.
 //
 // A covered window that is uncovered raises Uncovered: the orb at rest goes to a new spot, as on
 // the Mac when the window comes back into view. Covered also feeds WindowPresence, so what redraws
 // on a clock waits while nobody can see it.
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Inkwell.Core.Screens;
 
@@ -39,8 +41,12 @@ public sealed partial class WindowCover : IDisposable
     private readonly SynchronizationContext? ui;
     /// <summary>Restarted by each window event; when it fires, one measure on the UI thread.</summary>
     private readonly Timer settle;
+    /// <summary>When the burst of window events now settling began (Stopwatch), or 0.</summary>
+    private long burstBegan;
     private bool shown;
     private bool failureSaid;
+    private bool measureFailureSaid;
+    private bool postFailureSaid;
     private bool disposed;
 
     [UnmanagedFunctionPointer(CallingConvention.StdCall)]
@@ -86,6 +92,7 @@ public sealed partial class WindowCover : IDisposable
         else
         {
             _ = settle.Change(Timeout.Infinite, Timeout.Infinite);
+            burstBegan = 0;
             Hook();
         }
     }
@@ -127,10 +134,10 @@ public sealed partial class WindowCover : IDisposable
 
     private void OnEvent(nint h, uint eventType, nint hwnd, int idObject, int idChild, uint thread, uint time)
     {
-        // Only whole windows, top-level for the window events (EVENT_OBJECT_*): a caret, the mouse,
-        // a menu item or a child window is not a window covering this one. Checked before anything
-        // else: the window events come for every move of the mouse while it is covered. A window
-        // already gone (closed: the event comes after) can't be asked, and counts.
+        // Only whole windows, top-level for the window events (EVENT_OBJECT_*): a caret, the
+        // pointer, a menu item or a child window is not a window covering this one. Checked before
+        // anything else: the window events come for those too. A window already gone (closed: the
+        // event comes after) can't be asked, and counts.
         var topLevel = eventType >= 0x8000 && idObject == ObjIdWindow && idChild == ChildIdSelf
             && (!IsWindow(hwnd) || GetAncestor(hwnd, GaRoot) == hwnd);
         if (disposed || !WindowCoverEvents.Measures(eventType, idObject, idChild, topLevel))
@@ -139,20 +146,46 @@ public sealed partial class WindowCover : IDisposable
         }
         if (WindowCoverEvents.Settles(eventType) && ui is not null)
         {
-            // Measured once, when the burst (a window dragged or animating) has settled.
-            _ = settle.Change(WindowCoverEvents.Settle, Timeout.InfiniteTimeSpan);
+            // Measured once, when the burst (an app closing its windows) has settled, or at most
+            // MaxWait after it began.
+            var now = Stopwatch.GetTimestamp();
+            if (burstBegan == 0)
+            {
+                burstBegan = now;
+            }
+            _ = settle.Change(WindowCoverEvents.SettleDelay(Stopwatch.GetElapsedTime(burstBegan, now)), Timeout.InfiniteTimeSpan);
             return;
         }
         MeasureNow();
     }
 
     /// <summary>The timer's thread: the burst has settled, so one measure, on the UI thread.</summary>
-    private void Settled(object? state) => ui?.Post(_ => MeasureNow(), null);
+    private void Settled(object? state)
+    {
+        try
+        {
+            ui?.Post(_ =>
+            {
+                burstBegan = 0;
+                MeasureNow();
+            }, null);
+        }
+        catch (Exception e)
+        {
+            // Never out of the timer's thread (the UI thread may be shutting down): said once, by type.
+            if (!postFailureSaid)
+            {
+                postFailureSaid = true;
+                log.Write($"couldn't measure what covers the window after a burst ({e.GetType().Name})");
+            }
+        }
+    }
 
     /// <summary>Measures now, and says it if covered changed. UI thread.</summary>
     private void MeasureNow()
     {
-        if (disposed)
+        // Hidden, nothing measures, a measure already posted included.
+        if (disposed || !shown)
         {
             return;
         }
@@ -164,8 +197,16 @@ public sealed partial class WindowCover : IDisposable
                 return;
             }
             Covered = now;
-            // Covered, it hears what can uncover it too; uncovered, only what can cover it.
+            // Covered, it hears what uncovers it too; uncovered, only what can cover it.
             Hook();
+            // A cover gone between the measure and its hooks would never be heard: measured once
+            // more, it is still uncovered and nothing changed.
+            if (now && !Measure())
+            {
+                Covered = false;
+                Hook();
+                return;
+            }
             Changed?.Invoke(now);
             if (!now)
             {
@@ -174,8 +215,12 @@ public sealed partial class WindowCover : IDisposable
         }
         catch (Exception e)
         {
-            // Never into Windows' callback: named in the log, and the next event measures again.
-            ScreenLog.System.Write($"couldn't measure what covers the window: {e.GetType().Name}");
+            // Never into Windows' callback: named in the log once, and the next event measures again.
+            if (!measureFailureSaid)
+            {
+                measureFailureSaid = true;
+                log.Write($"couldn't measure what covers the window: {e.GetType().Name}");
+            }
         }
     }
 
