@@ -24,10 +24,11 @@
 //!   dictation); the shell says so rather than showing a negative time. What it is about, in
 //!   things the user can picture, is [`about`]'s.
 //! - **Streak**: local days with at least one dictation in a row, where a single missed day is
-//!   forgiven and two in a row end it ([`streaks`]). A rest day (`stats.rest_days`) or a paused
-//!   day ([`Pause`]) without a dictation is not missed: it neither ends the streak nor uses its
-//!   forgiven day. One with a dictation counts like any other, so resting or pausing never makes
-//!   a streak shorter. It is still running while no more than one day since the last active one
+//!   forgiven and two in a row end it ([`streaks`]). A rest day (`stats.rest_days`) neither counts
+//!   nor breaks it, with a dictation or without, so a streak never rewards working on a day off;
+//!   a change to the rest days applies to all of history. A paused day ([`Pause`]) without a
+//!   dictation is not missed (it neither ends the streak nor uses its forgiven day), and one with a
+//!   dictation counts, so pausing never makes a streak shorter. It is still running while no more than one day since the last active one
 //!   was missed (today is never missed: it is not over). The longest is over all time; the
 //!   latest is kept after it ends, so the shell shows an ended streak by what it reached, never
 //!   as lost. Hidden (`stats.streak`), it is still counted and marked hidden, and its milestones
@@ -47,7 +48,8 @@
 //!   best week, the longest meeting and the longest monologue, from takes made here only. A record
 //!   an import brought (Inkwell 0.2's dictations, another app's meetings) is history from
 //!   elsewhere: it counts in words and the streak as before, never in a best. The fastest needs a
-//!   take held [`FASTEST_MIN_HELD_MS`].
+//!   take held [`FASTEST_MIN_HELD_MS`], and a take the stuck-key watchdog stopped is no best
+//!   ([`stopped_by_watchdog`]).
 //! - **Last week** ([`WeekReview`]): its words, time saved, best day, speed against the four weeks
 //!   before it, meetings and promises kept, until the user dismisses it for that week. Gains and
 //!   plain facts only: nothing is said to be down.
@@ -128,6 +130,16 @@ pub const FASTEST_MIN_HELD_MS: u64 = 30_000;
 /// second take ever is always the longest yet, which is not worth a note. Every take counts as an
 /// entry, a short one too: a best is the user's own, and five takes is little to ask.
 pub const BEST_AFTER: u64 = 5;
+/// The hold, ms, at which the stuck-key watchdog stops a push-to-talk take whose release was
+/// lost and processes it ([`DEFAULT_STUCK_AFTER`](ink_pipeline::chain::DEFAULT_STUCK_AFTER):
+/// the shells never change it).
+pub const STUCK_HOLD_MS: u64 = ink_pipeline::chain::DEFAULT_STUCK_AFTER.as_millis() as u64;
+/// How far short of [`STUCK_HOLD_MS`] a stopped take's hold can read: the press and the stop are
+/// placed on the audio's samples, a few ms either way.
+pub const STUCK_BEFORE_MS: u64 = 1_000;
+/// How far past it: the worker wakes for the watchdog's deadline, and may wake a little late.
+pub const STUCK_AFTER_MS: u64 = 10_000;
+
 /// The weeks before last week its speed is compared with.
 pub const REVIEW_AVERAGE_WEEKS: i64 = 4;
 /// The most of one picture [`about`] says ("about five coffee breaks"), but for the largest.
@@ -330,6 +342,17 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
     era * 146_097 + doe - 719_468
 }
 
+/// Whether a dictation held `held_ms` is one the stuck-key watchdog stopped: a key that was
+/// likely stuck, so the take is no best (its words still count). The store keeps no mark of the
+/// watchdog, so this is read from the hold: a push-to-talk hold never lasts longer, since the
+/// watchdog stops it there. A toggle take is exempt from the watchdog and may be held any time:
+/// one of about the same length (3 min, give or take [`STUCK_BEFORE_MS`] and [`STUCK_AFTER_MS`])
+/// is taken for a stopped one, and a longer one counts.
+pub fn stopped_by_watchdog(held_ms: u64) -> bool {
+    (STUCK_HOLD_MS.saturating_sub(STUCK_BEFORE_MS)..=STUCK_HOLD_MS + STUCK_AFTER_MS)
+        .contains(&held_ms)
+}
+
 /// The rest days a [`REST_DAYS_KEY`] value names: `none`, or ISO weekdays (1 Monday to 7 Sunday)
 /// ascending and comma-separated, each once, never all seven (a streak needs a day to count).
 /// `None` for anything else, so each set has one spelling.
@@ -374,53 +397,65 @@ impl Pause {
     pub fn covers(&self, day: i64) -> bool {
         (self.from..=self.last()).contains(&day)
     }
+
+    /// Whether it is running `today`: not resumed, not past its 90 days, and started by tomorrow.
+    /// Tomorrow, because a pause started today and the user then travelling west is a day ahead of
+    /// their calendar.
+    fn running(&self, today: i64) -> bool {
+        self.until.is_none() && self.from <= today.saturating_add(1) && self.last() >= today
+    }
+
+    /// Whether it was left running from after tomorrow: a clock set back, so its days were never
+    /// paused.
+    fn ahead(&self, today: i64) -> bool {
+        self.until.is_none() && self.from > today.saturating_add(1)
+    }
 }
 
 /// The first day of the pause running `today`, if one is.
 pub fn running_pause(pauses: &[Pause], today: i64) -> Option<i64> {
-    pauses
-        .iter()
-        .find(|p| p.until.is_none() && p.covers(today))
-        .map(|p| p.from)
+    pauses.iter().find(|p| p.running(today)).map(|p| p.from)
 }
 
 /// `streak.pause`: the pauses with one started today, or unchanged while one runs. Each before it
-/// is closed on its last day (one left running past its 90 days ends there), and one that starts
-/// after today (a clock set back) goes: those days were never paused. At [`MAX_PAUSES`] the oldest
-/// goes, so pausing always works; only a streak that old can grow shorter.
+/// is closed on its last day (one left running past its 90 days ends there), and one left running
+/// from after tomorrow (a clock set back) goes: those days were never paused. At [`MAX_PAUSES`] the
+/// oldest goes, so pausing always works; only a streak that old can grow shorter.
 pub fn pause(pauses: &[Pause], today: i64) -> Vec<Pause> {
     if running_pause(pauses, today).is_some() {
         return pauses.to_vec();
     }
     let mut out: Vec<Pause> = pauses
         .iter()
-        .filter(|p| p.from <= today)
+        .filter(|p| !p.ahead(today))
         .map(|p| Pause {
             from: p.from,
             until: Some(p.last()),
         })
         .collect();
-    if out.len() >= MAX_PAUSES {
-        out.drain(..=out.len() - MAX_PAUSES);
-    }
     out.push(Pause {
         from: today,
         until: None,
     });
+    out.sort_by_key(|p| p.from);
+    if out.len() > MAX_PAUSES {
+        out.drain(..out.len() - MAX_PAUSES);
+    }
     out
 }
 
 /// `streak.resume`: the pauses with the running one ended yesterday, so today counts as any day;
-/// one started today goes, as if it never was, and so does one that starts after today (a clock
-/// set back). Unchanged when none runs.
+/// one started today (or tomorrow, after travelling west) goes, as if it never was. Whether one
+/// runs or not, one left running from after tomorrow (a clock set back) goes too; the rest are
+/// unchanged.
 pub fn resume(pauses: &[Pause], today: i64) -> Vec<Pause> {
     pauses
         .iter()
         .filter_map(|p| {
-            if p.from > today {
+            if p.ahead(today) {
                 return None;
             }
-            if p.until.is_some() || !p.covers(today) {
+            if !p.running(today) {
                 return Some(*p);
             }
             (p.from < today).then_some(Pause {
@@ -494,15 +529,22 @@ pub struct Streaks {
     pub latest: u64,
 }
 
-/// The streaks, from the local days with a dictation; `skip` says which days are off (rest days,
-/// paused days).
+/// The streaks, from the local days with a dictation; `rest` says which days are rest days and
+/// `paused` which are paused.
 ///
 /// Forgiving on purpose: one missed day between two active days keeps a streak going; two missed
-/// days in a row end it. A day off is not missed, so it does neither, and an active day counts
-/// whether it is off or not. The current streak is the last run while at most one day was missed
+/// days in a row end it. A rest day is not in the streak at all: it neither counts (with a
+/// dictation) nor is missed (without one). A paused day without a dictation is not missed; one
+/// with a dictation counts like any other. The current streak is the last run while at most one day was missed
 /// since its last day (today is never missed: it is not over), and 0 after that. Days after today
 /// (a clock that was wrong) are not counted.
-pub fn streaks(active: &BTreeSet<i64>, today: i64, skip: impl Fn(i64) -> bool) -> Streaks {
+pub fn streaks(
+    active: &BTreeSet<i64>,
+    today: i64,
+    rest: impl Fn(i64) -> bool,
+    paused: impl Fn(i64) -> bool,
+) -> Streaks {
+    let skip = |day: i64| rest(day) || paused(day);
     // Days missed strictly between two days, counted to two: all the rule needs. A gap of days
     // off is as long as its pauses (90 days each) or a week of rest days, so this stays short.
     let missed = |after: i64, before: i64| {
@@ -516,7 +558,7 @@ pub fn streaks(active: &BTreeSet<i64>, today: i64, skip: impl Fn(i64) -> bool) -
         n
     };
     let (mut run, mut longest, mut last) = (0u64, 0u64, None::<i64>);
-    for &day in active.range(..=today) {
+    for &day in active.range(..=today).filter(|&&day| !rest(day)) {
         run = match last {
             Some(prev) if missed(prev, day) <= 1 => run + 1,
             _ => 1,
@@ -865,7 +907,7 @@ pub struct Settings {
     pub pauses: Vec<Pause>,
     /// Whether the user hid the streak.
     pub streak_hidden: bool,
-    /// A day of the week whose review the user dismissed (its first day, as sent).
+    /// The first day of the week whose review the user dismissed, on the week's first day then.
     pub review_dismissed: Option<i64>,
 }
 
@@ -964,10 +1006,12 @@ pub fn count(
                     if newest_dictation.is_none_or(|n| take > n) {
                         newest_dictation = Some(take);
                     }
-                    if spoken > 0 {
+                    // A take the watchdog stopped (a key likely stuck) is no best.
+                    let stuck = stopped_by_watchdog(spoken);
+                    if spoken > 0 && !stuck {
                         longest.offer(spoken, r.started_at_unix_ms, &r.record);
                     }
-                    if spoken >= FASTEST_MIN_HELD_MS && words > 0 {
+                    if spoken >= FASTEST_MIN_HELD_MS && words > 0 && !stuck {
                         fastest.offer(rate(words, spoken), r.started_at_unix_ms, &r.record);
                     }
                     if words > 0 {
@@ -1021,11 +1065,12 @@ pub fn count(
         }
     }
     let active: BTreeSet<i64> = per_day.keys().copied().collect();
-    let off = |day: i64| {
-        settings.rest_days.contains(&Calendar::weekday(day))
-            || settings.pauses.iter().any(|p| p.covers(day))
-    };
-    let s = streaks(&active, today, off);
+    let s = streaks(
+        &active,
+        today,
+        |day| settings.rest_days.contains(&Calendar::weekday(day)),
+        |day| settings.pauses.iter().any(|p| p.covers(day)),
+    );
     (d.streak_days, d.longest_streak_days, d.latest_streak_days) = (s.current, s.longest, s.latest);
     d.active_days_month = per_day.range(month..=today).count() as u64;
     d.streak_hidden = settings.streak_hidden;
@@ -1079,10 +1124,11 @@ pub fn count(
     }
 
     let words_last: u64 = per_day.range(last_week..week).map(|(_, w)| w).sum();
-    // A dismissal names its week by a day in it, so changing the week's first day keeps it.
+    // A dismissal names its week by its first day; its midpoint finds the week again after the
+    // user changes the week's first day, earlier or later.
     let dismissed = settings
         .review_dismissed
-        .is_some_and(|day| calendar.week_start_of(day) == last_week);
+        .is_some_and(|day| calendar.week_start_of(day.saturating_add(3)) == last_week);
     let week_review = ((words_last > 0 || meetings_last.meetings > 0) && !dismissed).then(|| {
         let wpm_last = wpm(timed_last.0, timed_last.1);
         let saved = saved_ms(timed_last.0, timed_last.1, settings.typing_wpm);
@@ -1733,7 +1779,7 @@ mod tests {
     #[test]
     fn a_streak_forgives_one_missed_day_and_ends_at_two() {
         let s = |d: &[i64], today: i64| {
-            let r = streaks(&d.iter().copied().collect(), today, |_| false);
+            let r = streaks(&d.iter().copied().collect(), today, |_| false, |_| false);
             (r.current, r.longest)
         };
         assert_eq!(s(&[], 100), (0, 0));
@@ -2193,31 +2239,43 @@ mod tests {
         }
     }
 
-    /// Rest days and pauses are days off: one without a dictation neither breaks the streak nor
-    /// uses its forgiven day, and one with a dictation counts like any other active day.
+    /// Rest days and pauses are days off. A rest day neither counts nor breaks the streak, with a
+    /// dictation or without; a paused day without one is not missed, and one with one counts.
     #[test]
-    fn rest_days_and_pauses_neither_break_nor_count_against_a_streak() {
+    fn rest_days_neither_count_nor_break_and_pauses_skip_missed_days() {
         // Day 95 is a Monday, 100 and 101 the weekend after.
         assert_eq!(Calendar::weekday(95), 1);
         let days = |d: &[i64]| d.iter().copied().collect::<BTreeSet<i64>>();
         let weekend = |day: i64| Calendar::weekday(day) >= 6;
         let two_weeks: Vec<i64> = (95..=99).chain(102..=106).collect();
         // Without rest days the weekend is two missed days: a new streak on Monday.
-        assert_eq!(streaks(&days(&two_weeks), 106, |_| false).current, 5);
-        let rested = streaks(&days(&two_weeks), 106, weekend);
+        assert_eq!(
+            streaks(&days(&two_weeks), 106, |_| false, |_| false).current,
+            5
+        );
+        let rested = streaks(&days(&two_weeks), 106, weekend, |_| false);
         assert_eq!((rested.current, rested.longest), (10, 10));
         // The forgiven day still applies beside them: Monday missed after the weekend.
         assert_eq!(
-            streaks(&days(&[95, 96, 97, 98, 99, 103]), 103, weekend).current,
+            streaks(&days(&[95, 96, 97, 98, 99, 103]), 103, weekend, |_| false).current,
             6
         );
         // Monday and Tuesday missed after it: two missed days end it, rest days or not.
-        let ended = streaks(&days(&[95, 96, 97, 98, 99, 104]), 104, weekend);
+        let ended = streaks(&days(&[95, 96, 97, 98, 99, 104]), 104, weekend, |_| false);
         assert_eq!((ended.current, ended.longest), (1, 5));
-        // A dictation on a rest day counts.
-        assert_eq!(streaks(&days(&[98, 99, 100, 101]), 101, weekend).current, 4);
+        // A dictation on a rest day does not count, and does not break it either.
+        let weekend_work = streaks(&days(&[98, 99, 100, 101]), 101, weekend, |_| false);
+        assert_eq!((weekend_work.current, weekend_work.longest), (2, 2));
+        assert_eq!(
+            streaks(&days(&[98, 99, 100, 101, 102]), 102, weekend, |_| false).current,
+            3,
+            "Monday follows Friday"
+        );
         // Running over a weekend still to come: Friday, with Saturday today.
-        assert_eq!(streaks(&days(&[98, 99]), 101, weekend).current, 2);
+        assert_eq!(
+            streaks(&days(&[98, 99]), 101, weekend, |_| false).current,
+            2
+        );
 
         // A pause: ten days away keep a streak of three, and today's dictation adds to it.
         let away = [Pause {
@@ -2225,17 +2283,34 @@ mod tests {
             until: Some(102),
         }];
         let paused = |day: i64| away.iter().any(|p| p.covers(day));
-        assert_eq!(streaks(&days(&[90, 91, 92, 103]), 103, paused).current, 4);
+        assert_eq!(
+            streaks(&days(&[90, 91, 92, 103]), 103, |_| false, paused).current,
+            4
+        );
+        // A paused day with a dictation counts like any other.
+        assert_eq!(
+            streaks(&days(&[90, 91, 92, 95, 103]), 103, |_| false, paused).current,
+            5
+        );
         // Still running while the pause runs.
         let open = [Pause {
             from: 93,
             until: None,
         }];
         let running = |day: i64| open.iter().any(|p| p.covers(day));
-        assert_eq!(streaks(&days(&[90, 91, 92]), 120, running).current, 3);
+        assert_eq!(
+            streaks(&days(&[90, 91, 92]), 120, |_| false, running).current,
+            3
+        );
         // A pause left running ends by itself after 90 days (93 to 182): then days are missed again.
-        assert_eq!(streaks(&days(&[90, 91, 92]), 184, running).current, 3);
-        assert_eq!(streaks(&days(&[90, 91, 92]), 185, running).current, 0);
+        assert_eq!(
+            streaks(&days(&[90, 91, 92]), 184, |_| false, running).current,
+            3
+        );
+        assert_eq!(
+            streaks(&days(&[90, 91, 92]), 185, |_| false, running).current,
+            0
+        );
     }
 
     /// Days off are skipped, not forgiven: two missed days with a rest day between them are
@@ -2245,14 +2320,14 @@ mod tests {
         let days = |d: &[i64]| d.iter().copied().collect::<BTreeSet<i64>>();
         // Wednesday (97) a rest day: Tuesday and Thursday missed around it end the streak.
         let wednesday = |day: i64| Calendar::weekday(day) == 3;
-        let s = streaks(&days(&[95, 99]), 99, wednesday);
+        let s = streaks(&days(&[95, 99]), 99, wednesday, |_| false);
         assert_eq!((s.current, s.longest), (1, 1));
         // The weekend off, Thursday active, Friday missed: running on Saturday, Sunday and
         // Monday, ended on Tuesday.
         let weekend = |day: i64| Calendar::weekday(day) >= 6;
         for (today, current) in [(100, 1), (101, 1), (102, 1), (103, 0)] {
             assert_eq!(
-                streaks(&days(&[98]), today, weekend).current,
+                streaks(&days(&[98]), today, weekend, |_| false).current,
                 current,
                 "day {today}"
             );
@@ -2318,18 +2393,19 @@ mod tests {
     #[test]
     fn the_latest_streak_is_kept_after_it_ends() {
         let days = |d: &[i64]| d.iter().copied().collect::<BTreeSet<i64>>();
-        let s = streaks(&days(&[90, 91, 92]), 100, |_| false);
+        let s = streaks(&days(&[90, 91, 92]), 100, |_| false, |_| false);
         assert_eq!((s.current, s.longest, s.latest), (0, 3, 3));
         let s = streaks(
             &days(&(80..=89).chain([95, 96]).collect::<Vec<_>>()),
             100,
             |_| false,
+            |_| false,
         );
         assert_eq!((s.current, s.longest, s.latest), (0, 10, 2));
-        let s = streaks(&days(&[99, 100]), 100, |_| false);
+        let s = streaks(&days(&[99, 100]), 100, |_| false, |_| false);
         assert_eq!((s.current, s.latest), (2, 2));
         assert_eq!(
-            streaks(&BTreeSet::new(), 100, |_| false),
+            streaks(&BTreeSet::new(), 100, |_| false, |_| false),
             Streaks::default()
         );
     }
@@ -2400,6 +2476,30 @@ mod tests {
                 from: 200,
                 until: None
             }]
+        );
+        // Travelling west after pausing: the pause starts tomorrow there, and runs all the same.
+        let west = [Pause {
+            from: 201,
+            until: None,
+        }];
+        assert_eq!(running_pause(&west, 200), Some(201));
+        assert_eq!(pause(&west, 200), west);
+        assert_eq!(resume(&west, 200), []);
+        // A closed pause ahead of the clock is left as it is.
+        let closed_ahead = [Pause {
+            from: 300,
+            until: Some(305),
+        }];
+        assert_eq!(resume(&closed_ahead, 200), closed_ahead);
+        assert_eq!(
+            pause(&closed_ahead, 200),
+            [
+                Pause {
+                    from: 200,
+                    until: None
+                },
+                closed_ahead[0]
+            ]
         );
     }
 
@@ -2803,11 +2903,6 @@ mod tests {
                 .week_review
                 .is_some()
         );
-        // Dismissed by another day of that week (weeks started on another day then): still gone.
-        assert_eq!(
-            count(&digests, &[], NOON, &cal, &dismissed(last_week + 3)).week_review,
-            None
-        );
         // A week with nothing in it has no review.
         assert_eq!(
             count(
@@ -2849,6 +2944,62 @@ mod tests {
         }
         // Saturates rather than overflows at the far end.
         assert_eq!(about(i64::MAX)[0].0, "working_week");
+    }
+
+    /// A dismissal is kept by its week's first day as it was then; the week's midpoint finds it
+    /// again after the week's first day changes, either way, and the week before stays its own.
+    #[test]
+    fn a_dismissed_review_stays_dismissed_when_the_week_starts_on_another_day() {
+        let monday = utc();
+        let sunday = Calendar::new(vec![(i64::MIN, 0)], 7).unwrap();
+        // Saturday 26 September: last week on either calendar.
+        let digests = [dictation(NOON - 7 * DAY, 300, 120_000)];
+        let day = |d: &str| Calendar::parse_date(d).unwrap();
+        let review = |cal: &Calendar, dismissed: Option<&str>| {
+            let settings = Settings {
+                review_dismissed: dismissed.map(day),
+                ..Settings::default()
+            };
+            count(&digests, &[], NOON, cal, &settings).week_review
+        };
+        assert_eq!(review(&monday, None).unwrap().week, day("2026-09-21"));
+        assert_eq!(review(&sunday, None).unwrap().week, day("2026-09-20"));
+        // Dismissed with weeks from Sunday, then weeks from Monday: still dismissed.
+        assert_eq!(review(&monday, Some("2026-09-20")), None);
+        // And the other way round.
+        assert_eq!(review(&sunday, Some("2026-09-21")), None);
+        // The week before is not this one, on either.
+        assert!(review(&monday, Some("2026-09-13")).is_some());
+        assert!(review(&sunday, Some("2026-09-14")).is_some());
+    }
+
+    /// A take the stuck-key watchdog stopped (held its 3 minutes: a key likely stuck) is no best;
+    /// its words still count. A longer take (only a toggle take can be) is one.
+    #[test]
+    fn a_take_the_watchdog_stopped_is_no_best() {
+        assert_eq!(STUCK_HOLD_MS, 180_000, "the chain's DEFAULT_STUCK_AFTER");
+        assert!(stopped_by_watchdog(STUCK_HOLD_MS));
+        assert!(stopped_by_watchdog(STUCK_HOLD_MS - STUCK_BEFORE_MS));
+        assert!(stopped_by_watchdog(STUCK_HOLD_MS + STUCK_AFTER_MS));
+        assert!(!stopped_by_watchdog(STUCK_HOLD_MS - STUCK_BEFORE_MS - 1));
+        assert!(!stopped_by_watchdog(STUCK_HOLD_MS + STUCK_AFTER_MS + 1));
+
+        let cal = utc();
+        let best = |c: &Counted, id: BestId| c.bests.iter().find(|b| b.id == id).map(|b| b.value);
+        let mut digests = vec![
+            // 2 minutes at 100 wpm.
+            dictation(NOON - DAY, 200, 120_000),
+            // Stopped by the watchdog a few ms past its limit: 133 wpm, but no best.
+            dictation(NOON, 400, STUCK_HOLD_MS + 40),
+        ];
+        let c = count(&digests, &[], NOON, &cal, &Settings::default());
+        assert_eq!(best(&c, BestId::LongestDictation), Some(120_000));
+        assert_eq!(best(&c, BestId::FastestDictation), Some(100));
+        assert_eq!(c.dictation.words_all, 600, "its words count");
+        // A toggle take of ten minutes is the longest.
+        digests.push(dictation(NOON - 2 * DAY, 900, 600_000));
+        let c = count(&digests, &[], NOON, &cal, &Settings::default());
+        assert_eq!(best(&c, BestId::LongestDictation), Some(600_000));
     }
 
     #[test]

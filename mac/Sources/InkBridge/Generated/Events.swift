@@ -454,8 +454,9 @@ public enum AudioTimeline: String, Codable, Sendable, Equatable, CaseIterable {
     case estimated
 }
 
-/// A personal best: the dictation held longest, the fastest held at least 30 s, the most words
-/// in a day, the best week, the longest meeting, the longest monologue.
+/// A personal best: the dictation held longest, the fastest held at least 30 s (neither a take
+/// the stuck-key watchdog stopped), the most words in a day, the best week, the longest
+/// meeting, the longest monologue.
 public enum BestId: String, Codable, Sendable, Equatable, CaseIterable {
     case longestDictation = "longest_dictation"
     case fastestDictation = "fastest_dictation"
@@ -940,7 +941,7 @@ public struct DictationStats: Codable, Sendable, Equatable {
     /// The longest streak, all time.
     public let longestStreakDays: Int64
     /// The weekdays the streak rests on (stats.rest_days), ISO: 1 Monday to 7 Sunday; empty for
-    /// none.
+    /// none. A rest day neither counts nor breaks the streak.
     public let restDays: [Int64]?
     /// What saved_ms_all is about, as saved_about_week.
     public let savedAboutAll: [TimeEquivalent]?
@@ -953,9 +954,9 @@ public struct DictationStats: Codable, Sendable, Equatable {
     /// speaking. Negative when speaking took longer.
     public let savedMsWeek: Int64
     /// The current streak: local days with a dictation in a row, one missed day forgiven, two
-    /// ending it. A rest day or a paused day without a dictation is not missed; one with a
-    /// dictation counts. Running while at most one day was missed since the last active one
-    /// (today is never missed).
+    /// ending it. A rest day neither counts nor breaks it, with a dictation or without; a
+    /// paused day without a dictation is not missed, and one with a dictation counts. Running
+    /// while at most one day was missed since the last active one (today is never missed).
     public let streakDays: Int64
     /// Whether the user hid the streak (stats.streak): show no streak line and offer none on
     /// the share card. The numbers are still counted.
@@ -3123,7 +3124,8 @@ public struct WeekReview: Codable, Sendable, Equatable {
     public let savedAbout: [TimeEquivalent]?
     /// Time saved, ms, as saved_ms_week. Absent unless there was some.
     public let savedMs: Int64?
-    /// Its first day, YYYY-MM-DD: what stats.review_dismissed takes to dismiss it.
+    /// Its first day, YYYY-MM-DD: what stats.review_dismissed takes to dismiss it (kept
+    /// dismissed if the week's first day changes later).
     public let week: String
     /// Words dictated.
     public let words: Int64

@@ -370,8 +370,9 @@ public enum AudioTimeline
 }
 
 /// <summary>
-/// A personal best: the dictation held longest, the fastest held at least 30 s, the most words
-/// in a day, the best week, the longest meeting, the longest monologue.
+/// A personal best: the dictation held longest, the fastest held at least 30 s (neither a take
+/// the stuck-key watchdog stopped), the most words in a day, the best week, the longest
+/// meeting, the longest monologue.
 /// </summary>
 [JsonConverter(typeof(StrictEnumConverter<BestId>))]
 public enum BestId
@@ -1221,7 +1222,7 @@ public sealed record DictationStats
 
     /// <summary>
     /// The weekdays the streak rests on (stats.rest_days), ISO: 1 Monday to 7 Sunday; empty for
-    /// none.
+    /// none. A rest day neither counts nor breaks the streak.
     /// </summary>
     [JsonPropertyName("rest_days")]
     public global::System.Collections.Generic.IReadOnlyList<long>? RestDays { get; init; }
@@ -1254,9 +1255,9 @@ public sealed record DictationStats
 
     /// <summary>
     /// The current streak: local days with a dictation in a row, one missed day forgiven, two
-    /// ending it. A rest day or a paused day without a dictation is not missed; one with a
-    /// dictation counts. Running while at most one day was missed since the last active one
-    /// (today is never missed).
+    /// ending it. A rest day neither counts nor breaks it, with a dictation or without; a
+    /// paused day without a dictation is not missed, and one with a dictation counts. Running
+    /// while at most one day was missed since the last active one (today is never missed).
     /// </summary>
     [JsonPropertyName("streak_days")]
     public required long StreakDays { get; init; }
@@ -4936,7 +4937,8 @@ public sealed record WeekReview
     public long? SavedMs { get; init; }
 
     /// <summary>
-    /// Its first day, YYYY-MM-DD: what stats.review_dismissed takes to dismiss it.
+    /// Its first day, YYYY-MM-DD: what stats.review_dismissed takes to dismiss it (kept
+    /// dismissed if the week's first day changes later).
     /// </summary>
     [JsonPropertyName("week")]
     public required string Week { get; init; }

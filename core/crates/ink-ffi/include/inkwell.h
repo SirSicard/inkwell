@@ -259,7 +259,8 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       written plainly: the typing speed stats.get measures time saved against; 40 unless set)
  *       "stats.celebrate" (on|off: milestones and bests are celebrated; on unless set),
  *       "stats.rest_days" (none, or ISO weekdays ascending and comma-separated, e.g. 6,7, never
- *       all seven: days the streak rests on; none unless set), "stats.streak" (shown|hidden: a
+ *       all seven: days the streak rests on, which neither count nor break it, a dictation on one
+ *       included; a change applies to all of history; none unless set), "stats.streak" (shown|hidden: a
  *       hidden streak is shown nowhere and its milestones are not celebrated; shown unless set),
  *       "stats.share_heatmap" (on|off: the share card may carry the heatmap; off unless set; the
  *       core does nothing with it) and "stats.review_dismissed" (a YYYY-MM-DD date: the first day
@@ -385,8 +386,10 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       name to word; the personal bests, from takes made here only (longest and fastest
  *       dictation, most words in a day, best week, longest meeting, longest monologue); what time
  *       saved is about (a key and a count, within a fifth); and last week's review until it is
- *       dismissed (gains and plain facts only). A streak rests on stats.rest_days and through a
- *       pause; ended, it is shown by its latest and longest, never as lost. Days are
+ *       dismissed (gains and plain facts only). A take the stuck-key watchdog stopped is no best.
+ *       A rest day (stats.rest_days) neither counts nor breaks a streak; a pause carries it over
+ *       days without a dictation; ended, it is shown by its latest and longest, never as lost.
+ *       Days are
  *       the user's: "utc_offsets" is the zone's UTC offset over time, oldest first, each from the
  *       moment it took effect (the first also covers everything before it; 1 to 400 of them,
  *       minutes -840 to 840), and "week_start" the ISO weekday weeks start on (1 Monday to 7
