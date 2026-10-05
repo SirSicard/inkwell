@@ -3,7 +3,7 @@
 // off). A subclass of the window's procedure (SetWindowSubclass) on the UI thread; it raises an
 // event for each and passes every message on. The session's are asked for here
 // (WTSRegisterSessionNotification, RegisterPowerSettingNotification for the session's display),
-// so the live icon's pulse stops while nobody can see the screen: nothing polls.
+// so the live icon draws nothing while nobody can see the screen: nothing polls.
 using System.Runtime.InteropServices;
 using TerraFX.Interop.Windows;
 using static TerraFX.Interop.Windows.Windows;
@@ -43,16 +43,16 @@ public sealed unsafe partial class WindowHook : IDisposable
             self.Free();
             throw new InkRendererException($"couldn't watch the window's messages (error {GetLastError()})");
         }
-        // Best effort: without them the pulse runs while locked, which it never needs to.
+        // Best effort: without them the live icon draws while locked, which it never needs to.
         if (!WTSRegisterSessionNotification(window, 0))
         {
-            InkLog.Write("couldn't hear the screen lock: the live icon's pulse runs while it is locked");
+            InkLog.Write("couldn't hear the screen lock: the live icon draws while it is locked");
         }
         var guid = SessionDisplayStatus;
         display = RegisterPowerSettingNotification((HANDLE)this.window.Value, &guid, 0);
         if (display == HPOWERNOTIFY.NULL)
         {
-            InkLog.Write("couldn't hear the display go off: the live icon's pulse runs while it is off");
+            InkLog.Write("couldn't hear the display go off: the live icon draws while it is off");
         }
     }
 

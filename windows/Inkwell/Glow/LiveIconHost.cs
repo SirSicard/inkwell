@@ -1,9 +1,10 @@
 // The live icon on Windows (LiveIcon decides; this shows): the tray icon and the main window's
-// taskbar button follow the Drop's state, the final pass's steps, the user's colours and the motion
-// settings. Nothing polls: each follows an event (the Drop's change, the store's, the theme's,
-// Windows' animation setting), and the pulse's timer runs only while LiveIcon asks for it. While
-// the screen is locked or the display is off (WindowHook) nothing ticks or draws; the app coming to
-// the front means someone is there, so a missed unlock never leaves the icon still for good.
+// taskbar button follow the Drop's state, the final pass's steps and the user's colours. Nothing
+// polls and nothing ticks: each follows an event (the Drop's change, the store's, the theme's), and
+// a recording is held still (LiveIconLook.OnShell), as each frame on these surfaces is a call into
+// Explorer. While the screen is locked or the display is off (WindowHook)
+// nothing draws; the app coming to the front means someone is there, so a missed unlock never
+// leaves the icon stale for good.
 //
 //   the tray      the Halo rim mark with the state's dot or ring (TrayGlyph.Tray); Narrator reads
 //                 its tooltip, which says the state (or what stops the Drop)
@@ -11,8 +12,7 @@
 //                 for the final pass (indeterminate until its first step) and the error state for
 //                 a problem; the thumbnail toolbar's Record / Stop
 //
-// The pictures are made once per look, colour and step of the breath, and kept (fourteen for a
-// breath), so a recording's 7 frames a second make no new icons after its first two seconds.
+// The pictures are made once per look and colour, and kept.
 using Inkwell.Core;
 using Inkwell.Core.Glow;
 using Inkwell.Core.Screens;
@@ -31,7 +31,7 @@ internal sealed class LiveIconHost : IDisposable
     private readonly GlowTheme theme;
     private readonly TrayIcon tray;
     private readonly string iconPath;
-    /// <summary>The window's messages (null if the window could not be watched: no thumbnail clicks, and the pulse cannot hear the lock).</summary>
+    /// <summary>The window's messages (null if the window could not be watched: no thumbnail clicks, and the live icon cannot hear the lock).</summary>
     private readonly WindowHook? hook;
     private readonly TaskbarButton taskbar;
     private readonly TraySurface traySurface;
@@ -42,7 +42,7 @@ internal sealed class LiveIconHost : IDisposable
     private string? tooltipShown;
     private bool disposed;
     private readonly System.ComponentModel.PropertyChangedEventHandler storeChanged;
-    /// <summary>Failures logged, by what failed: each once, however often a frame retries it (the pulse, 7 a second).</summary>
+    /// <summary>Failures logged, by what failed: each once, however often a frame retries it.</summary>
     private readonly HashSet<string> logged = [];
 
     public LiveIconHost(nint window, DropModel drop, CoreStore store, GlowTheme theme, TrayIcon tray, string iconPath, DispatcherQueue ui, Action<bool> record)
@@ -84,7 +84,6 @@ internal sealed class LiveIconHost : IDisposable
         drop.Changed += Follow;
         store.PropertyChanged += storeChanged;
         theme.Changed += Follow;
-        SystemMotion.Changed += Follow;
         Follow();
     }
 
@@ -172,8 +171,12 @@ internal sealed class LiveIconHost : IDisposable
         var progress = state != DropInk.Blotting ? null
             : store.Meeting is null && icon.Frame.Look is LiveIconLook.Ring shown ? shown.Progress
             : LiveIcon.FinalPassProgress(store.Meeting);
-        var still = theme.AlwaysStill || !SystemMotion.AnimationsEnabled;
-        icon.Update(LiveIconLook.For(state, progress, still), Colours());
+        // Still in every state, so the badge and the tray icon change only with the state: a
+        // breath would be seven calls a second into Explorer (SetOverlayIcon; Shell_NotifyIcon,
+        // which TrayIcon.SetIcon makes on every call) on this thread, and a hung Explorer would
+        // stall the app. Neither can move without them, so nothing on them breathes and no timer
+        // runs (Always still and Windows' animation setting have nothing left to hold still here).
+        icon.Update(LiveIconLook.OnShell(state, progress), Colours());
         Tooltip(App.TrayTooltip(inkProblem, state));
     }
 
@@ -204,7 +207,6 @@ internal sealed class LiveIconHost : IDisposable
         drop.Changed -= Follow;
         store.PropertyChanged -= storeChanged;
         theme.Changed -= Follow;
-        SystemMotion.Changed -= Follow;
         icon.Detach(traySurface);
         icon.Detach(taskbarSurface);
         traySurface.Dispose();

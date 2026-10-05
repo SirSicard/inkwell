@@ -13,7 +13,9 @@
 // LiveIcon decides what each surface shows and when it redraws. A still look is drawn once, when it
 // or its colours change. The recording's pulse is ticked by a timer that runs only while a pulse is
 // shown and someone can see the screen; locked or with the display off nothing ticks or draws, and
-// on waking the state as it is now is drawn once. Each surface draws the frames it is given.
+// on waking the state as it is now is drawn once. Each surface draws the frames it is given. On
+// Windows the shell's icons take the still look for every state (LiveIconLook.OnShell): there,
+// every frame is a call into Explorer.
 using Inkwell.Core.Glow;
 
 namespace Inkwell.Core.Screens;
@@ -56,6 +58,15 @@ public abstract record LiveIconLook
         DropInk.Problem => new Glow(LiveIconTone.Alert),
         _ => new Rest(),
     };
+
+    /// <summary>
+    /// The look for <paramref name="state"/> on Windows' shell icons, the tray icon and the taskbar
+    /// button's badge (LiveIconHost): always still, a recording in their colour. Each frame there is
+    /// a call into Explorer on the UI thread (Shell_NotifyIcon, ITaskbarList3.SetOverlayIcon), seven
+    /// a second for a breath, and a hung Explorer would stall the app with it; held still, they
+    /// change only with the state, and no timer runs. The window's own ink still moves.
+    /// </summary>
+    public static LiveIconLook OnShell(DropInk state, double? progress) => For(state, progress, still: true);
 
     /// <summary>Whether it moves (the only look that runs a timer).</summary>
     public bool Pulses => this is Pulse;

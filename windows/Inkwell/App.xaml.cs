@@ -7,7 +7,7 @@
 // (TermsStep, TermsWindow): until they are agreed to, nothing else is made, shown or started.
 //
 // The tray icon and the window's taskbar button show the state (LiveIconHost: dictating in your
-// colour, recording in theirs and breathing, the final pass's progress, a problem in the alert
+// colour, recording in theirs, the final pass's progress, a problem in the alert
 // colour) and the tray's menu is made when it opens (TrayMenu): a left click opens the window. The automatic update check, when on, runs once here at launch.
 //
 // From the start, the screens' log and the core's log lines go to the local log in the library's

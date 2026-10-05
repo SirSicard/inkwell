@@ -207,6 +207,25 @@ public class LiveIconTests
         Assert.Empty(ticker.Starts);
     }
 
+    /// <summary>
+    /// Windows' shell icons change only with the state: each of their frames is a call into
+    /// Explorer, so a recording is one still frame in their colour and no timer runs.
+    /// </summary>
+    [Fact]
+    public void TheShellsIconsChangeOnlyWithTheState()
+    {
+        Assert.All(Enum.GetValues<DropInk>(), state => Assert.False(LiveIconLook.OnShell(state, null).Pulses));
+        var ticker = new HandTicker();
+        var icon = new LiveIcon(ticker);
+        var surface = new RecordingSurface();
+        icon.Attach(surface);
+        icon.Update(LiveIconLook.OnShell(DropInk.Meeting, null), Colours);
+        icon.Update(LiveIconLook.OnShell(DropInk.Meeting, null), Colours);
+        ticker.Fire((int)(LiveIcon.PulseFps * LiveIcon.BreathPeriod));
+        Assert.Empty(ticker.Starts);
+        Assert.Equal([new LiveIconLook.Rest(), new LiveIconLook.Glow(LiveIconTone.Them)], surface.Shown.Select(f => f.Look));
+    }
+
     /// <summary>With nothing to draw on, nothing ticks; the pulse resumes on the next surface.</summary>
     [Fact]
     public void NoSurfaceMeansNoTimer()
