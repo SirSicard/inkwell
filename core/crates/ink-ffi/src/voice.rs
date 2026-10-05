@@ -1322,6 +1322,14 @@ mod tests {
         a.key(true, HotkeyEvent::Pressed { at_ns: 9 });
         a.key(true, HotkeyEvent::Lost);
         assert!(!a.any_held());
+        // Two presses at one host time are two presses; a press at time 0 is a press.
+        let b = Activity::default();
+        assert_eq!(b.presses.load(Ordering::Acquire), 0, "none yet");
+        b.key(false, HotkeyEvent::Pressed { at_ns: 0 });
+        b.key(false, HotkeyEvent::Released { at_ns: 0 });
+        b.key(false, HotkeyEvent::Pressed { at_ns: 0 });
+        assert_eq!(b.presses.load(Ordering::Acquire), 2);
+        assert_eq!(b.pressed_ns.load(Ordering::Acquire), 0);
     }
 
     /// The tap's thread never waits on the mic thread: a burst of presses with nobody receiving

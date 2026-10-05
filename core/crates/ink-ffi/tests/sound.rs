@@ -546,12 +546,21 @@ fn dictation_notices_its_mic_going_by_itself() {
     rig.until("opened again for the new press", || rig.opens().len() == 5);
     assert_eq!(rig.opens()[4], "desk");
     assert!(rig.platform.release());
+    // Past the grace, nothing held: its death is let go of quietly (the press had its reopen,
+    // but no press is under way to tell).
     rig.platform.plug(usb("usb"));
-    rig.platform.unplug("desk");
-    rig.until("let go of after the desk mic went", || !rig.mic_open());
     rig.platform.clock().advance_ns(1_500 * MS);
+    rig.platform.unplug("desk");
+    rig.opens_settle();
+    assert_eq!(rig.opens().len(), 5, "{:?}", rig.opens());
+    assert_eq!(
+        rig.events.count("dictation.mic_failed"),
+        1,
+        "nothing more said"
+    );
     rig.tap();
-    assert_eq!(rig.opens().last().unwrap(), "usb");
+    assert_eq!(rig.opens().len(), 6, "{:?}", rig.opens());
+    assert_eq!(rig.opens()[5], "usb");
 
     // In a take: hold, speak until the take has started, then pull the mic.
     let speech: Vec<f32> = ink_audio::synth::speech_like(3.0, -25.0, 5)
