@@ -2999,7 +2999,7 @@
         },
         "output_using": {
           "$ref": "#/$defs/AudioOutput",
-          "description": "The output a meeting's far end would record now, and why; absent when there is no output."
+          "description": "The output a meeting's far end is to record, and why; absent when there is no output. Stored and shown now; meetings record it once the Windows far end is pinned to it, and until then follow the default output."
         },
         "ref": {
           "type": "string",
@@ -3015,7 +3015,7 @@
     },
     "AudioDevicesChanged": {
       "type": "object",
-      "description": "Devices came or went, a default changed, or the choice did: the same as audio.devices, once a burst of changes has gone quiet (300 ms after the last, at most 1 s after the first). Sent only where the platform tells the core of changes, and after a setting.set of audio.input or audio.output.",
+      "description": "Devices came or went, a default changed, or the choice did: the same as audio.devices, once a burst of changes has gone quiet (300 ms after the last, at most 1 s after the first). Sent after a setting.set of audio.input or audio.output, and on a device change where the platform tells the core of them.",
       "properties": {
         "type": {
           "const": "audio.devices_changed"
@@ -3062,7 +3062,7 @@
         },
         "output_using": {
           "$ref": "#/$defs/AudioOutput",
-          "description": "The output a meeting's far end would record now, and why; absent when there is no output."
+          "description": "The output a meeting's far end is to record, and why; absent when there is no output. Stored and shown now; meetings record it once the Windows far end is pinned to it, and until then follow the default output."
         }
       },
       "required": [
@@ -3277,7 +3277,7 @@
     },
     "AudioOutput": {
       "type": "object",
-      "description": "The output a meeting's far end records (Windows), and why.",
+      "description": "The output a meeting's far end is to record (Windows), and why. Stored and shown now; meetings record it once the Windows far end is pinned to it, and until then follow the default output.",
       "properties": {
         "id": {
           "type": "string",

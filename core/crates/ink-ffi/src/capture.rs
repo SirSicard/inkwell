@@ -8,10 +8,10 @@
 //! never audio.
 //!
 //! **The mic moves only when it goes** ([`FollowMic`]). A meeting keeps the mic it started with:
-//! a mic plugged in mid-call, or a new default, changes nothing (the owner's call, 2026-10-05). When
-//! its own mic goes (unplugged, a headset switched off: the source ends by itself), it opens the
-//! mic again from the choice as it is then, which may be Automatic standing in for a chosen mic
-//! that left, and the shell is told (`meeting.mic_switched`).
+//! a mic plugged in mid-call, or a new default, changes nothing (the owner's call, 2026-10-05).
+//! When its own mic goes (unplugged, a headset switched off: the source ends by itself), it opens
+//! the mic again from the choice as it is then, which may be Automatic standing in for a chosen
+//! mic that left, and the shell is told (`meeting.mic_switched`).
 //!
 //! On Windows ([`WinMeetingCapture`]) the far end of an app is S0.4's plan: process loopback,
 //! which hears the app alone, for Zoom and the browsers; device loopback of the output the app

@@ -14,21 +14,25 @@
 //! nothing to do (architecture rule 9: no polling timers). The platform's notifications
 //! ([`CaptureControl::watch_devices`]) only enqueue; a burst is read once it goes quiet
 //! ([`Coalescer`]), and then the shell hears `audio.devices_changed` (the same fields as
-//! `audio.devices`) and dictation's idle mic is looked at again ([`crate::voice::devices_changed`]:
-//! let go of when the mic it would open now is another). A platform that cannot watch yet is
-//! said once in the log; the devices are then read when a mic opens or a screen asks.
+//! `audio.devices`) and dictation's idle mic is looked at again ([`Sound::mark_stale`]: let go of
+//! when the mic it would open now is another). However hard the OS calls, at most one change waits
+//! in the thread's queue. A platform that cannot watch yet is said once in the log; the devices
+//! are then read when a mic opens or a screen asks. Nothing here takes the voice slot's lock, which
+//! dictation's start holds while it joins threads: the capture and the stale flag live in
+//! [`Sound`].
 //!
 //! **The test** opens the chosen mic (the same pick as dictation and meetings) for up to
 //! [`TEST_MAX`], and reports its level from the ink's band analyzer on a meter scale
 //! ([`meter`]): no gain stage, so a quiet mic shows as quiet. It is refused while a meeting
-//! records (the screen says why: `code` `meeting_recording`), and a meeting that starts ends it.
-//! Nothing it hears is kept or sent anywhere.
+//! records (the screen says why: `code` `meeting_recording`), and a meeting that starts ends it
+//! within [`LEVEL_INTERVAL`]. Nothing it hears is kept or sent anywhere.
 //!
 //! **A chosen mic that is not connected** is said once per spell (`audio.input_fallback`), when a
 //! mic opens on Automatic in its place: a take, a meeting, a meeting's mic that went, or a test.
 //! The spell ends when the chosen mic is seen again, or the choice changes.
 
 use std::io;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread::{self, JoinHandle};
@@ -78,15 +82,43 @@ pub fn meter(db: f32) -> f32 {
     ((db - METER_FLOOR_DB) / -METER_FLOOR_DB).clamp(0.0, 1.0)
 }
 
-/// What [`Shared`] holds for Sound: the fallback spell and the sound thread's mailbox.
+/// What [`Shared`] holds for Sound: the capture, the fallback spell, dictation's stale flag and
+/// the sound thread's mailbox.
 #[derive(Default)]
 pub struct Sound {
+    /// The shell platform's capture (dictation's mic), once it is set.
+    capture: Mutex<Option<Arc<dyn CaptureControl>>>,
     /// The chosen mic whose absence has been said (`audio.input_fallback`), while it lasts.
     spell: Mutex<Option<DeviceId>>,
+    /// The devices or the mic choice changed since dictation's open mic was picked.
+    stale: AtomicBool,
     mailbox: OnceLock<Mutex<Sender<Msg>>>,
 }
 
 impl Sound {
+    /// The capture Sound lists, watches and tests with: the shell platform's, which dictation
+    /// opens its mic through. `None` before it is set, or on a build without one.
+    pub(crate) fn capture(&self) -> Option<Arc<dyn CaptureControl>> {
+        lock(&self.capture).clone()
+    }
+
+    fn set_capture(&self, capture: Arc<dyn CaptureControl>) {
+        *lock(&self.capture) = Some(capture);
+    }
+
+    /// **Any thread.** A device came or went, a default changed, or the mic choice did:
+    /// dictation's idle mic is looked at again ([`crate::voice`]: let go of when the mic it would
+    /// open now is another; a take finishes on its device first).
+    pub(crate) fn mark_stale(&self) {
+        self.stale.store(true, Ordering::Release);
+    }
+
+    /// **Dictation's mic thread.** Whether [`mark_stale`](Self::mark_stale) was called since the
+    /// last time; clears it.
+    pub(crate) fn take_stale(&self) -> bool {
+        self.stale.swap(false, Ordering::AcqRel)
+    }
+
     /// **Any worker.** A mic opened as `mic`: a stand-in for a chosen mic that is not connected is
     /// said once per spell; the chosen mic (or Automatic chosen) ends the spell.
     pub fn opened_on(&self, events: &Events, mic: &MicInfo) {
@@ -183,7 +215,7 @@ pub fn answer(
 ) -> Result<Option<Value>, String> {
     match query {
         SoundQuery::Devices => {
-            let capture = crate::voice::capture(shared).ok_or(NO_DEVICES)?;
+            let capture = shared.sound.capture().ok_or(NO_DEVICES)?;
             devices_event(shared, capture.as_ref(), "audio.devices", reference).map(Some)
         }
         SoundQuery::Test(length) => shared
@@ -217,7 +249,7 @@ pub fn set_choice(shared: &Shared, key: &str, value: &str) -> Result<(), String>
     if value == keyword {
         return store.set_setting(key, value).map_err(|e| e.to_string());
     }
-    let capture = crate::voice::capture(shared).ok_or(NO_DEVICES)?;
+    let capture = shared.sound.capture().ok_or(NO_DEVICES)?;
     let listed = if key == INPUT_KEY {
         capture.input_devices()
     } else {
@@ -243,7 +275,7 @@ pub fn set_choice(shared: &Shared, key: &str, value: &str) -> Result<(), String>
 pub fn choice_changed(shared: &Shared, key: &str) {
     if key == INPUT_KEY {
         shared.sound.spell_over();
-        crate::voice::devices_changed(shared);
+        shared.sound.mark_stale();
     }
     if shared.sound.send(Msg::Changed(None)).is_err() {
         log::warn!("the sound thread has stopped; the devices are not said again");
@@ -251,7 +283,8 @@ pub fn choice_changed(shared: &Shared, key: &str) {
 }
 
 /// **Worker.** `audio.devices` (or `audio.devices_changed`, `ty`): the lists, the choice, what
-/// Automatic picks and what records now.
+/// Automatic picks and what records now. A chosen mic seen connected here ends its fallback spell,
+/// whoever asked.
 fn devices_event(
     shared: &Shared,
     capture: &dyn CaptureControl,
@@ -265,7 +298,11 @@ fn devices_event(
         Err(PlatformError::Unsupported(_)) => None,
         Err(e) => return Err(read(e)),
     };
-    let automatic = capture.automatic_input().map_err(read)?;
+    // Without Automatic's pick the lists still go out: a screen with devices beats none.
+    let automatic = capture.automatic_input().unwrap_or_else(|e| {
+        log::warn!("{ty}: Automatic's mic could not be read: {e}");
+        None
+    });
     let store = shared.store.as_ref();
     let choice = devices::input_choice(store);
     let using = devices::resolve_input(&inputs, &choice, automatic.clone());
@@ -369,6 +406,7 @@ impl SoundThread {
                         shared: &shared,
                         runs: &runs,
                         tx,
+                        pending: Arc::default(),
                         capture: None,
                         coalescer: Coalescer::default(),
                         test: None,
@@ -380,8 +418,9 @@ impl SoundThread {
         Ok(Self { tx, thread })
     }
 
-    /// Gives it the platform: it starts watching the devices.
-    pub fn watch(&self, capture: Arc<dyn CaptureControl>) {
+    /// Gives Sound the platform's capture: listed and tested from now, and watched.
+    pub fn watch(&self, shared: &Shared, capture: Arc<dyn CaptureControl>) {
+        shared.sound.set_capture(capture.clone());
         let _ = self.tx.send(Msg::Watch(capture));
     }
 
@@ -434,6 +473,9 @@ struct Worker<'a> {
     runs: &'a Mutex<Runs>,
     /// For the platform's callback.
     tx: Sender<Msg>,
+    /// A change from the callback waits in the queue: the callback sends no other until it is
+    /// taken (the read it asks for covers them all).
+    pending: Arc<AtomicBool>,
     capture: Option<Arc<dyn CaptureControl>>,
     coalescer: Coalescer,
     test: Option<Test>,
@@ -490,10 +532,18 @@ impl Worker<'_> {
     fn handle(&mut self, msg: Msg) {
         match msg {
             Msg::Watch(capture) => {
+                // The old watcher first: the same capture given again would otherwise lose the
+                // new callback to the old one's unwatch.
+                if let Some(old) = self.capture.take() {
+                    old.unwatch_devices();
+                }
                 let tx = Mutex::new(self.tx.clone());
+                let pending = Arc::clone(&self.pending);
                 let sink = Arc::new(move |change: DeviceChange| {
-                    // Refused only once the thread has gone: nothing is left to tell.
-                    let _ = lock(&tx).send(Msg::Changed(Some(change)));
+                    if !pending.swap(true, Ordering::AcqRel) {
+                        // Refused only once the thread has gone: nothing is left to tell.
+                        let _ = lock(&tx).send(Msg::Changed(Some(change)));
+                    }
                 });
                 match capture.watch_devices(sink) {
                     Ok(()) => log::info!("watching the audio devices"),
@@ -502,12 +552,12 @@ impl Worker<'_> {
                     ),
                     Err(e) => log::warn!("the audio devices cannot be watched: {e}"),
                 }
-                if let Some(old) = self.capture.replace(capture) {
-                    old.unwatch_devices();
-                }
+                self.capture = Some(capture);
             }
             Msg::Changed(change) => {
                 if let Some(change) = change {
+                    // Taken: the callback may send the next one.
+                    self.pending.store(false, Ordering::Release);
                     log::info!("audio devices: {change:?}");
                 }
                 self.coalescer.changed(self.shared.clock.now_ns());
@@ -545,7 +595,7 @@ impl Worker<'_> {
             Ok(e) => self.shared.events.emit(e),
             Err(e) => log::warn!("audio.devices_changed: {e}"),
         }
-        crate::voice::devices_changed(self.shared);
+        self.shared.sound.mark_stale();
     }
 
     fn meeting_records(&self) -> bool {

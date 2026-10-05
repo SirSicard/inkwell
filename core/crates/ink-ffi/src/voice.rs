@@ -61,6 +61,11 @@ use crate::runtime::Shared;
 /// microphone indicator goes out soon after the user stops dictating.
 pub const MIC_IDLE: Duration = Duration::from_secs(60);
 
+/// How long after a press or a take's end a device change may let go of the open mic: a press is
+/// a take only once the chain has heard its minimum hold, so a mic let go of sooner could cut a
+/// press still on its way, and its first words with it.
+pub const STALE_GRACE: Duration = Duration::from_secs(1);
+
 /// The store setting naming the dictation key.
 pub const KEY_SETTING: &str = "dictation.key";
 /// The store setting naming the voice-edit key, or `off`.
@@ -358,25 +363,6 @@ pub fn vad_installed(shared: &Shared) {
     }
 }
 
-/// **Any worker.** The capture the shell's platform gave (dictation's mic), which Settings > Sound
-/// lists and tests too; `None` before the platform is set, or on a build without one.
-pub(crate) fn capture(shared: &Shared) -> Option<Arc<dyn CaptureControl>> {
-    lock(&shared.voice)
-        .platform
-        .as_ref()
-        .map(|p| p.capture.clone())
-}
-
-/// **Any worker.** A device came or went, a default changed, or the mic choice did: an idle open
-/// mic is looked at again at the mic thread's next pass, and let go of when the mic it would open
-/// now is another (the next press opens that one, without its 300 ms lead). A take in progress
-/// finishes on its device first.
-pub(crate) fn devices_changed(shared: &Shared) {
-    if let Some(voice) = lock(&shared.voice).running.as_ref() {
-        voice.activity.stale.store(true, Ordering::Release);
-    }
-}
-
 /// **Shutdown.** Stops dictation, joining every thread that can hold an engine.
 pub fn shutdown(shared: &Shared) {
     let running = lock(&shared.voice).running.take();
@@ -581,9 +567,6 @@ struct Activity {
     busy: AtomicBool,
     /// Host time of the latest press or take ending.
     last_ns: AtomicU64,
-    /// The devices or the mic choice changed since the open mic was picked
-    /// ([`devices_changed`]).
-    stale: AtomicBool,
 }
 
 impl Activity {
@@ -961,18 +944,14 @@ struct OpenMic {
     ring: ink_audio::CaptureConsumer,
     path: MicPath,
     device: DeviceId,
+    name: String,
 }
 
 /// Opens the mic the user chose, else Automatic ([`crate::devices::pick_mic`]), and says once
 /// per spell when it stands in for a chosen mic that is not connected.
-fn open_mic(
-    shared: &Shared,
-    capture: &dyn CaptureControl,
-    activity: &Activity,
-) -> Result<OpenMic, String> {
-    // Cleared first: a change from here on is looked at again once the mic is open. (Never
-    // through the voice slot: its holder may be joining this thread.)
-    activity.stale.store(false, Ordering::Release);
+fn open_mic(shared: &Shared, capture: &dyn CaptureControl) -> Result<OpenMic, String> {
+    // Cleared first: a change from here on is looked at again once the mic is open.
+    shared.sound.take_stale();
     let picked = pick(shared, capture)?;
     let mut source = capture
         .open_mic(Some(&picked.device.id))
@@ -992,6 +971,7 @@ fn open_mic(
         ring,
         path,
         device: picked.device.id,
+        name: picked.device.name,
     })
 }
 
@@ -1006,6 +986,9 @@ fn pick(shared: &Shared, capture: &dyn CaptureControl) -> Result<crate::devices:
 /// How a stretch of open mic ended.
 enum Closed {
     Idle,
+    /// Let go of between takes, with a press just made (its wake may already have been taken):
+    /// open the mic again at once rather than wait for one.
+    Reopen,
     Failed,
     Stop,
 }
@@ -1018,16 +1001,19 @@ fn controller(
     rx: &Receiver<Ctl>,
     activity: &Activity,
 ) {
+    let mut reopen = false;
     loop {
-        match rx.recv() {
-            Ok(Ctl::Wake) => {}
-            Ok(Ctl::WorkerGone) => {
-                worker_gone(shared, platform);
-                continue;
+        if !std::mem::take(&mut reopen) {
+            match rx.recv() {
+                Ok(Ctl::Wake) => {}
+                Ok(Ctl::WorkerGone) => {
+                    worker_gone(shared, platform);
+                    continue;
+                }
+                Ok(Ctl::Stop) | Err(_) => return,
             }
-            Ok(Ctl::Stop) | Err(_) => return,
         }
-        let mut mic = match open_mic(shared, platform.capture.as_ref(), activity) {
+        let mut mic = match open_mic(shared, platform.capture.as_ref()) {
             Ok(mic) => mic,
             Err(message) => {
                 log::warn!("dictation: the mic could not be opened: {message}");
@@ -1046,7 +1032,7 @@ fn controller(
             log::warn!("dictation: the mic did not stop cleanly: {e}");
         }
         match closed {
-            Closed::Idle | Closed::Stop => {
+            Closed::Idle | Closed::Reopen | Closed::Stop => {
                 let _ = inbox.send(Input::MicClosed);
             }
             // A take in progress ends with what it has; nothing heard leads the next.
@@ -1057,6 +1043,7 @@ fn controller(
         }
         // Idle is a still frame (architecture rule 9).
         shared.publish_bands(Bands::default());
+        reopen = matches!(closed, Closed::Reopen);
         if matches!(closed, Closed::Stop) {
             return;
         }
@@ -1127,19 +1114,48 @@ fn pump(
             shared.publish_bands(Bands::default());
         }
         publishing = busy;
-        // A device or the choice changed: between takes, the mic it would open now is picked
-        // again, and this one let go of when that is another (or none). A take finishes first.
-        if !busy && activity.stale.swap(false, Ordering::AcqRel) {
-            match pick(shared, platform.capture.as_ref()) {
-                Ok(next) if next.device.id == mic.device => {}
-                Ok(next) => {
+        // Its device went: between takes it is let go of quietly (the next press opens the mic
+        // the choice picks then); a take ends with what it heard, and says why.
+        if mic.source.ended() {
+            // Read again: a take may have started since this pass's first read.
+            if activity.busy.load(Ordering::Acquire) {
+                let message = format!("the microphone {} stopped delivering", mic.name);
+                log::warn!("dictation: {message}");
+                shared.events.emit(mic_failed(&message));
+                return Closed::Failed;
+            }
+            log::info!("dictation: the mic's device went; it is let go of");
+            let grace_ns = u64::try_from(STALE_GRACE.as_nanos()).unwrap_or(u64::MAX);
+            let last = activity.last_ns.load(Ordering::Acquire);
+            return if shared.clock.now_ns().saturating_sub(last) < grace_ns {
+                Closed::Reopen
+            } else {
+                Closed::Idle
+            };
+        }
+        // A device or the choice changed ([`crate::sound`]): between takes, and not within
+        // [`STALE_GRACE`] of a press, the mic it would open now is picked again, and this one let
+        // go of when that is another (or none). A take finishes first. A press since the pick
+        // began keeps the mic, and it is looked at again later.
+        if !busy && shared.sound.take_stale() {
+            let seen = activity.last_ns.load(Ordering::Acquire);
+            let grace_ns = u64::try_from(STALE_GRACE.as_nanos()).unwrap_or(u64::MAX);
+            let settled = shared.clock.now_ns().saturating_sub(seen) >= grace_ns;
+            let next = settled.then(|| pick(shared, platform.capture.as_ref()));
+            let pressed = activity.busy.load(Ordering::Acquire)
+                || activity.last_ns.load(Ordering::Acquire) != seen;
+            match next {
+                None => shared.sound.mark_stale(),
+                Some(_) if pressed => shared.sound.mark_stale(),
+                Some(Ok(next)) if next.device.id == mic.device => {}
+                Some(Ok(next)) => {
                     log::info!(
                         "dictation: the mic is let go of; the next take opens {}",
                         next.device.name
                     );
                     return Closed::Idle;
                 }
-                Err(e) => {
+                Some(Err(e)) => {
                     log::warn!("dictation: the mic is let go of: {e}");
                     return Closed::Idle;
                 }

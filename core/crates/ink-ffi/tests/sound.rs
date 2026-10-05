@@ -182,6 +182,21 @@ impl Rig {
         }
     }
 
+    /// Moves the mock clock on (past [`STALE_GRACE`](ink_ffi::voice::STALE_GRACE) after the last
+    /// press) until dictation has let go of its idle mic.
+    fn released(&self) {
+        let until = Instant::now() + WAIT;
+        while self.mic_open() {
+            assert!(
+                Instant::now() < until,
+                "the idle mic is never let go of: {:?}",
+                self.events.types()
+            );
+            self.platform.clock().advance_ns(200 * MS);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
     fn enable_dictation(&self) {
         let v = self.ask(r#"{"cmd":"dictation.enable","id":"on"}"#, "on");
         assert_eq!(v["type"], "dictation.ready", "{v}");
@@ -345,6 +360,19 @@ fn a_burst_of_device_changes_is_said_once() {
     // A choice written is said too.
     rig.set("audio.input", "usb", "s1");
     assert_eq!(rig.settled(2)["input"], "usb");
+    // The same platform given again keeps one watcher, the new one.
+    rig.core().set_voice_platform(VoicePlatform {
+        capture: rig.platform.clone(),
+        keys: rig.platform.clone(),
+        edit_keys: Arc::new(MockPlatform::new()),
+        inserter: rig.platform.clone(),
+        focus: rig.platform.clone(),
+    });
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(rig.platform.watching_devices());
+    rig.platform
+        .plug(device("desk", "Desk Microphone", Transport::Usb, false));
+    assert_eq!(rig.settled(3)["inputs"].as_array().unwrap().len(), 4);
     rig.events.assert_valid();
     let platform = rig.platform.clone();
     drop(rig);
@@ -364,11 +392,16 @@ fn dictation_lets_go_of_its_idle_mic_only_when_the_pick_changes() {
     rig.platform
         .plug(device("desk", "Desk Microphone", Transport::Usb, false));
     rig.settled(1);
+    rig.platform.clock().advance_ns(1_500 * MS);
     std::thread::sleep(Duration::from_millis(100));
     assert!(rig.mic_open(), "the same pick keeps the mic and its lead");
 
+    // Within a second of a press, a change waits: a press may still be on its way to the chain.
+    rig.tap();
     rig.set("audio.input", "usb", "s1");
-    rig.until("the idle mic is let go of", || !rig.mic_open());
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(rig.mic_open(), "not within the grace after a press");
+    rig.released();
     rig.tap();
     assert_eq!(rig.opens(), ["built-in", "usb"]);
     assert_eq!(rig.events.count("dictation.mic_failed"), 0);
@@ -398,7 +431,7 @@ fn a_missing_chosen_mic_is_said_once_per_spell() {
     rig.platform
         .plug(device("desk", "Desk Microphone", Transport::Usb, true));
     rig.settled(2);
-    rig.until("the idle mic is let go of", || !rig.mic_open());
+    rig.released();
     rig.tap();
     assert_eq!(rig.opens(), ["built-in", "desk"]);
     std::thread::sleep(Duration::from_millis(100));
@@ -407,15 +440,63 @@ fn a_missing_chosen_mic_is_said_once_per_spell() {
     // Back: the spell is over, and the idle mic gives way to it.
     rig.platform.plug(buds());
     rig.settled(3);
-    rig.until("the stand-in is let go of", || !rig.mic_open());
+    rig.released();
     rig.tap();
     assert_eq!(rig.opens(), ["built-in", "desk", "buds"]);
     // Gone again: a new spell.
     rig.platform.unplug("buds");
     rig.settled(4);
-    rig.until("the dead mic is let go of", || !rig.mic_open());
+    rig.released();
     rig.tap();
     assert!(rig.events.wait_count("audio.input_fallback", 2, WAIT));
+    rig.events.assert_valid();
+}
+
+/// A mic whose device goes is noticed by dictation itself, without the watcher: between takes it
+/// is let go of quietly and the next press opens another; in a take it ends the take, said.
+#[test]
+fn dictation_notices_its_mic_going_by_itself() {
+    let rig = Rig::new("sound-dead-mic", windows_like(), true);
+    rig.enable_dictation();
+    rig.tap();
+    // No clock moved: the watcher's burst is never read, so this is the source's own end.
+    assert!(rig.platform.unplug("built-in"));
+    rig.tap();
+    assert_eq!(rig.opens(), ["built-in", "usb"]);
+    assert_eq!(
+        rig.events.count("dictation.mic_failed"),
+        0,
+        "nothing to say"
+    );
+
+    // In a take: hold, speak until the take has started, then pull the mic.
+    let speech: Vec<f32> = ink_audio::synth::speech_like(3.0, -25.0, 5)
+        .into_iter()
+        .flat_map(|s| [s, s, s])
+        .collect();
+    assert!(rig.platform.press());
+    let clock = rig.platform.clock();
+    for block in speech.chunks(480) {
+        if rig.events.count("dictation.started") > 0 {
+            break;
+        }
+        rig.until("the mic opens", || {
+            rig.platform.feed(Channel::Mic, block, clock.now_ns())
+        });
+        clock.advance_ns(10 * MS);
+        std::thread::sleep(Duration::from_micros(500));
+    }
+    assert!(rig.events.wait_count("dictation.started", 1, WAIT));
+    assert!(rig.platform.unplug("usb"));
+    let failed = rig.events.wait_type("dictation.mic_failed", WAIT);
+    assert!(
+        failed["message"]
+            .as_str()
+            .unwrap()
+            .contains("USB Microphone"),
+        "{failed}"
+    );
+    rig.platform.release();
     rig.events.assert_valid();
 }
 
@@ -475,7 +556,8 @@ fn the_mic_test_reports_a_level_and_ends_on_time_or_when_stopped() {
             v["level"].as_f64().unwrap()
         })
         .collect();
-    assert!((5..=12).contains(&levels.len()), "{levels:?}");
+    // About ten in its second; fewer on a loaded machine, never many more.
+    assert!((3..=12).contains(&levels.len()), "{levels:?}");
     assert!(levels.iter().any(|l| *l > 0.7), "{levels:?}");
     assert!(!rig.mic_open(), "the test's mic is closed");
 

@@ -488,8 +488,9 @@ public struct AudioDevices: Codable, Sendable, Equatable {
     public let inputs: [AudioDevice]
     /// The output choice (audio.output), with outputs: default, or the chosen device's id.
     public let output: String?
-    /// The output a meeting's far end would record now, and why; absent when there is no
-    /// output.
+    /// The output a meeting's far end is to record, and why; absent when there is no output.
+    /// Stored and shown now; meetings record it once the Windows far end is pinned to it, and
+    /// until then follow the default output.
     public let outputUsing: AudioOutput?
     /// The chosen output as remembered, when output is a device.
     public let outputWanted: AudioWanted?
@@ -526,8 +527,8 @@ public struct AudioDevices: Codable, Sendable, Equatable {
 
 /// Devices came or went, a default changed, or the choice did: the same as audio.devices, once
 /// a burst of changes has gone quiet (300 ms after the last, at most 1 s after the first). Sent
-/// only where the platform tells the core of changes, and after a setting.set of audio.input or
-/// audio.output.
+/// after a setting.set of audio.input or audio.output, and on a device change where the
+/// platform tells the core of them.
 public struct AudioDevicesChanged: Codable, Sendable, Equatable {
     /// What Automatic records now ("Automatic (<name>)"); absent when there is no microphone.
     public let automatic: AudioInput?
@@ -537,8 +538,9 @@ public struct AudioDevicesChanged: Codable, Sendable, Equatable {
     public let inputs: [AudioDevice]
     /// The output choice (audio.output), with outputs: default, or the chosen device's id.
     public let output: String?
-    /// The output a meeting's far end would record now, and why; absent when there is no
-    /// output.
+    /// The output a meeting's far end is to record, and why; absent when there is no output.
+    /// Stored and shown now; meetings record it once the Windows far end is pinned to it, and
+    /// until then follow the default output.
     public let outputUsing: AudioOutput?
     /// The chosen output as remembered, when output is a device.
     public let outputWanted: AudioWanted?
@@ -620,7 +622,9 @@ public struct AudioInputFallback: Codable, Sendable, Equatable {
     }
 }
 
-/// The output a meeting's far end records (Windows), and why.
+/// The output a meeting's far end is to record (Windows), and why. Stored and shown now;
+/// meetings record it once the Windows far end is pinned to it, and until then follow the
+/// default output.
 public struct AudioOutput: Codable, Sendable, Equatable {
     /// The OS's id for it.
     public let id: String

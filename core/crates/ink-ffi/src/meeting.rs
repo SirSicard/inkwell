@@ -25,8 +25,9 @@
 //!   loopback, and the mic, which moves only when it goes) is asked every [`FOLLOW_INTERVAL`]
 //!   whether it should, and opened again where it should be; its ring's sink passes from the old
 //!   source to the new one, so the side goes on in the same chunks. A mic opened again on another
-//!   device is said (`meeting.mic_switched`), and the watchdog judges it by its own transport. A source that ends by itself ([`AudioSource::ended`]) is opened again at once
-//!   when its side can move, and said when it cannot. A side left with no source is lost
+//!   device is said (`meeting.mic_switched`), and the watchdog judges it by its own transport. A
+//!   source that ends by itself ([`AudioSource::ended`]) is opened again at once when its side
+//!   can move, and said when it cannot. A side left with no source is lost
 //!   (`Input::Lost`): the watchdog then expects audio from it, so its silence is said within
 //!   seconds, never taken for quiet.
 //! - **What it runs on** besides the speech engines ([`engines`](crate::engines)): the installed

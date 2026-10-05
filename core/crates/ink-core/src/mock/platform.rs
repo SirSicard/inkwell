@@ -218,10 +218,12 @@ impl MockPlatform {
         self
     }
 
-    /// Tells the watcher, if one is watching. Returns whether one was.
+    /// Tells the watcher, if one is watching. Returns whether one was. The lock is held across the
+    /// call, so once `unwatch_devices` returns the callback cannot be running, as the trait
+    /// promises (the core's callback only enqueues).
     pub fn notify_devices(&self, change: DeviceChange) -> bool {
-        let sink = lock(&self.watcher).clone();
-        sink.map(|s| s(change)).is_some()
+        let watcher = lock(&self.watcher);
+        watcher.as_ref().map(|s| s(change)).is_some()
     }
 
     /// Whether a watcher is watching.

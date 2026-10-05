@@ -802,7 +802,7 @@ impl Core {
     /// until this is set. The C ABI sets the Mac's at `ink_init`; tests set mocks.
     pub fn set_voice_platform(&self, platform: crate::voice::VoicePlatform) {
         // Settings > Sound lists, watches and tests the devices through the same capture.
-        self.sound.watch(platform.capture.clone());
+        self.sound.watch(&self.shared, platform.capture.clone());
         lock(&self.shared.voice).set_platform(platform);
     }
 

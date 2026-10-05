@@ -399,8 +399,9 @@ public sealed record AudioDevices : InkEvent
     public string? Output { get; init; }
 
     /// <summary>
-    /// The output a meeting's far end would record now, and why; absent when there is no
-    /// output.
+    /// The output a meeting's far end is to record, and why; absent when there is no output.
+    /// Stored and shown now; meetings record it once the Windows far end is pinned to it, and
+    /// until then follow the default output.
     /// </summary>
     [JsonPropertyName("output_using")]
     public AudioOutput? OutputUsing { get; init; }
@@ -444,8 +445,8 @@ public sealed record AudioDevices : InkEvent
 /// <summary>
 /// Devices came or went, a default changed, or the choice did: the same as audio.devices, once
 /// a burst of changes has gone quiet (300 ms after the last, at most 1 s after the first). Sent
-/// only where the platform tells the core of changes, and after a setting.set of audio.input or
-/// audio.output.
+/// after a setting.set of audio.input or audio.output, and on a device change where the
+/// platform tells the core of them.
 /// </summary>
 public sealed record AudioDevicesChanged : InkEvent
 {
@@ -475,8 +476,9 @@ public sealed record AudioDevicesChanged : InkEvent
     public string? Output { get; init; }
 
     /// <summary>
-    /// The output a meeting's far end would record now, and why; absent when there is no
-    /// output.
+    /// The output a meeting's far end is to record, and why; absent when there is no output.
+    /// Stored and shown now; meetings record it once the Windows far end is pinned to it, and
+    /// until then follow the default output.
     /// </summary>
     [JsonPropertyName("output_using")]
     public AudioOutput? OutputUsing { get; init; }
@@ -601,7 +603,9 @@ public sealed record AudioInputFallback : InkEvent
 }
 
 /// <summary>
-/// The output a meeting's far end records (Windows), and why.
+/// The output a meeting's far end is to record (Windows), and why. Stored and shown now;
+/// meetings record it once the Windows far end is pinned to it, and until then follow the
+/// default output.
 /// </summary>
 public sealed record AudioOutput
 {

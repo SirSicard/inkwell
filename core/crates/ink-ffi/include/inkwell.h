@@ -250,7 +250,9 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       read nowhere: the headset's mic is picked in audio.input),
  *       "audio.input" (auto|a device id from audio.devices: the mic for dictation, meetings and
  *       the test; a device must be connected when set), "audio.output" (default|an output's id,
- *       where audio.devices lists outputs: the output a meeting's far end records on Windows),
+ *       where audio.devices lists outputs: the output a meeting's far end is to record on
+ *       Windows; stored and shown now, and until the far end is pinned to it meetings follow
+ *       the default output),
  *       "meetings.llm" (on|off: a meeting's summary and Ask; as for dictation.polish, setting.set
  *       takes only off, which also withdraws their consent, and consent.allow turns it on),
  *       "llm.local_only" (on|off: on unless turned off, and on when unreadable; while on, a
@@ -277,7 +279,9 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       it, "audio.test_level" reports its level about ten times a second (0-1, -60 dBFS to full
  *       scale), "audio.tested" ends it (done, stopped, meeting or failed; "heard" says whether
  *       anything above a quiet room came in). One at a time; refused while a meeting records
- *       ("code":"meeting_recording"), and ended by a meeting that starts. Nothing is kept.
+ *       ("code":"meeting_recording"), and ended by a meeting that starts. audio.test_stop is
+ *       answered by the test's own "audio.tested" (its "ref" is the test's id, "ended":"stopped"),
+ *       or "command.failed" with the stop's id when no test runs. Nothing is kept.
  *   {"cmd":"hotkey.check","binding":"<token>","id":"<ref>"}
  *       Whether this computer can watch a key binding as the dictation or edit key, before the
  *       shell stores one the user recorded: "hotkey.checked" with "ok", and either "canonical"
