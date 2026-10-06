@@ -6,6 +6,7 @@
 // 0.2's history (only when there is some to import), the appearance, polish (off, and turned on
 // only through its consent step, with Apple's model or the user's own key), and how to dictate,
 // with the orb answering the user's voice. Remembered in the core's store (onboarding.done).
+import InkBridge
 import InkRenderer
 import SwiftUI
 
@@ -16,6 +17,8 @@ struct OnboardingView: View {
     @State private var demo = InkState.idle
     /// The Polish step's own-key rows are open (closed at first: skipping them costs nothing).
     @State private var ownKey = false
+    /// The try-it heard nothing (TryItHint): the Ready step says where the microphone is picked.
+    @State private var notHearing = false
 
     /// The sheet's size and margin. Each step fits it without scrolling (OnboardingLayoutTests):
     /// 560 high, not 520, so the Speech models step holds two failures in the core's long words
@@ -242,6 +245,14 @@ struct OnboardingView: View {
                     .font(Typography.caption)
                     .foregroundStyle(Theme.secondaryText)
                     .frame(maxWidth: .infinity)
+                if notHearing {
+                    Text(TryItHint.text)
+                        .font(Typography.caption)
+                        .foregroundStyle(Theme.text)
+                        .frame(maxWidth: .infinity)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             if !screens.permissions.offCards.isEmpty {
                 Text("Still off: \(screens.permissions.offCards.map(\.title).joined(separator: ", ")). Settings can turn them on.")
@@ -251,6 +262,49 @@ struct OnboardingView: View {
         .font(Typography.body)
         .foregroundStyle(Theme.text)
         .fixedSize(horizontal: false, vertical: true)
+        // A held take that has heard no words in 5 s: one delayed look per take, not a timer.
+        .task(id: ink.store.liveDictation?.take) {
+            guard ink.store.liveDictation != nil else { return }
+            try? await Task.sleep(for: TryItHint.silence)
+            if Task.isCancelled { return }
+            let hasPartials = ink.store.engines.values.contains { $0.contains { $0.job == .livePartials } }
+            if TryItHint.afterHold(phase: ink.store.dictation, live: ink.store.liveDictation, hasPartials: hasPartials) {
+                setNotHearing(true)
+            }
+        }
+        .onChange(of: ink.store.lastDictation) { _, outcome in
+            if let hint = TryItHint.after(outcome) { setNotHearing(hint) }
+        }
+    }
+
+    private func setNotHearing(_ on: Bool) {
+        guard on != notHearing else { return }
+        notHearing = on
+        if on { AccessibilityNotification.Announcement(TryItHint.text).post() }
+    }
+}
+
+/// The first run's try-it hint: when the orb heard nothing, where to pick the microphone. Shown
+/// after a take that found no speech or only silence, or 5 s into a take held with no words heard
+/// (only where words come live: with no live engine a take shows none until it ends); gone after a
+/// take that types something. The first run has no picker of its own (the plan: one place for it).
+enum TryItHint {
+    static let silence: Duration = .seconds(5)
+    static let text = "Not hearing you? Once you're set up, Settings > Sound picks the microphone and tests it."
+
+    /// Whether a take still held after `silence` has heard nothing.
+    static func afterHold(phase: CoreStore.DictationPhase, live: CoreStore.LiveDictation?, hasPartials: Bool) -> Bool {
+        guard hasPartials, phase == .listening, let live, !live.edit else { return false }
+        return live.partial?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true
+    }
+
+    /// What a take's end says: show (it heard nothing), hide (it typed something), or nil (no news).
+    static func after(_ outcome: CoreStore.DictationOutcome?) -> Bool? {
+        switch outcome {
+        case .discarded(.silence)?, .discarded(.noSpeech)?, .discarded(.nothingHeard)?: true
+        case .inserted?: false
+        default: nil
+        }
     }
 }
 
