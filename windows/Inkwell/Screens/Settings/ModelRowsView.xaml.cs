@@ -5,6 +5,7 @@
 using Inkwell.Core.Screens;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Controls.Primitives;
 
 namespace Inkwell.Screens;
 
@@ -74,7 +75,9 @@ public sealed partial class ModelRowsView : UserControl
         if (RowOf(sender) is ModelRowItem item && sender is FrameworkElement anchor)
         {
             var id = item.Id;
-            RemoveQuestion.Show(anchor, item.Row, () => catalogue.Remove(id));
+            // Shown from this view, at the button: the rows are made again on every progress tick
+            // while a download runs, and a flyout on a row's button would close with it.
+            RemoveQuestion.Show(anchor, item.Row, () => catalogue.Remove(id), host: this);
         }
     }
 }
@@ -86,7 +89,8 @@ public sealed partial class ModelRowsView : UserControl
 /// </summary>
 internal static class RemoveQuestion
 {
-    public static void Show(FrameworkElement anchor, Inkwell.Core.Screens.ModelRow row, Action remove)
+    /// <param name="host">A stable element to show it from, at <paramref name="anchor"/>'s place, when the anchor may be replaced while it is open; null: from the anchor.</param>
+    public static void Show(FrameworkElement anchor, Inkwell.Core.Screens.ModelRow row, Action remove, FrameworkElement? host = null)
     {
         var question = new TextBlock { Text = row.RemoveQuestion, TextWrapping = TextWrapping.Wrap, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, Style = (Style)Application.Current.Resources["InkBodyStyle"] };
         var detail = new TextBlock { Text = row.RemoveDetail(System.Globalization.CultureInfo.CurrentCulture), TextWrapping = TextWrapping.Wrap, Style = (Style)Application.Current.Resources["InkCaptionStyle"] };
@@ -109,6 +113,12 @@ internal static class RemoveQuestion
         };
         cancel.Click += (_, _) => flyout.Hide();
         flyout.Opened += (_, _) => cancel.Focus(FocusState.Programmatic);
-        flyout.ShowAt(anchor);
+        if (host is null)
+        {
+            flyout.ShowAt(anchor);
+            return;
+        }
+        var at = anchor.TransformToVisual(host).TransformPoint(new Windows.Foundation.Point(0, anchor.ActualHeight));
+        flyout.ShowAt(host, new FlyoutShowOptions { Position = at, Placement = FlyoutPlacementMode.BottomEdgeAlignedLeft });
     }
 }

@@ -412,6 +412,8 @@ public sealed class CatalogueModel(Action<CoreCommand> send) : ObservableModel
     {
         downloads = downloads.SetItem(running!, outcome);
         cancelling = cancelling.Remove(running!);
+        // A note about a Cancel ("couldn't stop…") is over once the download has ended.
+        notes = notes.Remove(running!);
         running = null;
         Pump();
         Changed();
@@ -528,7 +530,14 @@ public sealed class CatalogueModel(Action<CoreCommand> send) : ObservableModel
         {
             case ModelsListed listed:
                 // Speech and language models alike (a list from a core before language models has
-                // no kind: speech).
+                // no kind: speech). A row whose install changed has a new state: its old note goes.
+                foreach (var listedEntry in listed.Models)
+                {
+                    if (Models.FirstOrDefault(m => m.Id == listedEntry.Id) is { } before && before.Installed != listedEntry.Installed)
+                    {
+                        notes = notes.Remove(listedEntry.Id);
+                    }
+                }
                 Models = listed.Models;
                 FreeBytes = listed.FreeBytes;
                 Listed = true;
@@ -591,8 +600,10 @@ public sealed class CatalogueModel(Action<CoreCommand> send) : ObservableModel
             case CommandFailed failed when failed.Command == "model.update" && running is string id && failed.Id == new CoreCommand.ModelUpdate(id, id).CommandId:
                 // Refused before it started: no room (nothing fetched), another update holds the
                 // model, or it never reached the core.
+                // One the user cancelled just as it started, refused with no code: what they asked for, not a failure.
                 Ended(failed is { Code: FailureCode.NotEnoughSpace, NeededBytes: long needed, FreeBytes: long free }
                     ? new ModelDownload.NoSpace(needed, free)
+                    : failed.Code is null && cancelling.Contains(id) ? new ModelDownload.Cancelled()
                     : new ModelDownload.Failed(failed.Message));
                 break;
             case CommandFailed failed when failed.Command == "model.cancel" && RowOf(failed) is string cancelled:
