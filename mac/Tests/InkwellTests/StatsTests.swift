@@ -705,15 +705,25 @@ final class MilestoneCelebrationTests: XCTestCase {
     private func bounded<T>(
         _ task: Task<T, Never>, _ what: String, within limit: Duration = .seconds(10)
     ) async throws -> T {
-        let timer = Task {
-            try await Task.sleep(for: limit)
-            task.cancel()
+        let first = await withTaskGroup(of: Finish<T>.self) { group in
+            group.addTask { .done(await task.value) }
+            group.addTask {
+                try? await Task.sleep(for: limit)
+                return .late
+            }
+            // Whichever finishes first decides, even when the other finishes just after it.
+            let first = await group.next() ?? .late
+            if case .late = first { task.cancel() }
+            group.cancelAll()
+            return first
         }
-        let value = await task.value
-        timer.cancel()
-        // The timer ran to its end only if it cancelled the task.
-        if (try? await timer.value) != nil { throw NotWithin(what: what, limit: limit) }
+        guard case .done(let value) = first else { throw NotWithin(what: what, limit: limit) }
         return value
+    }
+
+    private enum Finish<T: Sendable>: Sendable {
+        case done(T)
+        case late
     }
 
     private struct NotWithin: Error, CustomStringConvertible {
