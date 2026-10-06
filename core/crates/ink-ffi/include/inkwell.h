@@ -306,8 +306,11 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       consent edits nothing),
  *       "dictation.enabled" (on|off: the shell's own switch, read before it sends
  *       dictation.enable), "meetings.calls.default" (ask|always|never: the call policy for apps
- *       not chosen for; ask unless set), "meetings.detect" (on|off: the old "Offer to record
- *       calls", answered for the default: off is never, on over never is ask),
+ *       not chosen for; ask unless set), "meetings.auto_reminder_shown" (on: the reminder to
+ *       tell the others was shown during a call Always recorded, which the shells show on the
+ *       first such call only; the core does nothing with it), "meetings.detect" (on|off: the
+ *       old "Offer to record calls", answered for the default: off is never, on over never is
+ *       ask),
  *       "audio.input" (auto|a device id from audio.devices: the mic for dictation, meetings and
  *       the test; a device must be connected when set), "audio.output" (default|an output's id,
  *       where audio.devices lists outputs: on Windows, the output Record now, and a call

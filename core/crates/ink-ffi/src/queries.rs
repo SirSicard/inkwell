@@ -65,6 +65,9 @@ pub const SHELL_SETTINGS: &[(&str, &[&str])] = &[
     // (crate::calls): ask (the consent Drop; also when unset), always record, or never. The
     // meetings thread reads the policies again when it changes.
     (crate::calls::DEFAULT_KEY, crate::calls::DEFAULT_VALUES),
+    // The reminder to tell the others has been shown during a call its app's Always recorded:
+    // the shells show it on the first such call only. The core does nothing with it.
+    ("meetings.auto_reminder_shown", &["on"]),
     // "Offer to record calls", which the default replaced: answered for the default until the
     // shells move to it (off is never; on over never is ask), never stored again.
     (crate::control::DETECT_KEY, &["on", "off"]),
