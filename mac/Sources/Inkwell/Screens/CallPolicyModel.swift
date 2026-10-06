@@ -62,6 +62,12 @@ final class CallPolicyModel {
 
     /// The policy for apps not chosen for; nil until the core says.
     private(set) var defaultPolicy: CallPolicy?
+    /// Always was chosen as the default, and waits for `confirmAlwaysDefault`: it records every
+    /// call without asking. Cancelled, the default stays what it was.
+    private(set) var confirmingAlways = false
+    /// Bumped when Always is cancelled: the default's picker is made again, so it shows the
+    /// default it kept, not the Always it was clicked to.
+    private(set) var alwaysPromptEpoch = 0
     /// The apps, most recently seen first, as the core last listed them.
     private(set) var apps: [CallApp] = []
     /// Whether the core has listed them.
@@ -120,6 +126,29 @@ final class CallPolicyModel {
 
     func load() {
         send(.meetingsCallsList(ref: ref()))
+    }
+
+    /// The default chosen in Settings: Always asks first, each time it is chosen.
+    func chooseDefault(_ policy: CallPolicy) {
+        if policy == .always, defaultPolicy != .always {
+            confirmingAlways = true
+            return
+        }
+        confirmingAlways = false
+        setDefault(policy)
+    }
+
+    /// "Record Without Asking": Always becomes the default.
+    func confirmAlwaysDefault() {
+        confirmingAlways = false
+        setDefault(.always)
+    }
+
+    /// "Cancel": the default stays what it was.
+    func cancelAlwaysDefault() {
+        guard confirmingAlways else { return }
+        confirmingAlways = false
+        alwaysPromptEpoch += 1
     }
 
     /// The default for apps not chosen for.
@@ -236,6 +265,10 @@ final class CallPolicyModel {
     static let unreadableFromDrop = "Inkwell couldn't read what you chose for each app. Choose in Settings > Meetings."
     static let startOverTitle = "Start the list over?"
     static let startOverDetail = "Inkwell couldn't read what you chose for each app. Saving this choice starts the list over: every other app follows the default until you choose again."
+    /// Asked each time Always is chosen as the default (an app's own Always is not asked about).
+    static let confirmAlwaysTitle = "Inkwell will record every call without asking."
+    static let confirmAlwaysDetail = "Tell the people on your calls."
+    static let confirmAlwaysButton = "Record Without Asking"
 
     /// What a choice reads as in an app's picker: the default names what it is now.
     func title(_ choice: CallChoice) -> String {
@@ -299,6 +332,8 @@ final class CallPolicyModel {
             dropFailure = nil
         case .coreStopped:
             offered = nil
+            // Always as the default waits for a core that answers: asked again once it does.
+            confirmingAlways = false
             // A core that starts again answers none of the old one's commands: nothing is in
             // flight, and what is stored is read again at core.ready.
             inFlight = [:]
