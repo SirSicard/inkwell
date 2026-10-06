@@ -589,7 +589,7 @@ impl<C: IoContext> Listeners<C> {
 impl<C: IoContext> Drop for Listeners<C> {
     fn drop(&mut self) {
         self.context().gate().close();
-        let mut removed = true;
+        let mut refused = false;
         for address in self.addresses {
             // SAFETY: the same object, address, listener and client data it was added with.
             let status = unsafe {
@@ -600,9 +600,10 @@ impl<C: IoContext> Drop for Listeners<C> {
                     self.context.as_ptr().cast(),
                 )
             };
-            // A device unplugged mid-stream answers '!obj': its listeners went with it.
-            removed &= torn_down(self.hal, self.object, status);
+            refused |= status != 0;
         }
+        // A device unplugged mid-stream answers '!obj': its listeners went with it. Asked once.
+        let removed = !refused || self.hal.is_gone(self.object);
         // A listener still added could be called later and would read the context (its gate lives
         // inside it), so it is leaked, never freed.
         if removed && self.context().gate().wait_idle(LEAVE_TIMEOUT) {

@@ -444,7 +444,9 @@ mod win {
                 }
                 Err(e) => {
                     if self.unread.as_ref() != Some(&e) {
-                        log::warn!("meeting: the output choice could not be read: {e}");
+                        log::warn!(
+                            "meeting: the chosen output or the outputs could not be read: {e}"
+                        );
                         self.unread = Some(e);
                     }
                 }
@@ -525,10 +527,16 @@ mod win {
             let (mic, info) = open_mic(self.devices.as_ref(), &choices.input())?;
             let transport = info.transport;
             // Read once for the start; a far end of all output reads it again as it follows.
-            let pinned = match self.devices.pinned_output(&choices.output()) {
+            let pinned = match choices.try_output().and_then(|choice| {
+                self.devices
+                    .pinned_output(&choice)
+                    .map_err(|e| e.to_string())
+            }) {
                 Ok(pinned) => pinned,
                 Err(e) => {
-                    log::warn!("meeting: the outputs could not be read ({e}); the default output");
+                    log::warn!(
+                        "meeting: the chosen output or the outputs could not be read ({e}); the default output"
+                    );
                     None
                 }
             };
