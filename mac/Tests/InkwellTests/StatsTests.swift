@@ -698,24 +698,21 @@ final class MilestoneCelebrationTests: XCTestCase {
         try await Task.sleep(for: .seconds(0.05))
     }
 
-    /// Waits for `task`, at most `limit`; past it, cancels it and throws. The orb arrives on the
-    /// display link's ticks, which stop while the display sleeps, and an unbounded wait for it once
-    /// hung the suite for 40 minutes. Every wait here ends on cancellation (InkView.settled), so
-    /// the cancelled task returns at once.
+    /// Waits for `task`, at most `limit`; past it, cancels it and throws at once, without waiting
+    /// for it to end. The orb arrives on the display link's ticks, which stop while the display
+    /// sleeps, and an unbounded wait for it once hung the suite for 40 minutes.
     private func bounded<T>(
         _ task: Task<T, Never>, _ what: String, within limit: Duration = .seconds(10)
     ) async throws -> T {
-        let first = await withTaskGroup(of: Finish<T>.self) { group in
-            group.addTask { .done(await task.value) }
-            group.addTask {
-                try? await Task.sleep(for: limit)
-                return .late
+        let race = Race<T>()
+        let first = await withCheckedContinuation { continuation in
+            race.continuation = continuation
+            race.timer = Task {
+                do { try await Task.sleep(for: limit) } catch { return }
+                task.cancel()
+                race.finish(.late)
             }
-            // Whichever finishes first decides, even when the other finishes just after it.
-            let first = await group.next() ?? .late
-            if case .late = first { task.cancel() }
-            group.cancelAll()
-            return first
+            Task { race.finish(.done(await task.value)) }
         }
         guard case .done(let value) = first else { throw NotWithin(what: what, limit: limit) }
         return value
@@ -724,6 +721,20 @@ final class MilestoneCelebrationTests: XCTestCase {
     private enum Finish<T: Sendable>: Sendable {
         case done(T)
         case late
+    }
+
+    /// A wait and its limit: whichever finishes first decides, even when the other finishes just
+    /// after it, and the later one changes nothing.
+    @MainActor
+    private final class Race<T: Sendable> {
+        var continuation: CheckedContinuation<Finish<T>, Never>?
+        var timer: Task<Void, Never>?
+
+        func finish(_ outcome: Finish<T>) {
+            timer?.cancel()
+            continuation?.resume(returning: outcome)
+            continuation = nil
+        }
     }
 
     private struct NotWithin: Error, CustomStringConvertible {
