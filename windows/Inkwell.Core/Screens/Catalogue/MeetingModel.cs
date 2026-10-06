@@ -1,6 +1,6 @@
 // Meetings as the user drives them, as the Mac's MeetingModel: record now, record the call the
 // Drop offers or say not this one, stop, and the settings that shape them: listening for calls,
-// the headset mic, and how long the library keeps records.
+// and how long the library keeps records. The microphone is Settings > Sound's (SoundModel).
 //
 // Recording starts only when the user asks (Today's "Record now", the menu, and the Drop's
 // "Record this call"). Detection only offers. A meeting's title comes from the calendar when a
@@ -86,7 +86,6 @@ public sealed class MeetingModel(
     public static IReadOnlySet<string> SettingIds { get; } = new HashSet<string>(StringComparer.Ordinal)
     {
         ShellSetting.MeetingsDetect.CommandId(),
-        ShellSetting.MeetingsHeadsetMic.CommandId(),
         ShellSetting.RetentionDays.CommandId(),
     };
 
@@ -107,9 +106,6 @@ public sealed class MeetingModel(
     /// <summary>Whether the core listens for calls (the user's setting; on unless turned off).</summary>
     public bool Detect { get; private set; } = true;
 
-    /// <summary>With Bluetooth output, record the headset's own mic.</summary>
-    public bool HeadsetMic { get; private set; }
-
     /// <summary>How long the library keeps records; null until the store answers (the picker is disabled then).</summary>
     public Retention? Retention { get; private set; }
 
@@ -129,7 +125,6 @@ public sealed class MeetingModel(
     public void Load()
     {
         send(new CoreCommand.SettingGet(ShellSetting.MeetingsDetect));
-        send(new CoreCommand.SettingGet(ShellSetting.MeetingsHeadsetMic));
         send(new CoreCommand.SettingGet(ShellSetting.RetentionDays));
     }
 
@@ -198,13 +193,6 @@ public sealed class MeetingModel(
         send(new CoreCommand.SettingSet(ShellSetting.MeetingsDetect, on ? "on" : "off"));
     }
 
-    public void SetHeadsetMic(bool on)
-    {
-        HeadsetMic = on;
-        Changed();
-        send(new CoreCommand.SettingSet(ShellSetting.MeetingsHeadsetMic, on ? "on" : "off"));
-    }
-
     public void SetRetention(Retention value)
     {
         Retention = value;
@@ -243,10 +231,6 @@ public sealed class MeetingModel(
         {
             case SettingValue value when value.Key == ShellSetting.MeetingsDetect.Key():
                 Detect = value.Value != "off";
-                Changed();
-                break;
-            case SettingValue value when value.Key == ShellSetting.MeetingsHeadsetMic.Key():
-                HeadsetMic = value.Value == "on";
                 Changed();
                 break;
             case SettingValue value when value.Key == ShellSetting.RetentionDays.Key():

@@ -18,8 +18,6 @@ public sealed partial class MeetingsSection : UserControl
 
     public static string DetectDetail => "When an app opens the microphone for a call, Inkwell asks whether to record it. It never records without you saying so.";
 
-    public static string HeadsetDetail => "With Bluetooth headphones, record their own microphone instead of the PC's. It carries only call-quality sound.";
-
     public static string SettingsFailedText => MeetingModel.SettingsFailedText;
 
     // Also raised when the model's value is shown: only the user's flip is a change.
@@ -28,14 +26,6 @@ public sealed partial class MeetingsSection : UserControl
         if (Detect.IsOn != Model.Detect)
         {
             Model.SetDetect(Detect.IsOn);
-        }
-    }
-
-    private void OnHeadsetToggled(object sender, RoutedEventArgs e)
-    {
-        if (HeadsetMic.IsOn != Model.HeadsetMic)
-        {
-            Model.SetHeadsetMic(HeadsetMic.IsOn);
         }
     }
 }

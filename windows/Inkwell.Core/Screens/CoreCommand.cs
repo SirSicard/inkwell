@@ -579,8 +579,6 @@ public enum ShellSetting
     MeetingsDetect,
     /// <summary>"on" or "off": the switch for a meeting's summary and Ask. Only "off" is set this way.</summary>
     MeetingsLlm,
-    /// <summary>"on" or "off" (the default): with Bluetooth output, record the headset's own mic.</summary>
-    MeetingsHeadsetMic,
     /// <summary>"forever" (the default), or days: how long the library keeps records.</summary>
     RetentionDays,
     /// <summary>The dictation key (a token).</summary>
@@ -626,7 +624,6 @@ public static class ShellSettings
         ShellSetting.DictationPolish => "dictation.polish",
         ShellSetting.MeetingsDetect => "meetings.detect",
         ShellSetting.MeetingsLlm => "meetings.llm",
-        ShellSetting.MeetingsHeadsetMic => "meetings.headset_mic",
         ShellSetting.RetentionDays => "retention.days",
         ShellSetting.DictationKey => "dictation.key",
         ShellSetting.DictationEditKey => "dictation.edit_key",
