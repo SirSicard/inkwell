@@ -76,6 +76,8 @@
                     <Button x:Name="ModelsTryAgain" Click="OnModelsTryAgain" />
                 </StackPanel>
                 <TextBlock x:Name="DownloadLine" Style="{StaticResource InkCaptionStyle}" />
+                <!-- The free space on the volume models go on (models.listed's free_bytes). -->
+                <TextBlock x:Name="FreeSpaceLine" Style="{StaticResource InkCaptionStyle}" />
                 <TextBlock x:Name="ModelsGoOn" Style="{StaticResource InkCaptionStyle}" />
             </StackPanel>
 
@@ -132,6 +134,9 @@
                         </StackPanel>
                     </Border>
                 </StackPanel>
+                <!-- This PC's own model, once it is ticked in Models, downloading or in: what the
+                     switch uses, or when it can. Groq's free key below is then the alternative. -->
+                <TextBlock x:Name="PolishLocalLine" Style="{StaticResource InkBodyStyle}" TextWrapping="Wrap" />
                 <!-- The own key as one choice (the Mac's): Groq's free model behind a disclosure, how
                      to get its key (GroqKeyGuideView), the key with Save (stored, nothing more), and
                      Use Groq, which asks polish's consent before it chooses Groq
