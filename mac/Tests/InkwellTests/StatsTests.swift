@@ -38,17 +38,22 @@ func statsCounted(
     streak: Int = 0, longest: Int = 0, heatmap: [Int] = Array(repeating: 0, count: 83),
     meetings: String = #"{"meetings":0,"recorded_ms":0,"you_ms":0,"them_ms":0,"longest_monologue_ms":0,"questions":0}"#,
     promises: String = #"{"made":0,"kept":0,"open":0,"overdue":0}"#,
-    reached: Set<String> = [], typingWpm: Int = 40
+    reached: Set<String> = [], typingWpm: Int = 40, named: Bool = false, dictationExtra: String = "", extra: String = ""
 ) -> String {
     var dictation = #""words_today":\#(words.today),"words_week":\#(words.week),"words_all":\#(words.all),"dictations_all":\#(dictations),"saved_ms_week":\#(savedWeek),"saved_ms_all":\#(savedAll),"streak_days":\#(streak),"longest_streak_days":\#(longest),"heatmap_first_day":"2026-07-13","heatmap_words":[\#(heatmap.map(String.init).joined(separator: ","))]"#
     if let wpmWeek { dictation += #","wpm_week":\#(wpmWeek)"# }
     if let wpmAverage { dictation += #","wpm_average":\#(wpmAverage)"# }
-    let milestones = [("words_1000", "words", 1000), ("words_10000", "words", 10000), ("words_50000", "words", 50000),
-                      ("words_100000", "words", 100000), ("streak_7", "streak", 7), ("streak_30", "streak", 30),
-                      ("streak_100", "streak", 100)]
-        .map { #"{"id":"\#($0.0)","kind":"\#($0.1)","threshold":\#($0.2),"reached":\#(reached.contains($0.0))}"# }
+    dictation += dictationExtra
+    let milestones = [("words_1000", "words", 1000, "first_page"), ("words_10000", "words", 10000, "notebook"),
+                      ("words_50000", "words", 50000, "short_novel"), ("words_100000", "words", 100000, "novels_worth"),
+                      ("streak_7", "streak", 7, "seven_days"), ("streak_30", "streak", 30, "thirty_days"),
+                      ("streak_100", "streak", 100, "hundred_days")]
+        .map { m in
+            let name = named ? ",\"name\":\"\(m.3)\"" : ""
+            return #"{"id":"\#(m.0)","kind":"\#(m.1)","threshold":\#(m.2),"reached":\#(reached.contains(m.0))\#(name)}"#
+        }
         .joined(separator: ",")
-    return #"{"type":"stats.counted","ref":"\#(ref)","today":"2026-10-03","typing_wpm":\#(typingWpm),"dictation":{\#(dictation)},"meetings_month":\#(meetings),"meetings_all":\#(meetings),"promises_month":\#(promises),"promises_all":\#(promises),"milestones":[\#(milestones)]}"#
+    return #"{"type":"stats.counted","ref":"\#(ref)","today":"2026-10-03","typing_wpm":\#(typingWpm),"dictation":{\#(dictation)},"meetings_month":\#(meetings),"meetings_all":\#(meetings),"promises_month":\#(promises),"promises_all":\#(promises),"milestones":[\#(milestones)]\#(extra)}"#
 }
 
 @MainActor
@@ -143,7 +148,7 @@ final class StatsModelTests: XCTestCase {
         XCTAssertTrue(atLaunch.contains("milestones.check"), "\(atLaunch)")
         XCTAssertEqual(
             Set(fields(sent).filter { $0["cmd"] as? String == "setting.get" }.compactMap { $0["key"] as? String }),
-            ["stats.celebrate", "stats.typing_wpm"])
+            ["stats.celebrate", "stats.typing_wpm", "stats.rest_days", "stats.streak", "stats.share_heatmap"])
 
         sent.removeAll()
         stats.apply(event(#"{"type":"dictation.inserted","outcome":"pasted","text":"x"}"#))
@@ -792,21 +797,21 @@ final class ShareCardTests: XCTestCase {
     func testTheCardRendersAsAPNGOnThisMac() throws {
         let lines = [ShareLine(value: "56,789", label: "words dictated"), ShareLine(value: "12 active days", label: "dictation streak")]
         for dark in [false, true] {
-            let png = try XCTUnwrap(StatsShare.png(lines: lines, dark: dark, you: .blue, them: .orange))
+            let png = try XCTUnwrap(StatsShare.png(content: ShareContent(lines: lines), dark: dark, you: .blue, them: .orange))
             XCTAssertEqual(Array(png.prefix(4)), [0x89, 0x50, 0x4E, 0x47], "a PNG")
             let image = try XCTUnwrap(NSBitmapImageRep(data: png))
             XCTAssertEqual(image.pixelsWide, Int(ShareCard.width * StatsShare.scale))
             XCTAssertEqual(image.size.width, ShareCard.width, "144 dpi: it pastes at the card's size")
             XCTAssertGreaterThan(image.pixelsHigh, 200)
         }
-        XCTAssertNil(StatsShare.png(lines: [], dark: false, you: .blue, them: .orange), "nothing ticked, no card")
+        XCTAssertNil(StatsShare.png(content: ShareContent(), dark: false, you: .blue, them: .orange), "nothing ticked, no card")
     }
 
     func testCopyPutsTheImageOnThePasteboardAndNothingElseLeaves() throws {
         let board = NSPasteboard(name: NSPasteboard.Name("inkwell-test-\(UUID().uuidString)"))
         defer { board.releaseGlobally() }
         let png = try XCTUnwrap(StatsShare.png(
-            lines: [ShareLine(value: "1", label: "words dictated")], dark: false, you: .blue, them: .orange))
+            content: ShareContent(lines: [ShareLine(value: "1", label: "words dictated")]), dark: false, you: .blue, them: .orange))
         XCTAssertTrue(StatsShare.copy(png, to: board))
         XCTAssertEqual(board.data(forType: .png), png)
         XCTAssertNil(board.string(forType: .string), "no text: an image only")

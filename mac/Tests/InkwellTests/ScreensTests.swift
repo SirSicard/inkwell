@@ -2000,6 +2000,13 @@ final class ScreensCoreContractTests: XCTestCase {
         }
         XCTAssertEqual(refused?.id, "note-line-7", "a refused note is matched to its line")
         XCTAssertFalse(refused?.message.contains("private") ?? true, "the error never quotes the note")
+        // Settings > Sound: the devices are listed (no permission needed; never the test, which
+        // would open the mic), and a stop with no test running is refused by its id.
+        let sound = try answer(.audioDevices(ref: SoundModel.devicesID)) { if case .audioDevices(let d) = $0 { d } else { nil } }
+        XCTAssertEqual(sound?.ref, SoundModel.devicesID)
+        XCTAssertEqual(sound?.input, "auto", "Automatic until a mic is chosen")
+        let stop = try answer(.audioTestStop(ref: SoundModel.stopID)) { if case .commandFailed(let f) = $0 { f } else { nil } }
+        XCTAssertEqual(stop?.id, SoundModel.stopID)
         let undecodable = events.withLock { $0 }.filter { if case .undecodable = $0 { true } else { false } }
         XCTAssertEqual(undecodable, [])
     }
@@ -2336,10 +2343,22 @@ final class SettingsCardsLayoutTests: XCTestCase {
     }
 
     /// The widest rows: a recorded dictation key, the edit key with the longest name, a provider
-    /// with its server, key and model fields, a snippet and a voice command, and models
-    /// downloading, waiting and failed with the core's words.
+    /// with its server, key and model fields, a snippet and a voice command, models downloading,
+    /// waiting and failed with the core's words, and a paused streak with rest days whose resume
+    /// failed.
     private func screens() -> ScreenModels {
-        let screens = ScreenModels(send: { _ in }, calendar: FakeCalendar(), apps: WorkspaceApps())
+        var sent: [CoreCommand] = []
+        let screens = ScreenModels(send: { sent.append($0) }, calendar: FakeCalendar(), apps: WorkspaceApps())
+        screens.stats.apply(event(#"{"type":"setting.value","key":"stats.rest_days","value":"6,7"}"#))
+        screens.stats.settingsAppeared()
+        let get = sent.last?.commandID ?? ""
+        screens.stats.apply(event(statsCounted(ref: get, dictations: 3, dictationExtra: #","streak_paused_since":"2026-10-02""#)))
+        screens.stats.resumeStreak()
+        let resume = sent.last?.commandID ?? ""
+        screens.stats.apply(event(#"{"type":"command.failed","command":"streak.resume","id":"\#(resume)","message":"x"}"#))
+        // The widest rows are there, or this check measures less than it says.
+        XCTAssertNotNil(screens.stats.counted?.dictation.streakPausedSince)
+        XCTAssertEqual(screens.stats.streakChangeFailed, .resuming)
         screens.dictation.apply(event(#"{"type":"setting.value","key":"dictation.enabled","value":"on"}"#))
         screens.dictation.apply(event(#"{"type":"setting.value","key":"dictation.key","value":"ctrl+shift+space"}"#))
         screens.dictation.apply(event(#"{"type":"setting.value","key":"dictation.edit_key","value":"right_command"}"#))
@@ -2353,6 +2372,12 @@ final class SettingsCardsLayoutTests: XCTestCase {
         // Meetings' call policies at their widest: a default of Always with its warning, and apps
         // with long names, chosen and not.
         screens.calls.apply(event(#"{"type":"meetings.calls","default":"always","apps":[{"app":"com.microsoft.teams2","app_name":"Microsoft Teams (work or school)","policy":"never","chosen":true,"seen_unix_ms":1759658400000},{"app":"us.zoom.xos","app_name":"Zoom","policy":"always","chosen":false,"seen_unix_ms":1759400000000},{"app":"com.example.a-call-app-with-a-very-long-name","app_name":"A Call App With A Very Long Name Indeed","policy":"ask","chosen":true}]}"#))
+        // Sound: long device names, a chosen mic that isn't connected (the longest caption), and
+        // a test running.
+        screens.sound.apply(event(#"{"type":"audio.devices","input":"gone","wanted":{"id":"gone","name":"Elgato Wave:3 Studio Condenser Microphone","transport":"usb"},"inputs":[{"id":"mbp","name":"MacBook Pro Microphone","transport":"built_in","is_default":true},{"id":"pods","name":"Alex's AirPods Pro (2nd generation)","transport":"bluetooth","is_default":false}],"automatic":{"id":"mbp","name":"MacBook Pro Microphone","transport":"built_in","reason":"built_in_for_bluetooth_output"},"using":{"id":"mbp","name":"MacBook Pro Microphone","transport":"built_in","reason":"chosen_missing"}}"#))
+        screens.sound.toggleTest()
+        screens.sound.apply(event(#"{"type":"audio.test_started","ref":"sound.test","mic_name":"MacBook Pro Microphone","mic_transport":"built_in","mic_reason":"chosen_missing","seconds":15}"#))
+        screens.sound.apply(event(#"{"type":"audio.test_level","ref":"sound.test","level":0.6}"#))
         return screens
     }
 
@@ -2803,6 +2828,20 @@ final class OnboardingLayoutTests: XCTestCase {
     /// longest status under it). Polish's own line is its longest kind, Apple Intelligence still
     /// being checked; every one of them is a single line at this width. The guide is there: the
     /// open step is taller than the closed one by the guide's height and more.
+    /// The Ready step with its "Not hearing you?" hint, and a permission still off, fits the
+    /// step (the orb's stand-in is its height).
+    func testTheReadyStepWithItsHintFitsTheSheet() {
+        let screens = ScreenModels(send: { _ in }, calendar: FakeCalendar(), apps: WorkspaceApps())
+        screens.onboarding.notHearing = true
+        let store = CoreStore()
+        let step = FirstRunReadyStep(orb: Color.clear.frame(height: readyOrbHeight))
+            .environment(ShellInk(store: store))
+        let room = OnboardingView.stepRoom
+        let size = needed(step, screens: screens)
+        XCTAssertLessThanOrEqual(size.height, room.height, "the step's height")
+        XCTAssertLessThanOrEqual(size.width, room.width + 0.5, "the step's width")
+    }
+
     func testThePolishStepFitsTheSheetWithGroqsGuideOpen() {
         let guide = NSHostingController(rootView: GroqKeyGuide(place: .firstRun))
             .sizeThatFits(in: CGSize(width: OnboardingView.stepRoom.width, height: 10_000))

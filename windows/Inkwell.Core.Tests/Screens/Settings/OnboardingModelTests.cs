@@ -263,4 +263,80 @@ public class OnboardingModelTests
         Assert.Equal("Download recommended models", NeedsYou.DownloadModelsTitle);
     }
 
+
+    private sealed class HeldWakes : IWakeScheduler
+    {
+        public List<Action> Waiting { get; } = [];
+
+        public IDisposable After(TimeSpan delay, Action wake)
+        {
+            Assert.Equal(OnboardingModel.NotHearingAfter, delay);
+            Waiting.Add(wake);
+            return new Cancel(() => Waiting.Remove(wake));
+        }
+
+        private sealed class Cancel(Action cancel) : IDisposable
+        {
+            public void Dispose() => cancel();
+        }
+    }
+
+    /// <summary>
+    /// The Ready step's hint (as the Mac's TryItHint): after a take that heard no speech or only
+    /// silence, or 5 s into a held take with no live words (only where a live model gives words);
+    /// gone when words come or a take types something.
+    /// </summary>
+    [Fact]
+    public void TheTryItSaysWhereToPickTheMicrophoneWhenItHearsNothing()
+    {
+        var wakes = new HeldWakes();
+        var live = true;
+        var onboarding = new OnboardingModel(new Sent().Send) { Wake = wakes, HasLiveWords = () => live };
+        onboarding.Apply(Ev.Of("""{"type":"setting.value","key":"onboarding.done"}"""));
+        // On another step a take is not the try-it: no look, no hint.
+        onboarding.Apply(Ev.Of("""{"type":"dictation.started","take":0,"edit":false}"""));
+        onboarding.Apply(Ev.Of("""{"type":"dictation.discarded","reason":"no_speech"}"""));
+        Assert.Empty(wakes.Waiting);
+        Assert.False(onboarding.NotHearing);
+        while (onboarding.Step != OnboardingStep.Ready)
+        {
+            onboarding.Next();
+        }
+        onboarding.Apply(Ev.Of("""{"type":"dictation.started","take":1,"edit":false}"""));
+        Assert.Single(wakes.Waiting);
+        wakes.Waiting[0]();
+        Assert.True(onboarding.NotHearing);
+        Assert.Contains("Settings > Sound", OnboardingModel.NotHearingText, StringComparison.Ordinal);
+        onboarding.Apply(Ev.Of("""{"type":"dictation.partial","take":1,"text":"so"}"""));
+        Assert.False(onboarding.NotHearing); // words after a pause
+        onboarding.Apply(Ev.Of("""{"type":"dictation.stopped"}"""));
+        Assert.Empty(wakes.Waiting); // the look goes with the take
+
+        // A take that heard words in time: the look finds them.
+        onboarding.Apply(Ev.Of("""{"type":"dictation.started","take":2,"edit":false}"""));
+        onboarding.Apply(Ev.Of("""{"type":"dictation.partial","take":2,"text":"hello"}"""));
+        wakes.Waiting[0]();
+        Assert.False(onboarding.NotHearing);
+        onboarding.Apply(Ev.Of("""{"type":"dictation.discarded","reason":"no_speech"}"""));
+        Assert.True(onboarding.NotHearing);
+        onboarding.Apply(Ev.Of("""{"type":"dictation.inserted","text":"hi there","outcome":"pasted"}"""));
+        Assert.False(onboarding.NotHearing); // it heard you
+
+        // No live model: a held take shows no words until it ends, so the 5 s says nothing.
+        live = false;
+        onboarding.Apply(Ev.Of("""{"type":"dictation.started","take":4,"edit":false}"""));
+        wakes.Waiting[^1]();
+        Assert.False(onboarding.NotHearing);
+        onboarding.Apply(Ev.Of("""{"type":"dictation.discarded","reason":"too_short"}"""));
+        Assert.False(onboarding.NotHearing); // a tap says nothing about the mic
+        // A voice edit is not the try-it.
+        onboarding.Apply(Ev.Of("""{"type":"dictation.started","take":5,"edit":true}"""));
+        Assert.Empty(wakes.Waiting);
+        // Once the first run is done, takes are none of its business.
+        onboarding.Apply(Ev.Of("""{"type":"dictation.discarded","reason":"silence"}"""));
+        Assert.True(onboarding.NotHearing);
+        onboarding.Next(); // Start
+        onboarding.Apply(Ev.Of("""{"type":"dictation.started","take":6,"edit":false}"""));
+        Assert.Empty(wakes.Waiting);
+    }
 }

@@ -315,12 +315,11 @@ final class MeetingSettingsTests: XCTestCase {
         let sent = Sent()
         let meetings = MeetingModel(send: sent.send)
         meetings.load()
-        // The old "Offer to record calls" switch is the call policies' default now (CallPolicyModel).
-        XCTAssertEqual(sent.commands, [.settingGet(.meetingsHeadsetMic), .settingGet(.retentionDays)])
+        // The old "Offer to record calls" switch is the call policies' default now (CallPolicyModel);
+        // the microphone is Settings > Sound's.
+        XCTAssertEqual(sent.commands, [.settingGet(.retentionDays)])
         XCTAssertNil(meetings.retention, "not known until the core answers")
-        meetings.apply(event(#"{"type":"setting.value","key":"meetings.headset_mic","value":"on"}"#))
         meetings.apply(event(#"{"type":"setting.value","key":"retention.days"}"#))
-        XCTAssertTrue(meetings.headsetMic)
         XCTAssertEqual(meetings.retention, .forever, "never set: forever")
         meetings.setRetention(.month)
         XCTAssertEqual(sent.commands.last, .settingSet(.retentionDays, "30"))

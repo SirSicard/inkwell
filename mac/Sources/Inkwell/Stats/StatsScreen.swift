@@ -1,7 +1,8 @@
-// Stats: the user's dictation (words, speed against their own past, time saved with its
-// assumption, the streak and a heatmap), their meetings (hours, talk time by side, the longest
-// monologue, their questions), promises kept, and milestones. Translucent cards over the orb, in
-// Glow's type; every number has a VoiceOver label, and the heatmap one sentence.
+// Stats: last week's review until it is dismissed, the user's dictation (words, speed against
+// their own past, time saved with its assumption and what it is about, the streak and a heatmap),
+// their meetings (hours, talk time by side, the longest monologue, their questions), promises
+// kept, their records, and milestones. Translucent cards over the orb, in Glow's type; every
+// number has a VoiceOver label, and the heatmap one sentence.
 //
 // A new library says plainly what will appear. A count that could not be made says so, never
 // zero.
@@ -30,7 +31,9 @@ struct StatsScreen: View {
                             .font(Typography.caption)
                             .foregroundStyle(Theme.alert)
                     }
-                    StatsCards(counted: counted, calendar: stats.calendar)
+                    StatsCards(
+                        counted: counted, calendar: stats.calendar, review: stats.weekReview,
+                        reviewFailed: stats.reviewDismissFailed, dismissReview: { stats.dismissReview($0) })
                 } else if stats.loadState == .failed {
                     HStack(spacing: 12) {
                         Text("Couldn't count your stats.")
@@ -74,19 +77,72 @@ struct StatsScreen: View {
     }
 }
 
-/// The four cards, one under the other.
+/// The cards, one under the other: last week first while its review shows.
 struct StatsCards: View {
     let counted: StatsCounted
     let calendar: Calendar
+    /// Last week's review, until it is dismissed (StatsModel.weekReview).
+    var review: WeekReview?
+    /// Its dismissal could not be saved.
+    var reviewFailed = false
+    var dismissReview: (WeekReview) -> Void = { _ in }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
+            if let review {
+                WeekReviewCard(review: review, calendar: calendar, failed: reviewFailed) { dismissReview(review) }
+            }
             DictationCard(counted: counted, calendar: calendar)
             MeetingsCard(counted: counted)
             PromisesCard(counted: counted)
+            RecordsCard(records: StatsFormat.records(counted.bests, calendar: calendar))
             MilestonesCard(milestones: counted.milestones, locale: calendar.locale ?? .current)
         }
     }
+}
+
+/// Last week, reviewed: gains and plain facts only, until the user dismisses it. It never goes by
+/// itself.
+struct WeekReviewCard: View {
+    let review: WeekReview
+    let calendar: Calendar
+    let failed: Bool
+    let dismiss: () -> Void
+
+    var body: some View {
+        let locale = calendar.locale ?? .current
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Paper.Eyebrow(text: "Last week")
+                    Text(StatsFormat.reviewWeek(review, calendar: calendar))
+                        .font(Typography.caption)
+                        .foregroundStyle(Theme.secondaryText)
+                }
+                Spacer(minLength: 0)
+                Button("Dismiss", action: dismiss)
+                    .buttonStyle(PaperButtonStyle())
+                    .accessibilityLabel("Dismiss last week's review")
+                    .accessibilityHint("It doesn't come back for this week")
+            }
+            NumberRow(numbers: StatsFormat.reviewNumbers(review, locale: locale))
+            ForEach(StatsFormat.reviewLines(review, calendar: calendar), id: \.self) { Line(text: $0) }
+            if failed {
+                Line(text: Self.failedText, alert: true)
+            }
+        }
+        .padding(.horizontal, 22)
+        .padding(.vertical, 18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .paperCard()
+        .accessibilityElement(children: .contain)
+        // Read aloud when the dismissal could not be saved: the card the user dismissed is back.
+        .onChange(of: failed, initial: true) { _, failed in
+            if failed { AccessibilityNotification.Announcement(Self.failedText).post() }
+        }
+    }
+
+    static let failedText = "Couldn't dismiss it. It stays until you try again."
 }
 
 /// A card's frame: the eyebrow over the content, padded, translucent over the orb.
@@ -111,6 +167,8 @@ private struct StatsCard<Content: View>: View {
 struct BigNumber: View {
     let value: String
     let label: String
+    /// What VoiceOver hears, when not the value and the label.
+    var spoken: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -123,7 +181,7 @@ struct BigNumber: View {
                 .foregroundStyle(Theme.secondaryText)
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(value) \(label)")
+        .accessibilityLabel(spoken ?? "\(value) \(label)")
     }
 }
 
@@ -148,11 +206,12 @@ private struct NumberRow: View {
 private struct Line: View {
     let text: String
     var secondary = false
+    var alert = false
 
     var body: some View {
         Text(text)
-            .font(secondary ? Typography.caption : Typography.body)
-            .foregroundStyle(secondary ? Theme.secondaryText : Theme.text)
+            .font(secondary || alert ? Typography.caption : Typography.body)
+            .foregroundStyle(alert ? Theme.alert : secondary ? Theme.secondaryText : Theme.text)
             .fixedSize(horizontal: false, vertical: true)
     }
 }
@@ -175,12 +234,24 @@ private struct DictationCard: View {
                 ])
                 Line(text: StatsFormat.speed(week: d.wpmWeek, average: d.wpmAverage))
                 Line(text: StatsFormat.saved(ms: d.savedMsAll, typingWpm: counted.typingWpm))
-                if d.savedMsWeek > 0 {
-                    Line(text: "This week: \(LibraryFormat.duration(ms: d.savedMsWeek))", secondary: true)
+                if d.savedMsAll > 0, let about = StatsFormat.savedAbout(d.savedAboutAll) {
+                    Line(text: about, secondary: true)
                 }
-                if let streak = StatsFormat.streak(current: d.streakDays, longest: d.longestStreakDays) {
+                if d.savedMsWeek > 0 {
+                    Line(text: StatsFormat.savedThisWeek(ms: d.savedMsWeek, about: d.savedAboutWeek), secondary: true)
+                }
+                if let streak = StatsFormat.streak(d) {
                     Line(text: streak)
-                    Line(text: StatsFormat.streakRule, secondary: true)
+                    if let month = StatsFormat.activeDaysThisMonth(d) {
+                        Line(text: month)
+                    }
+                }
+                // A pause shows before there is a streak to carry, as long as the streak shows.
+                if d.streakHidden != true, let since = d.streakPausedSince {
+                    Line(text: StatsFormat.paused(since: since, calendar: calendar), secondary: true)
+                }
+                if StatsFormat.streak(d) != nil {
+                    Line(text: StatsFormat.streakRule(restDays: d.restDays ?? [], calendar: calendar), secondary: true)
                 }
             }
             Heatmap(cells: StatsFormat.heatmap(d, calendar: calendar), calendar: calendar)
@@ -334,7 +405,7 @@ private struct MilestonesCard: View {
         StatsCard(title: "Milestones") {
             FlowRow(spacing: 8) {
                 ForEach(milestones, id: \.id) { m in
-                    let title = StatsFormat.milestoneTitle(kind: m.kind, threshold: m.threshold, locale: locale)
+                    let title = StatsFormat.milestoneChip(m, locale: locale)
                     HStack(spacing: 5) {
                         Image(systemName: m.reached ? "checkmark.circle.fill" : "circle")
                             .accessibilityHidden(true)
@@ -350,6 +421,80 @@ private struct MilestonesCard: View {
                     .accessibilityLabel("\(title), \(m.reached ? "reached" : "not yet")")
                 }
             }
+        }
+    }
+}
+
+/// The user's personal bests, each with when it was set: from what was dictated and recorded
+/// here, never an import's. A best not held yet is left out, never shown as zero.
+private struct RecordsCard: View {
+    let records: [StatsFormat.Record]
+
+    /// Each record's least width, so two or three sit in even columns side by side.
+    static let tileWidth: CGFloat = 150
+
+    var body: some View {
+        StatsCard(title: "Records") {
+            if records.isEmpty {
+                Line(text: StatsFormat.recordsEmpty, secondary: true)
+            } else {
+                // Even columns, as many as fit; a label too long for its column wraps in it.
+                EvenColumns(minimum: Self.tileWidth, spacing: 24, rowSpacing: 14) {
+                    ForEach(records) { record in
+                        BigNumber(value: record.value, label: record.label, spoken: record.spoken)
+                    }
+                }
+                Line(text: StatsFormat.recordsRule, secondary: true)
+            }
+        }
+    }
+}
+
+/// Items in even columns, as many as fit at `minimum` wide each, left to right in rows; each item
+/// as wide as its column (its text wraps there), each row as tall as its tallest.
+struct EvenColumns: Layout {
+    var minimum: CGFloat
+    var spacing: CGFloat
+    var rowSpacing: CGFloat
+
+    private func columns(_ width: CGFloat?, count: Int) -> (count: Int, width: CGFloat) {
+        Self.columns(width, minimum: minimum, spacing: spacing, count: count)
+    }
+
+    /// How many columns of at least `minimum` fit `width` (at most `count`, at least one), and
+    /// their width.
+    static func columns(_ width: CGFloat?, minimum: CGFloat, spacing: CGFloat, count: Int) -> (count: Int, width: CGFloat) {
+        guard let width, width.isFinite else { return (max(1, min(count, 2)), minimum) }
+        let fit = max(1, Int((width + spacing) / (minimum + spacing)))
+        let n = max(1, min(fit, count))
+        return (n, (width - spacing * CGFloat(n - 1)) / CGFloat(n))
+    }
+
+    private func rows(_ subviews: Subviews, _ column: CGFloat, _ n: Int) -> [CGFloat] {
+        stride(from: 0, to: subviews.count, by: n).map { start in
+            subviews[start..<min(start + n, subviews.count)]
+                .map { $0.sizeThatFits(ProposedViewSize(width: column, height: nil)).height }.max() ?? 0
+        }
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let (n, column) = columns(proposal.width, count: subviews.count)
+        let heights = rows(subviews, column, n)
+        let width = proposal.width.flatMap { $0.isFinite ? $0 : nil } ?? (column * CGFloat(n) + spacing * CGFloat(n - 1))
+        return CGSize(width: width, height: heights.reduce(0, +) + rowSpacing * CGFloat(max(heights.count - 1, 0)))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let (n, column) = columns(bounds.width, count: subviews.count)
+        let heights = rows(subviews, column, n)
+        var y = bounds.minY
+        for (row, height) in heights.enumerated() {
+            for i in 0..<n where row * n + i < subviews.count {
+                subviews[row * n + i].place(
+                    at: CGPoint(x: bounds.minX + CGFloat(i) * (column + spacing), y: y),
+                    proposal: ProposedViewSize(width: column, height: nil))
+            }
+            y += height + rowSpacing
         }
     }
 }

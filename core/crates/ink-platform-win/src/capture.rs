@@ -19,6 +19,15 @@
 //! whether it should move ([`far_end_moved`]): its output went, the default changed under "all
 //! output", or the app now plays on another output. Process loopback follows its app anyway.
 //!
+//! **The output the user chose** (Settings > Sound, `audio.output`) is *pinned*: "all output"
+//! (Record now, and an app that could not be heard alone) records it instead of the default, stays
+//! on it when the default changes, records the default while it is unplugged, and goes back to it
+//! when it returns. An app heard by its own output (Teams) or alone (Zoom) keeps its own.
+//!
+//! **Device changes** ([`WinCapture::watch_devices`](CaptureControl::watch_devices)): an
+//! `IMMNotificationClient` on a thread of its own ([`watch`]), whose callbacks only hand the change
+//! to the core, which enqueues it.
+//!
 //! **Mic routing** ([`route_mic`]): with Bluetooth output, a mic that is not Bluetooth, unless the
 //! headset is LE Audio or the headset-mic setting is on.
 //!
@@ -34,9 +43,10 @@ pub(crate) mod devices;
 mod loopback;
 mod routing;
 pub(crate) mod stream;
+mod watch;
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use ink_audio::{RealtimeGuard, unguarded};
 use ink_core::{
@@ -95,6 +105,8 @@ pub enum FarPlan {
 pub enum FarReason {
     /// All output was asked for: the default output.
     AllOutput,
+    /// All output was asked for: the output the user chose (pinned).
+    Pinned,
     /// The app plays to this endpoint (it has a session there).
     AppPlaysHere,
     /// The app has no session on any output yet: the default output.
@@ -109,11 +121,12 @@ pub fn is_process_loopback_app(exe: &str) -> bool {
         .any(|app| app.eq_ignore_ascii_case(exe))
 }
 
-/// Chooses how to capture `target`, from the default output, the render sessions and the
-/// processes running now. Pure.
+/// Chooses how to capture `target`, from the default output, the pinned output (connected now, or
+/// `None`), the render sessions and the processes running now. Pure.
 pub(crate) fn plan_far_end(
     target: &FarEndTarget,
     default_output: Option<&str>,
+    pinned: Option<&str>,
     render_sessions: &[Session],
     processes: &ProcessTable,
 ) -> Result<FarPlan, PlatformError> {
@@ -126,7 +139,15 @@ pub(crate) fn plan_far_end(
             .ok_or_else(|| PlatformError::Device("no output device".into()))
     };
     let apps = match target {
-        FarEndTarget::AllOutput => return default(FarReason::AllOutput),
+        FarEndTarget::AllOutput => {
+            return match pinned {
+                Some(endpoint) => Ok(FarPlan::Device {
+                    endpoint: endpoint.to_owned(),
+                    reason: FarReason::Pinned,
+                }),
+                None => default(FarReason::AllOutput),
+            };
+        }
         FarEndTarget::Apps(apps) if apps.is_empty() => {
             return Err(PlatformError::Failed("no app to capture".into()));
         }
@@ -176,8 +197,9 @@ fn belongs_to(session: &Session, apps: &[AppRef], processes: &ProcessTable) -> b
 
 /// Whether a device-loopback far end recording the output `current` for `target` should be opened
 /// again where [`plan_far_end`] would open it now: `current` is no longer an active output; for
-/// all output, the default is another output; for apps, one of them plays (an active session) and
-/// none plays on `current`. An app with no session to be seen (it may play through a helper) is
+/// all output, the pinned output when it is among `outputs` (so it goes back to it when it
+/// returns), else the default, is another output; for apps, one of them plays (an active session)
+/// and none plays on `current`. An app with no session to be seen (it may play through a helper) is
 /// taken to play on the default output, as [`plan_far_end`] took it; one whose sessions are all
 /// idle stays where it is (there is nothing to hear). Pure.
 pub(crate) fn far_end_moved(
@@ -185,6 +207,7 @@ pub(crate) fn far_end_moved(
     current: &str,
     outputs: &[String],
     default_output: Option<&str>,
+    pinned: Option<&str>,
     render_sessions: &[Session],
     processes: &ProcessTable,
 ) -> bool {
@@ -192,7 +215,12 @@ pub(crate) fn far_end_moved(
         return true;
     }
     let apps = match target {
-        FarEndTarget::AllOutput => return default_output.is_some_and(|d| d != current),
+        FarEndTarget::AllOutput => {
+            let wanted = pinned
+                .filter(|p| outputs.iter().any(|output| output == p))
+                .or(default_output);
+            return wanted.is_some_and(|w| w != current);
+        }
         FarEndTarget::Apps(apps) => apps,
     };
     let sessions: Vec<&Session> = render_sessions
@@ -211,6 +239,9 @@ pub struct WinCapture {
     clock: WinClock,
     guard: RealtimeGuard,
     headset_mic: AtomicBool,
+    /// The device watch's thread, while watching. The lock is held only to swap it; the
+    /// callbacks never take it.
+    watch: Mutex<Option<watch::DeviceWatch>>,
 }
 
 impl WinCapture {
@@ -221,6 +252,7 @@ impl WinCapture {
             clock,
             guard: unguarded(),
             headset_mic: AtomicBool::new(false),
+            watch: Mutex::new(None),
         }
     }
 
@@ -265,13 +297,26 @@ impl WinCapture {
             .map(|route| (route.device.clone(), route.reason)))
     }
 
-    /// **Worker.** How `open_far_end(target)` would capture, without opening anything.
-    pub fn far_end_plan(&self, target: &FarEndTarget) -> Result<FarPlan, PlatformError> {
+    /// **Worker.** How `open_far_end_source(target, pinned)` would capture, without opening
+    /// anything. `pinned` (an output's endpoint id, the user's choice) is used for all output while
+    /// it is an active output; otherwise the default is.
+    pub fn far_end_plan(
+        &self,
+        target: &FarEndTarget,
+        pinned: Option<&str>,
+    ) -> Result<FarPlan, PlatformError> {
         let _com = ComScope::enter()?;
         let devices = devices::enumerator()?;
         let default = devices::default_endpoint(&devices, Flow::Render)?
             .map(|d| devices::endpoint_id(&d))
             .transpose()?;
+        let pinned = match (target, pinned) {
+            (FarEndTarget::AllOutput, Some(pinned)) => devices::endpoints(&devices, Flow::Render)?
+                .iter()
+                .any(|e| e.info.id.0 == pinned)
+                .then_some(pinned),
+            _ => None,
+        };
         let render = match target {
             FarEndTarget::AllOutput => Vec::new(),
             FarEndTarget::Apps(_) => sessions::read_all(&devices, Flow::Render)?.sessions,
@@ -280,16 +325,17 @@ impl WinCapture {
             FarEndTarget::AllOutput => ProcessTable::default(),
             FarEndTarget::Apps(_) => ProcessTable::snapshot()?,
         };
-        plan_far_end(target, default.as_deref(), &render, &processes)
+        plan_far_end(target, default.as_deref(), pinned, &render, &processes)
     }
 
     /// **Worker** (or a meeting's pump). Whether a device-loopback far end opened for `target` on
     /// the output `current` should be opened again ([`far_end_moved`]), from the outputs, the
-    /// render sessions and the processes now. Opens nothing.
+    /// pinned output (for all output), the render sessions and the processes now. Opens nothing.
     pub fn far_end_moved(
         &self,
         target: &FarEndTarget,
         current: &str,
+        pinned: Option<&str>,
     ) -> Result<bool, PlatformError> {
         let _com = ComScope::enter()?;
         let devices = devices::enumerator()?;
@@ -312,6 +358,7 @@ impl WinCapture {
             current,
             &outputs,
             default.as_deref(),
+            pinned,
             &render,
             &processes,
         ))
@@ -349,12 +396,14 @@ impl WinCapture {
         )
     }
 
-    /// **Worker.** [`CaptureControl::open_far_end`], as the concrete type.
+    /// **Worker.** [`CaptureControl::open_far_end`], as the concrete type, with all output pinned
+    /// to `pinned` while it is connected ([`WinCapture::far_end_plan`]).
     pub fn open_far_end_source(
         &self,
         target: &FarEndTarget,
+        pinned: Option<&str>,
     ) -> Result<WasapiSource, PlatformError> {
-        let (kind, name) = match self.far_end_plan(target)? {
+        let (kind, name) = match self.far_end_plan(target, pinned)? {
             FarPlan::Device { endpoint, .. } => {
                 let name = self
                     .output_endpoints()?
@@ -418,17 +467,34 @@ impl CaptureControl for WinCapture {
     /// process-tree loopback for one of [`PROCESS_LOOPBACK_APPS`] (an error if it is not
     /// running), else device loopback of the endpoint the apps play to.
     fn open_far_end(&self, target: &FarEndTarget) -> Result<Box<dyn AudioSource>, PlatformError> {
-        Ok(Box::new(self.open_far_end_source(target)?))
+        Ok(Box::new(self.open_far_end_source(target, None)?))
     }
 
-    /// Not yet: an `IMMNotificationClient` (devices added, removed, changing state, and the
-    /// defaults) comes with the Windows device branch. Until then the core reads the devices when
-    /// it opens a mic or is asked.
-    fn watch_devices(&self, _: EventSink<DeviceChange>) -> Result<(), PlatformError> {
-        Err(PlatformError::Unsupported("device change notifications"))
+    /// An `IMMNotificationClient` on its own thread: devices added, removed, changing state or
+    /// renamed, and the console defaults (the module docs). A second call stops the first watch
+    /// before starting the new one.
+    fn watch_devices(&self, on_change: EventSink<DeviceChange>) -> Result<(), PlatformError> {
+        let mut watch = self.watch.lock().unwrap_or_else(PoisonError::into_inner);
+        // The old watch first: once it has stopped, its callback never runs again.
+        if let Some(old) = watch.take() {
+            old.stop();
+        }
+        *watch = Some(watch::DeviceWatch::start(on_change)?);
+        Ok(())
     }
 
-    fn unwatch_devices(&self) {}
+    /// Unregisters the notification client and stops its thread; when it returns, the callback
+    /// will not run again.
+    fn unwatch_devices(&self) {
+        let old = self
+            .watch
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some(old) = old {
+            old.stop();
+        }
+    }
 }
 
 /// The core's [`AutoReason`] for the routing's reason.
@@ -642,7 +708,8 @@ mod tests {
 
     #[test]
     fn all_output_is_device_loopback_of_the_default() {
-        let plan = plan_far_end(&FarEndTarget::AllOutput, Some("spk"), &[], &table()).unwrap();
+        let plan =
+            plan_far_end(&FarEndTarget::AllOutput, Some("spk"), None, &[], &table()).unwrap();
         assert_eq!(
             plan,
             FarPlan::Device {
@@ -651,7 +718,7 @@ mod tests {
             }
         );
         assert!(matches!(
-            plan_far_end(&FarEndTarget::AllOutput, None, &[], &table()),
+            plan_far_end(&FarEndTarget::AllOutput, None, None, &[], &table()),
             Err(PlatformError::Device(_))
         ));
     }
@@ -662,7 +729,7 @@ mod tests {
         // The detector reports the child that holds the mic; loopback wants the tree's root.
         let zoom = FarEndTarget::Apps(vec![app("zoom.exe", Some(210))]);
         assert_eq!(
-            plan_far_end(&zoom, Some("spk"), &[], &t).unwrap(),
+            plan_far_end(&zoom, Some("spk"), None, &[], &t).unwrap(),
             FarPlan::Process {
                 pid: 200,
                 exe: "Zoom.exe".into()
@@ -671,7 +738,7 @@ mod tests {
         // No pid: the first running tree of that name.
         let chrome = FarEndTarget::Apps(vec![app("Chrome.exe", None)]);
         assert_eq!(
-            plan_far_end(&chrome, Some("spk"), &[], &t).unwrap(),
+            plan_far_end(&chrome, Some("spk"), None, &[], &t).unwrap(),
             FarPlan::Process {
                 pid: 400,
                 exe: "chrome.exe".into()
@@ -680,7 +747,7 @@ mod tests {
         // A stale pid now owned by another program is not trusted.
         let stale = FarEndTarget::Apps(vec![app("chrome.exe", Some(300))]);
         assert_eq!(
-            plan_far_end(&stale, Some("spk"), &[], &t).unwrap(),
+            plan_far_end(&stale, Some("spk"), None, &[], &t).unwrap(),
             FarPlan::Process {
                 pid: 400,
                 exe: "chrome.exe".into()
@@ -688,7 +755,7 @@ mod tests {
         );
         let gone = FarEndTarget::Apps(vec![app("msedge.exe", None)]);
         assert!(matches!(
-            plan_far_end(&gone, Some("spk"), &[], &t),
+            plan_far_end(&gone, Some("spk"), None, &[], &t),
             Err(PlatformError::Device(m)) if m.contains("not running")
         ));
     }
@@ -703,7 +770,7 @@ mod tests {
             session(300, true, "usb-dac"),
         ];
         assert_eq!(
-            plan_far_end(&teams, Some("speakers"), &sessions, &t).unwrap(),
+            plan_far_end(&teams, Some("speakers"), None, &sessions, &t).unwrap(),
             FarPlan::Device {
                 endpoint: "usb-dac".into(),
                 reason: FarReason::AppPlaysHere
@@ -711,14 +778,14 @@ mod tests {
             "the active session wins over an idle one"
         );
         assert_eq!(
-            plan_far_end(&teams, Some("speakers"), &sessions[..2], &t).unwrap(),
+            plan_far_end(&teams, Some("speakers"), None, &sessions[..2], &t).unwrap(),
             FarPlan::Device {
                 endpoint: "headset".into(),
                 reason: FarReason::AppPlaysHere
             }
         );
         assert_eq!(
-            plan_far_end(&teams, Some("speakers"), &[], &t).unwrap(),
+            plan_far_end(&teams, Some("speakers"), None, &[], &t).unwrap(),
             FarPlan::Device {
                 endpoint: "speakers".into(),
                 reason: FarReason::AppNotPlayingYet
@@ -732,13 +799,13 @@ mod tests {
         let both = FarEndTarget::Apps(vec![app("Zoom.exe", Some(200)), app("chrome.exe", None)]);
         let sessions = [session(410, true, "headset")];
         assert_eq!(
-            plan_far_end(&both, Some("speakers"), &sessions, &t).unwrap(),
+            plan_far_end(&both, Some("speakers"), None, &sessions, &t).unwrap(),
             FarPlan::Device {
                 endpoint: "headset".into(),
                 reason: FarReason::AppPlaysHere
             }
         );
-        assert!(plan_far_end(&FarEndTarget::Apps(vec![]), Some("s"), &[], &t).is_err());
+        assert!(plan_far_end(&FarEndTarget::Apps(vec![]), Some("s"), None, &[], &t).is_err());
     }
 
     /// S3.5b: a device-loopback far end moves when its output goes, when "all output"'s default
@@ -750,7 +817,7 @@ mod tests {
         let outputs = ["speakers".to_owned(), "headset".to_owned()];
         let all = FarEndTarget::AllOutput;
         let moved = |target: &FarEndTarget, current: &str, default: &str, sessions: &[Session]| {
-            far_end_moved(target, current, &outputs, Some(default), sessions, &t)
+            far_end_moved(target, current, &outputs, Some(default), None, sessions, &t)
         };
         assert!(!moved(&all, "speakers", "speakers", &[]));
         assert!(
@@ -758,7 +825,7 @@ mod tests {
             "the default changed"
         );
         assert!(
-            far_end_moved(&all, "usb-dac", &outputs, Some("speakers"), &[], &t),
+            far_end_moved(&all, "usb-dac", &outputs, Some("speakers"), None, &[], &t),
             "its output was unplugged"
         );
 
@@ -811,7 +878,81 @@ mod tests {
         ));
         assert!(!moved(&teams, "speakers", "speakers", &[]));
         // No output at all: it must move, and opening it will say there is nowhere to go.
-        assert!(far_end_moved(&teams, "speakers", &[], None, &[], &t));
+        assert!(far_end_moved(&teams, "speakers", &[], None, None, &[], &t));
+    }
+
+    /// The output the user chose is what all output records; an app keeps its own output.
+    #[test]
+    fn all_output_records_the_pinned_output_and_apps_keep_their_own() {
+        let t = table();
+        assert_eq!(
+            plan_far_end(&FarEndTarget::AllOutput, Some("spk"), Some("dock"), &[], &t).unwrap(),
+            FarPlan::Device {
+                endpoint: "dock".into(),
+                reason: FarReason::Pinned
+            }
+        );
+        // Pinned, and no default at all: still the pinned output.
+        assert!(plan_far_end(&FarEndTarget::AllOutput, None, Some("dock"), &[], &t).is_ok());
+        let teams = FarEndTarget::Apps(vec![app("ms-teams.exe", Some(300))]);
+        assert_eq!(
+            plan_far_end(&teams, Some("spk"), Some("dock"), &[], &t).unwrap(),
+            FarPlan::Device {
+                endpoint: "spk".into(),
+                reason: FarReason::AppNotPlayingYet
+            },
+            "an app not playing yet plays on the default, pin or not"
+        );
+        let zoom = FarEndTarget::Apps(vec![app("zoom.exe", Some(210))]);
+        assert!(matches!(
+            plan_far_end(&zoom, Some("spk"), Some("dock"), &[], &t).unwrap(),
+            FarPlan::Process { .. }
+        ));
+    }
+
+    /// Pinned all output stays on its output when the default changes, records the default while
+    /// it is unplugged, and goes back to it when it returns. An app's far end ignores the pin.
+    #[test]
+    fn a_pinned_far_end_stays_falls_back_and_goes_back() {
+        let t = table();
+        let all = FarEndTarget::AllOutput;
+        let with_dock = [
+            "speakers".to_owned(),
+            "dock".to_owned(),
+            "headset".to_owned(),
+        ];
+        let without = ["speakers".to_owned(), "headset".to_owned()];
+        let moved = |current: &str, outputs: &[String], default: &str| {
+            far_end_moved(&all, current, outputs, Some(default), Some("dock"), &[], &t)
+        };
+        assert!(!moved("dock", &with_dock, "speakers"), "on its output");
+        assert!(
+            !moved("dock", &with_dock, "headset"),
+            "a new default changes nothing"
+        );
+        assert!(
+            moved("dock", &without, "speakers"),
+            "unplugged: it must move"
+        );
+        assert!(
+            !moved("speakers", &without, "speakers"),
+            "on the default while the pin is away"
+        );
+        assert!(
+            moved("speakers", &without, "headset"),
+            "and follows the default meanwhile"
+        );
+        assert!(moved("speakers", &with_dock, "speakers"), "back to the pin");
+        let teams = FarEndTarget::Apps(vec![app("ms-teams.exe", Some(300))]);
+        assert!(!far_end_moved(
+            &teams,
+            "speakers",
+            &with_dock,
+            Some("speakers"),
+            Some("dock"),
+            &[session(300, true, "speakers")],
+            &t
+        ));
     }
 
     // Local only: these talk to the audio service. They open nothing and need no permission.
@@ -828,7 +969,7 @@ mod tests {
         let output = capture.default_output().expect("output");
         let route = capture.mic_route().expect("route");
         assert_eq!(route.is_some(), !inputs.is_empty(), "{output:?}");
-        let plan = capture.far_end_plan(&FarEndTarget::AllOutput);
+        let plan = capture.far_end_plan(&FarEndTarget::AllOutput, None);
         assert_eq!(plan.is_ok(), output.is_some(), "{plan:?}");
     }
 
@@ -844,7 +985,7 @@ mod tests {
         }
         if capture.default_output().unwrap().is_some() {
             let far = capture
-                .open_far_end_source(&FarEndTarget::AllOutput)
+                .open_far_end_source(&FarEndTarget::AllOutput, None)
                 .expect("open loopback");
             assert!(far.format().sample_rate >= 8_000, "{:?}", far.format());
             assert_eq!(far.mode(), "device loopback");
@@ -853,12 +994,12 @@ mod tests {
             // Just opened on the default output, which has not changed: it stays.
             assert!(
                 !capture
-                    .far_end_moved(&FarEndTarget::AllOutput, endpoint)
+                    .far_end_moved(&FarEndTarget::AllOutput, endpoint, None)
                     .expect("read the outputs")
             );
             assert!(
                 capture
-                    .far_end_moved(&FarEndTarget::AllOutput, "{0.0.0.00000000}.{gone}")
+                    .far_end_moved(&FarEndTarget::AllOutput, "{0.0.0.00000000}.{gone}", None)
                     .expect("read the outputs"),
                 "an output that is not there moves"
             );

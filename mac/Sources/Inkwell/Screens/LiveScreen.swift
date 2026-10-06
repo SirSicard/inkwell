@@ -160,11 +160,19 @@ struct LiveMeetingView: View {
     }
 
     /// Which mic, when the reason is worth saying ("why is it using the laptop mic?").
-    private var micLine: String? {
+    private var micLine: String? { Self.micLine(meeting) }
+
+    /// Which mic, when the reason is worth saying: a mic that went and the one in its place, one
+    /// standing in for a chosen mic that isn't connected, or Automatic's reason.
+    static func micLine(_ meeting: CoreStore.LiveMeeting) -> String? {
         guard let name = meeting.micName else { return nil }
+        if let change = meeting.micSwitch {
+            return change.from.map { "\(name), since \($0) went" } ?? "\(name), since your mic went"
+        }
         switch meeting.micReason {
         case .builtInForBluetoothOutput?: return "\(name), because your headphones are Bluetooth"
         case .headsetMicSetting?: return "\(name), the headset's own mic"
+        case .chosenMissing?: return "\(name), until your chosen mic is back"
         default: return nil
         }
     }

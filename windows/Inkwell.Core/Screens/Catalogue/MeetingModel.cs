@@ -1,7 +1,7 @@
 // Meetings as the user drives them, as the Mac's MeetingModel: record now, record the call the
-// Drop offers or say not this one, stop, stop and delete, and the settings that shape them: the
-// headset mic, and how long the library keeps records (the call policies, which replaced listening
-// for calls, are CallPolicyModel's).
+// Drop offers or say not this one, stop, stop and delete, and the settings that shape them: how
+// long the library keeps records (the call policies, which replaced listening for calls, are
+// CallPolicyModel's; the microphone is Settings > Sound's, SoundModel).
 //
 // Recording starts when the user asks (Today's "Record now", the menu, and the Drop's "Record
 // this call"), or for an app the user chose Always for: the core starts that one itself, and the
@@ -93,7 +93,6 @@ public sealed class MeetingModel(
     /// <summary>The ids of this model's setting commands (CoreCommand gives each setting command one).</summary>
     public static IReadOnlySet<string> SettingIds { get; } = new HashSet<string>(StringComparer.Ordinal)
     {
-        ShellSetting.MeetingsHeadsetMic.CommandId(),
         ShellSetting.RetentionDays.CommandId(),
     };
 
@@ -127,9 +126,6 @@ public sealed class MeetingModel(
     /// <summary>The meeting being stopped and deleted, until the core says it is gone (or refuses). Live reads it: its notes are never saved.</summary>
     public string? Discarding { get; private set; }
 
-    /// <summary>With Bluetooth output, record the headset's own mic.</summary>
-    public bool HeadsetMic { get; private set; }
-
     /// <summary>How long the library keeps records; null until the store answers (the picker is disabled then).</summary>
     public Retention? Retention { get; private set; }
 
@@ -152,7 +148,6 @@ public sealed class MeetingModel(
 
     public void Load()
     {
-        send(new CoreCommand.SettingGet(ShellSetting.MeetingsHeadsetMic));
         send(new CoreCommand.SettingGet(ShellSetting.RetentionDays));
     }
 
@@ -327,13 +322,6 @@ public sealed class MeetingModel(
     /// </summary>
     public void Recover() => send(new CoreCommand.MeetingsRecover());
 
-    public void SetHeadsetMic(bool on)
-    {
-        HeadsetMic = on;
-        Changed();
-        send(new CoreCommand.SettingSet(ShellSetting.MeetingsHeadsetMic, on ? "on" : "off"));
-    }
-
     public void SetRetention(Retention value)
     {
         Retention = value;
@@ -370,10 +358,6 @@ public sealed class MeetingModel(
     {
         switch (e)
         {
-            case SettingValue value when value.Key == ShellSetting.MeetingsHeadsetMic.Key():
-                HeadsetMic = value.Value == "on";
-                Changed();
-                break;
             case SettingValue value when value.Key == ShellSetting.RetentionDays.Key():
                 Retention = Retentions.Parse(value.Value) ?? Screens.Retention.Forever;
                 Changed();

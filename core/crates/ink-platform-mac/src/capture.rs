@@ -16,6 +16,12 @@
 //! **Threads.** Every method here is **worker**; the IOProcs are the realtime part (`io`, I4).
 //! The sink passed to `start` is `ink-audio`'s ring producer.
 //!
+//! **Device changes** ([`MacCapture::watch_devices`](CaptureControl::watch_devices)): HAL property
+//! listeners on the system object (the device list, the default input and the default output),
+//! whose callbacks run on a HAL notification thread and only hand the change to the core, which
+//! enqueues it. A mic stream also listens to its own device's `DeviceIsAlive`, so a mic that goes
+//! mid-meeting reads as ended ([`MacMicSource`]).
+//!
 //! **Silence is never taken for quiet.** `ink_audio::levels` tells digital zeros from a quiet room,
 //! and far-end idle (no callbacks: nothing is playing) from a stalled mic.
 #![cfg(target_os = "macos")]
@@ -26,8 +32,8 @@ mod mic;
 mod routing;
 mod tap;
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use ink_audio::{RealtimeGuard, unguarded};
 use ink_core::{
@@ -42,6 +48,9 @@ pub use routing::{MicRoute, MicRouteReason, route_mic, transport};
 pub use tap::MacFarEndSource;
 
 pub(crate) use hal::{HalDevice, HalError, ObjectId, ProcessHal, SystemHal};
+use io::{
+    DEVICE_WATCH_PROPERTIES, DeviceWatchContext, IoHal, Listeners, SYSTEM_IO, device_watch_listener,
+};
 pub(crate) use io::{RunningIo, ToneContext, tone_proc};
 pub(crate) use tap::TapScope;
 
@@ -82,6 +91,28 @@ pub struct MacCapture {
     guard: RealtimeGuard,
     headset_mic: AtomicBool,
     processes: Arc<dyn ProcessHal>,
+    /// The device watch's listeners, while watching. The lock is held only to swap them; the
+    /// callbacks never take it.
+    watch: Mutex<Option<Listeners<DeviceWatchContext>>>,
+}
+
+/// Adds the device watch's listeners on the system object, telling `on_change`.
+fn watch_on(
+    hal: &'static dyn IoHal,
+    on_change: EventSink<DeviceChange>,
+) -> Result<Listeners<DeviceWatchContext>, HalError> {
+    // SAFETY: `device_watch_listener` reads its client data as a `DeviceWatchContext`, inside its
+    // gate.
+    unsafe {
+        Listeners::register_on(
+            hal,
+            hal::SYSTEM,
+            &DEVICE_WATCH_PROPERTIES,
+            Some(device_watch_listener),
+            DeviceWatchContext::new(on_change),
+            "listening for audio device changes",
+        )
+    }
 }
 
 impl MacCapture {
@@ -93,6 +124,7 @@ impl MacCapture {
             guard: unguarded(),
             headset_mic: AtomicBool::new(false),
             processes: Arc::new(SystemHal),
+            watch: Mutex::new(None),
         }
     }
 
@@ -212,14 +244,29 @@ impl CaptureControl for MacCapture {
         Ok(Box::new(self.open_far_end_source(target)?))
     }
 
-    /// Not yet: the HAL's device-list and default-device listeners come with the Mac's device
-    /// branch (through `io`'s listener seam and its leak-safe teardown). Until then the core reads
-    /// the devices when it opens a mic or is asked.
-    fn watch_devices(&self, _: EventSink<DeviceChange>) -> Result<(), PlatformError> {
-        Err(PlatformError::Unsupported("device change notifications"))
+    /// HAL listeners for the device list and both defaults (the module docs). A second call
+    /// removes the first's listeners before adding the new ones; if those cannot be added, nothing
+    /// is watched (the core logs the error and reads the devices when it opens a mic).
+    fn watch_devices(&self, on_change: EventSink<DeviceChange>) -> Result<(), PlatformError> {
+        let mut watch = self.watch.lock().unwrap_or_else(PoisonError::into_inner);
+        // The old listeners go first (their drop waits out a notification in flight), so the old
+        // callback never runs after the new one is in place.
+        drop(watch.take());
+        *watch = Some(watch_on(&SYSTEM_IO, on_change)?);
+        Ok(())
     }
 
-    fn unwatch_devices(&self) {}
+    /// Removes the listeners; when it returns no notification is inside the old callback (one
+    /// still in flight after a second is the leak case `leaked_contexts` counts, and its gate
+    /// keeps it from calling the core).
+    fn unwatch_devices(&self) {
+        let old = self
+            .watch
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        drop(old);
+    }
 }
 
 /// The core's [`AutoReason`] for the routing's reason.
@@ -296,6 +343,133 @@ mod tests {
         let output = capture.default_output().expect("output");
         let route = capture.mic_route().expect("route");
         assert_eq!(route.is_some(), !inputs.is_empty(), "{output:?}");
+    }
+
+    /// A private aggregate device of this process alone (invisible to every other app; the
+    /// listings leave it out by its UID prefix): something to add and remove on the real HAL
+    /// without touching any setting or device of the user's.
+    fn private_aggregate() -> ObjectId {
+        use objc2_core_audio::{
+            AudioHardwareCreateAggregateDevice, kAudioAggregateDeviceIsPrivateKey,
+            kAudioAggregateDeviceNameKey, kAudioAggregateDeviceUIDKey,
+        };
+        use objc2_core_foundation::{CFBoolean, CFDictionary, CFString, CFType};
+        let key = |k: &std::ffi::CStr| CFString::from_str(&k.to_string_lossy());
+        let keys = [
+            key(kAudioAggregateDeviceNameKey),
+            key(kAudioAggregateDeviceUIDKey),
+            key(kAudioAggregateDeviceIsPrivateKey),
+        ];
+        let name = CFString::from_str("Inkwell watch test");
+        let uid = CFString::from_str(&format!(
+            "{}watch-test-{}",
+            tap::AGGREGATE_UID_PREFIX,
+            std::process::id()
+        ));
+        let values: [&CFType; 3] = [&name, &uid, CFBoolean::new(true)];
+        let keys: Vec<&CFString> = keys.iter().map(|k| &**k).collect();
+        let description = CFDictionary::<CFString, CFType>::from_slices(&keys, &values);
+        let mut id = hal::UNKNOWN;
+        // SAFETY: a well-formed description and a live out-parameter.
+        let status = unsafe {
+            AudioHardwareCreateAggregateDevice(
+                (*description).as_ref(),
+                std::ptr::NonNull::from(&mut id),
+            )
+        };
+        hal::check(status, "creating a test aggregate").expect("a private aggregate");
+        id
+    }
+
+    fn wait_for(what: &str, done: impl Fn() -> bool) {
+        let start = std::time::Instant::now();
+        while !done() {
+            assert!(
+                start.elapsed() < std::time::Duration::from_secs(5),
+                "{what} within 5 s"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    /// The real HAL tells the watch when a device comes and goes, and tells a stream's alive
+    /// listener when its device dies; after unwatching nothing more arrives, and nothing leaks.
+    #[test]
+    #[ignore = "talks to the local audio server"]
+    fn the_real_hal_tells_the_watch_and_the_alive_listener() {
+        use std::sync::atomic::AtomicUsize;
+        let capture = MacCapture::new(MacClock::new().unwrap());
+        let leaked = leaked_contexts();
+        let devices = Arc::new(AtomicUsize::new(0));
+        let d = devices.clone();
+        capture
+            .watch_devices(Arc::new(move |change| {
+                if change == DeviceChange::Devices {
+                    d.fetch_add(1, Ordering::SeqCst);
+                }
+            }))
+            .expect("watching");
+        let aggregate = private_aggregate();
+        wait_for("a device-list notification", || {
+            devices.load(Ordering::SeqCst) > 0
+        });
+
+        let gone = Arc::new(AtomicBool::new(false));
+        let alive = mic::watch_alive(
+            &SYSTEM_IO,
+            aggregate,
+            Arc::new(move || {
+                hal::get::<u32>(
+                    aggregate,
+                    objc2_core_audio::kAudioDevicePropertyDeviceIsAlive,
+                    objc2_core_audio::kAudioObjectPropertyScopeGlobal,
+                    "alive",
+                )
+                .map(|a| a != 0)
+            }),
+            gone.clone(),
+        )
+        .expect("listening");
+        assert!(!gone.load(Ordering::Acquire), "alive while it exists");
+        // And a format listener, as a mic stream has: its removal too is refused once the device
+        // is gone ('!obj'), and must not leak.
+        let format = io::FormatListener::register(
+            aggregate,
+            io::FormatWatch::new(
+                ink_core::StreamFormat {
+                    sample_rate: 48_000,
+                    channels: 1,
+                },
+                Arc::default(),
+            ),
+            Arc::new(|| Err("not read".into())),
+        )
+        .expect("listening for the rate");
+        let before = devices.load(Ordering::SeqCst);
+        // SAFETY: created above, destroyed once.
+        let status = unsafe { objc2_core_audio::AudioHardwareDestroyAggregateDevice(aggregate) };
+        hal::check(status, "destroying the test aggregate").unwrap();
+        wait_for("a notification that it went", || {
+            devices.load(Ordering::SeqCst) > before
+        });
+        wait_for("the alive listener marking it gone", || {
+            gone.load(Ordering::Acquire)
+        });
+        drop(alive);
+        drop(format);
+
+        capture.unwatch_devices();
+        let after = devices.load(Ordering::SeqCst);
+        let again = private_aggregate();
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        // SAFETY: created above, destroyed once.
+        unsafe { objc2_core_audio::AudioHardwareDestroyAggregateDevice(again) };
+        assert_eq!(
+            devices.load(Ordering::SeqCst),
+            after,
+            "nothing after unwatch"
+        );
+        assert_eq!(leaked_contexts(), leaked, "nothing leaked");
     }
 
     #[test]

@@ -204,6 +204,12 @@
                         MinHeight="80"
                         TextWrapping="Wrap" />
                 </Grid>
+                <!-- The try-it heard nothing: where the microphone is picked (read when it shows). -->
+                <TextBlock
+                    x:Name="NotHearingLine"
+                    AutomationProperties.LiveSetting="Assertive"
+                    Style="{StaticResource InkCaptionStyle}"
+                    TextWrapping="Wrap" />
                 <TextBlock x:Name="StillOffLine" Foreground="{ThemeResource InkAlertBrush}" Style="{StaticResource InkReadingStyle}" />
             </StackPanel>
         </Grid>

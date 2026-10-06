@@ -22,12 +22,10 @@ public class MeetingSettingsTests
         meetings.Load();
         // The old "Offer to record calls" switch is the call policies' default now (CallPolicyModel).
         Assert.Equal(
-            [new CoreCommand.SettingGet(ShellSetting.MeetingsHeadsetMic), new CoreCommand.SettingGet(ShellSetting.RetentionDays)],
+            [new CoreCommand.SettingGet(ShellSetting.RetentionDays)],
             sent.Commands);
         Assert.Null(meetings.Retention); // not known until the core answers
-        meetings.Apply(Ev.Of("""{"type":"setting.value","key":"meetings.headset_mic","value":"on"}"""));
         meetings.Apply(Ev.Of("""{"type":"setting.value","key":"retention.days"}"""));
-        Assert.True(meetings.HeadsetMic);
         Assert.Equal(Retention.Forever, meetings.Retention); // never set: forever
         meetings.SetRetention(Retention.Month);
         Assert.Equal(new CoreCommand.SettingSet(ShellSetting.RetentionDays, "30"), sent.Commands[^1]);

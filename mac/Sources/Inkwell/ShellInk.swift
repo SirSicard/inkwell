@@ -59,6 +59,7 @@ final class ShellInk {
             state, dictation: store.dictation, live: store.liveDictation, meeting: store.meeting,
             offer: store.offer, systemAudioOff: systemAudioOff,
             failure: meetings?.failure(on: .drop) ?? calls?.dropFailure,
+            micFallback: store.micFallback,
             deletable: meetings?.canDiscard(record) ?? false,
             discarding: record != nil && meetings?.discarding == record,
             offerPolicy: store.offer.flatMap { calls?.policy(of: $0.app) })
@@ -198,12 +199,17 @@ struct DropText: Equatable, Sendable {
     /// The detail is the live words of a take being held: its end matters (the head is cut, not
     /// the tail), and its newest words are still wet.
     var liveWords = false
+    /// A note that never replaces one showing or waiting (a personal best's: the take's own note,
+    /// an alert above all, comes first). It is left out then; the Records card still has it.
+    var yields = false
 
     /// What the Drop says for what is going on. A consent offer shows only while nothing is live.
     /// The consent line is honest about what recording does: both sides are kept on this Mac, and
     /// the others should be told (the app ships consent tooling; it never claims to be unseen).
     /// `failure`: a Drop answer that failed, in words; the offer stays, so it can be answered
     /// again. A dictation shows as `for(_:dictation:live:)` has it.
+    /// `micFallback`: the chosen mic isn't connected and another records (said while the take
+    /// listens with no words yet, and until the meeting's first line).
     ///
     /// The offer also sets the app's call policy: "Always for" (unless it is Always already:
     /// `offerPolicy`, or a `message` saying why an Always app is asked), and "Never for". A call
@@ -212,8 +218,8 @@ struct DropText: Equatable, Sendable {
     static func `for`(
         _ state: InkState, dictation: CoreStore.DictationPhase, live: CoreStore.LiveDictation? = nil,
         meeting: CoreStore.LiveMeeting?, offer: CoreStore.Offer?, systemAudioOff: Bool,
-        failure: String? = nil, deletable: Bool = false, discarding: Bool = false,
-        offerPolicy: CallPolicy? = nil
+        failure: String? = nil, micFallback: CoreStore.MicFallback? = nil, deletable: Bool = false,
+        discarding: Bool = false, offerPolicy: CallPolicy? = nil
     ) -> DropText {
         if discarding, state == .meeting || state == .blotting || state == .problem {
             return DropText(title: discardingTitle, detail: failure ?? discardingLine, tone: failure == nil ? .plain : .alert)
@@ -242,9 +248,13 @@ struct DropText: Equatable, Sendable {
             if meeting.auto {
                 let latest = meeting.finals.last?.text.trimmingCharacters(in: .whitespacesAndNewlines)
                 let reminder = autoReminder(meeting.appName)
+                // A mic that went mid-call is said over everything but a failure, as for any meeting.
+                let switched = meeting.micSwitch.flatMap { $0.atLine == meeting.ledger.seen ? Self.switchLine($0) : nil }
                 // The reminder holds the first minute, while Stop and delete is there; then the
-                // latest line, as any meeting's.
-                let detail = deletable ? reminder : latest.flatMap { $0.isEmpty ? nil : $0 } ?? reminder
+                // latest line, as any meeting's (before one, the stand-in mic if there is one).
+                let detail = switched ?? (deletable
+                    ? reminder
+                    : latest.flatMap { $0.isEmpty ? nil : $0 } ?? micFallback.map(Self.fallbackLine) ?? reminder)
                 return DropText(
                     title: autoTitle(meeting.appName), detail: failure ?? detail,
                     tone: failure == nil ? .recording : .alert,
@@ -254,12 +264,18 @@ struct DropText: Equatable, Sendable {
             let latest = meeting.finals.last?.text.trimmingCharacters(in: .whitespacesAndNewlines)
             // Said until the first line arrives (Live keeps saying it): other apps' sound is in
             // this recording.
-            let waiting = meeting.farEndFallback
-                ? "Inkwell couldn't hear \(meeting.appName ?? "the call") alone, so it is recording everything this Mac plays"
-                : "Recording this meeting"
+            let waiting = if meeting.farEndFallback {
+                "Inkwell couldn't hear \(meeting.appName ?? "the call") alone, so it is recording everything this Mac plays"
+            } else if let micFallback {
+                Self.fallbackLine(micFallback)
+            } else {
+                "Recording this meeting"
+            }
+            // A mic that went mid-call is said over the latest line, until a line comes after it.
+            let switched = meeting.micSwitch.flatMap { $0.atLine == meeting.ledger.seen ? Self.switchLine($0) : nil }
             return DropText(
                 title: ["● REC", source].compactMap { $0 }.joined(separator: " · "),
-                detail: latest.flatMap { $0.isEmpty ? nil : $0 } ?? waiting,
+                detail: switched ?? latest.flatMap { $0.isEmpty ? nil : $0 } ?? waiting,
                 tone: .recording)
         case .problem:
             let far = meeting?.sides[.far]
@@ -288,8 +304,22 @@ struct DropText: Equatable, Sendable {
         case .blotting:
             return DropText(title: "Blotting · final pass", detail: meeting?.title ?? meeting?.appName ?? "The final pass")
         case .dictating:
-            return DropText.for(state, dictation: dictation, live: live)
+            var text = DropText.for(state, dictation: dictation, live: live)
+            if let micFallback, dictation == .listening, !text.liveWords, live?.edit != true {
+                text.detail = Self.fallbackLine(micFallback)
+            }
+            return text
         }
+    }
+
+    /// "AirPods Pro isn't connected. Using MacBook Pro Microphone."
+    static func fallbackLine(_ fallback: CoreStore.MicFallback) -> String {
+        "\(fallback.wanted ?? "Your chosen mic") isn't connected. Using \(fallback.using)."
+    }
+
+    /// "AirPods Pro went. Now recording with MacBook Pro Microphone."
+    static func switchLine(_ change: CoreStore.MicSwitch) -> String {
+        "\(change.from ?? "Your mic") went. Now recording with \(change.to)."
     }
 
     /// How many of the newest live words are shown wet (italic, muted), as on the canvas.

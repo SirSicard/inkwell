@@ -59,7 +59,7 @@ public class StatsModelTests
         long savedWeek = 0, long savedAll = 0, long streak = 0, long longest = 0, long[]? heatmap = null,
         string meetings = """{"meetings":0,"recorded_ms":0,"you_ms":0,"them_ms":0,"longest_monologue_ms":0,"questions":0}""",
         string promises = """{"made":0,"kept":0,"open":0,"overdue":0}""",
-        IReadOnlySet<string>? reached = null, long typingWpm = 40)
+        IReadOnlySet<string>? reached = null, long typingWpm = 40, bool named = false, string dictationExtra = "", string extra = "")
     {
         heatmap ??= new long[83];
         reached ??= new HashSet<string>();
@@ -74,15 +74,18 @@ public class StatsModelTests
         {
             dictation += $",\"wpm_average\":{a}";
         }
-        (string Id, string Kind, int Threshold)[] all =
+        dictation += dictationExtra;
+        (string Id, string Kind, int Threshold, string Name)[] all =
         [
-            ("words_1000", "words", 1000), ("words_10000", "words", 10000), ("words_50000", "words", 50000), ("words_100000", "words", 100000),
-            ("streak_7", "streak", 7), ("streak_30", "streak", 30), ("streak_100", "streak", 100),
+            ("words_1000", "words", 1000, "first_page"), ("words_10000", "words", 10000, "notebook"), ("words_50000", "words", 50000, "short_novel"),
+            ("words_100000", "words", 100000, "novels_worth"), ("streak_7", "streak", 7, "seven_days"), ("streak_30", "streak", 30, "thirty_days"),
+            ("streak_100", "streak", 100, "hundred_days"),
         ];
         var milestones = string.Join(",", all.Select(m =>
-            $"{{\"id\":\"{m.Id}\",\"kind\":\"{m.Kind}\",\"threshold\":{m.Threshold},\"reached\":{(reached.Contains(m.Id) ? "true" : "false")}}}"));
+            $"{{\"id\":\"{m.Id}\",\"kind\":\"{m.Kind}\",\"threshold\":{m.Threshold},\"reached\":{(reached.Contains(m.Id) ? "true" : "false")}"
+            + (named ? $",\"name\":\"{m.Name}\"" : "") + "}"));
         return $"{{\"type\":\"stats.counted\",\"ref\":\"{reference}\",\"today\":\"2026-10-03\",\"typing_wpm\":{typingWpm},\"dictation\":{{{dictation}}},"
-            + $"\"meetings_month\":{meetings},\"meetings_all\":{meetings},\"promises_month\":{promises},\"promises_all\":{promises},\"milestones\":[{milestones}]}}";
+            + $"\"meetings_month\":{meetings},\"meetings_all\":{meetings},\"promises_month\":{promises},\"promises_all\":{promises},\"milestones\":[{milestones}]{extra}}}";
     }
 
     [Fact]
@@ -174,7 +177,7 @@ public class StatsModelTests
         rig.Stats.Apply(Ev.Of("""{"type":"core.ready","version":"1.0.0","abi":2}"""));
         Assert.Contains("milestones.check", rig.Names());
         Assert.Equal(
-            ["stats.celebrate", "stats.typing_wpm"],
+            ["stats.celebrate", "stats.rest_days", "stats.share_heatmap", "stats.streak", "stats.typing_wpm"],
             rig.Sent.Commands.OfType<CoreCommand.SettingGet>().Select(g => g.Key.Key()).Order());
 
         rig.Sent.Commands.Clear();
@@ -381,7 +384,7 @@ public class StatsModelTests
     public void SettingsSaysWhatEachSettingDoes()
     {
         Assert.Equal("Celebrate milestones", StatsModel.CelebrateTitle);
-        Assert.EndsWith("With Always still or Windows' animation effects off, only the line.", StatsModel.CelebrateDetail, StringComparison.Ordinal);
+        Assert.Contains("With Always still or Windows' animation effects off, only the line.", StatsModel.CelebrateDetail, StringComparison.Ordinal);
         Assert.Equal("Time saved is typing the same words at this speed, less the time spent speaking.", StatsModel.TypingDetail);
         Assert.Equal("Counted on this PC from your library. Nothing is sent, and nothing is compared with anyone.", StatsModel.WhereText);
         Assert.Equal("40 words per minute", StatsModel.TypingSpoken(40));

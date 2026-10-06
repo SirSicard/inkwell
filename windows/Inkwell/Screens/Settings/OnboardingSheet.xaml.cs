@@ -404,6 +404,8 @@ public sealed partial class OnboardingSheet : ContentDialog
             ReadyDownload.Visibility = Visible(noSpeechModel && !catalogue.Downloading);
             ReadyDownloading.Visibility = Visible(noSpeechModel && catalogue.Downloading);
             TryIt.Visibility = Visible(!noSpeechModel);
+            NotHearingLine.Text = OnboardingModel.NotHearingText;
+            NotHearingLine.Visibility = Visible(!noSpeechModel && onboarding.NotHearing);
             ReadyTrayLine.Visibility = Visible(noSpeechModel);
             var stillOff = OnboardingModel.StillOff(permissions);
             StillOffLine.Text = stillOff ?? "";

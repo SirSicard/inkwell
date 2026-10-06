@@ -1,6 +1,7 @@
 // Meetings as the user drives them (S2.8): record now, record the call the Drop offers or say
-// not this one, stop, stop and delete, and the settings that shape them: the headset mic, and how
-// long the library keeps records (the call policies are CallPolicyModel's).
+// not this one, stop, stop and delete, and the settings that shape them: how long the library
+// keeps records (the call policies are CallPolicyModel's; the microphone is Settings > Sound's,
+// SoundModel).
 //
 // Recording starts when the user asks (the Drop's "Record this call", Today's "Record now", the
 // menu), or for an app the user chose Always for: the core starts that one itself, and the Drop
@@ -108,8 +109,6 @@ final class MeetingModel {
     /// The meeting being stopped and deleted, until the core says it is gone (or refuses). Live
     /// reads it: notes typed in it are never saved into a record being deleted.
     private(set) var discarding: String?
-    /// With Bluetooth output, record the headset's own mic.
-    private(set) var headsetMic = false
     /// How long the library keeps records; nil until the store answers.
     private(set) var retention: Retention?
     /// A setting could not be read or saved: its control says so.
@@ -165,11 +164,10 @@ final class MeetingModel {
 
     /// The ids of this model's setting commands (CoreCommand gives each setting command one).
     static let settingIDs: Set<String> = [
-        ShellSetting.meetingsHeadsetMic, .retentionDays,
+        ShellSetting.retentionDays,
     ].reduce(into: []) { $0.insert("setting:\($1.rawValue)") }
 
     func load() {
-        send(.settingGet(.meetingsHeadsetMic))
         send(.settingGet(.retentionDays))
     }
 
@@ -282,11 +280,6 @@ final class MeetingModel {
         }
     }
 
-    func setHeadsetMic(_ on: Bool) {
-        headsetMic = on
-        send(.settingSet(.meetingsHeadsetMic, on ? "on" : "off"))
-    }
-
     func setRetention(_ value: Retention) {
         retention = value
         send(.settingSet(.retentionDays, value.rawValue))
@@ -296,7 +289,6 @@ final class MeetingModel {
         switch event {
         case .settingValue(let value):
             switch value.key {
-            case ShellSetting.meetingsHeadsetMic.rawValue: headsetMic = value.value == "on"
             case ShellSetting.retentionDays.rawValue:
                 retention = value.value.flatMap(Retention.init(rawValue:)) ?? .forever
             default: break

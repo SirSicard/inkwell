@@ -40,8 +40,6 @@ public sealed partial class MeetingsSection : UserControl
 
     public static string NoAppsText => CallPolicyModel.NoApps;
 
-    public static string HeadsetDetail => "With Bluetooth headphones, record their own microphone instead of the PC's. It carries only call-quality sound.";
-
     public static string SettingsFailedText => MeetingModel.SettingsFailedText;
 
     private void Render()
@@ -167,14 +165,6 @@ public sealed partial class MeetingsSection : UserControl
         shownApps = null;
         AppRows.ItemsSource = null;
         Render();
-    }
-
-    private void OnHeadsetToggled(object sender, RoutedEventArgs e)
-    {
-        if (HeadsetMic.IsOn != Model.HeadsetMic)
-        {
-            Model.SetHeadsetMic(HeadsetMic.IsOn);
-        }
     }
 }
 

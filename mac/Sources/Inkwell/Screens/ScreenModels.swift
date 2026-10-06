@@ -28,6 +28,8 @@ final class OnboardingModel {
     /// The app is quitting: the sheet is ended so AppKit can quit, and nothing is recorded.
     private(set) var quitting = false
     var step: Step = .welcome
+    /// The Ready step's try-it heard nothing (TryItHint): it says where the microphone is picked.
+    var notHearing = false
 
     @ObservationIgnored private let send: SendCommand
     @ObservationIgnored private let log: ScreenLog
@@ -242,6 +244,8 @@ final class ScreenModels {
     let cloud: CloudModel
     /// The Stats screen, milestones, and Settings > Stats.
     let stats: StatsModel
+    /// Settings > Sound: the microphone and its test.
+    let sound: SoundModel
 
     /// The id of the meetings switch's command (a `command.failed` carries it).
     static let meetingsAISettingID = "setting:\(ShellSetting.meetingsLLM.rawValue)"
@@ -260,6 +264,7 @@ final class ScreenModels {
         theme = GlowTheme(send: send)
         cloud = CloudModel(send: send)
         stats = StatsModel(send: send)
+        sound = SoundModel(send: send)
         permissions = PermissionsModel(send: send, calendar: calendar)
         polish = PolishModel(send: send)
         catalogue = CatalogueModel(send: send)
@@ -308,6 +313,7 @@ final class ScreenModels {
             import02.apply(event)
             storage.apply(event)
             stats.apply(event)
+            sound.apply(event)
             if onboarding.showing {
                 // The first run offers its import step only when there is something to import.
                 import02.checkOnce()
@@ -460,6 +466,9 @@ final class ScreenModels {
             // The Stats screen says it couldn't count. (A milestone check that failed celebrates
             // nothing until the next one; no screen shows it, so it is logged.)
             stats.handles(failed)
+        case "streak.pause", "streak.resume":
+            // Settings > Stats says so under the pause.
+            stats.handles(failed)
         case "setting.get":
             stats.handles(failed) || failed.id == OnboardingModel.settingID || failed.id == PolishModel.settingID
                 || MeetingModel.settingIDs.contains(failed.id ?? "") || dictation.handles(failed)
@@ -468,11 +477,14 @@ final class ScreenModels {
         case "setting.set":
             // Onboarding's is not shown (the first run shows again next launch), so it is logged.
             stats.handles(failed) || failed.id == PolishModel.settingID || MeetingModel.settingIDs.contains(failed.id ?? "")
-                || failed.id == Self.meetingsAISettingID || dictation.handles(failed)
+                || failed.id == Self.meetingsAISettingID || dictation.handles(failed) || sound.handles(failed)
                 || GlowTheme.settingIDs.contains(failed.id ?? "") || CloudModel.handles(failed)
                 || failed.id == CallPolicyModel.defaultSettingID
         case "dictation.enable", "dictation.disable":
             dictation.handles(failed)
+        case "audio.devices", "audio.test", "audio.test_stop":
+            // Said in Settings > Sound.
+            sound.handles(failed)
         case "hotkey.check":
             // Said under the key's row.
             shortcuts.handles(failed)

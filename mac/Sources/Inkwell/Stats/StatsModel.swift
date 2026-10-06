@@ -15,6 +15,13 @@
 //
 // The days are the user's current zone's: a record made while travelling is placed by the zone
 // the Mac is in now, as the store keeps no zone per record.
+//
+// The gentle streak (Settings > Stats): rest days, a pause and a switch to hide it, all the core's
+// to count; this model only keeps what the user chose and sends it. A pause or resume is answered
+// with the numbers counted afresh. Last week's review leads the screen until the user dismisses
+// it: the dismissal is the core's to keep (stats.review_dismissed, by the week's first day), and
+// the card goes at once, coming back only if the dismissal could not be saved. A best just set is
+// the Drop's to say (DictationModel.note): the core reports it once, in a milestone check's answer.
 import Foundation
 import InkBridge
 import Observation
@@ -49,6 +56,31 @@ final class StatsModel {
     private(set) var typingWpm = StatsModel.defaultTypingWpm
     /// A Stats setting could not be read or saved: Settings says so (it may not be what it shows).
     private(set) var settingsFailed = false
+    /// Settings > Stats: the weekdays the streak rests on (ISO, 1 Monday to 7 Sunday).
+    private(set) var restDays: Set<Int> = []
+    /// Settings > Stats: the streak shows (on unless hidden).
+    private(set) var streakShown = true
+    /// The share card may carry the heatmap (off unless turned on).
+    private(set) var shareHeatmap = false
+    /// A pause or a resume of the streak sent and not answered yet.
+    private(set) var streakChanging: StreakChange?
+    /// The pause or resume that failed, until the next is sent.
+    private(set) var streakChangeFailed: StreakChange?
+    /// The week whose review the user dismissed (its first day): hidden at once.
+    private(set) var dismissedWeek: String?
+    /// The week whose dismissal could not be saved: its review shows again, and says so.
+    private(set) var reviewDismissFailedWeek: String?
+
+    /// The review showing is one whose dismissal could not be saved.
+    var reviewDismissFailed: Bool {
+        reviewDismissFailedWeek != nil && weekReview?.week == reviewDismissFailedWeek
+    }
+
+    /// A change to the streak's pause.
+    enum StreakChange: Equatable, Sendable {
+        case pausing
+        case resuming
+    }
 
     /// The core's default typing speed, and the range it takes (ink-ffi's stats module).
     static let defaultTypingWpm = 40
@@ -66,6 +98,9 @@ final class StatsModel {
     @ObservationIgnored private let send: SendCommand
     @ObservationIgnored private var sequence = 0
     @ObservationIgnored private var latestGet: String?
+    /// The pause or resume not answered yet: Settings waits for it as long as the screen waits
+    /// for its numbers.
+    private(set) var pendingStreak: String?
     /// The Stats screen shows, and its window is on screen: it then counts again when something is
     /// saved. Off screen it waits, and counts when it is back.
     @ObservationIgnored private var screenShown = false
@@ -89,9 +124,10 @@ final class StatsModel {
     ]
 
     /// The ids of this model's setting commands (CoreCommand.json gives each setting command one).
-    static let settingIDs: Set<String> = [
-        "setting:\(ShellSetting.statsCelebrate.rawValue)", "setting:\(ShellSetting.statsTypingWpm.rawValue)",
-    ]
+    static let settingIDs: Set<String> = Set(
+        [ShellSetting.statsCelebrate, .statsTypingWpm, .statsRestDays, .statsStreak, .statsShareHeatmap, .statsReviewDismissed]
+            .map { "setting:\($0.rawValue)" })
+    static let reviewDismissedID = "setting:\(ShellSetting.statsReviewDismissed.rawValue)"
 
     init(send: @escaping SendCommand) {
         self.send = send
@@ -152,6 +188,93 @@ final class StatsModel {
         pendingLoad = nil
     }
 
+    /// Last week's review, until the user dismisses it (the core then leaves it out).
+    var weekReview: WeekReview? {
+        guard let review = counted?.weekReview, review.week != dismissedWeek else { return nil }
+        return review
+    }
+
+    /// Settings shows the pause from the numbers: counted once when it first shows.
+    func settingsAppeared() {
+        if counted == nil, loadState != .loading { load() }
+    }
+
+    /// Dismisses last week's review for good: hidden now, kept by the core.
+    func dismissReview(_ review: WeekReview) {
+        dismissedWeek = review.week
+        reviewDismissFailedWeek = nil
+        write(.statsReviewDismissed, review.week)
+    }
+
+    /// Makes `iso` a rest day or not. All seven never are: a streak needs a day to count.
+    func setRestDay(_ iso: Int, _ on: Bool) {
+        guard (1...7).contains(iso) else { return }
+        var days = restDays
+        if on { days.insert(iso) } else { days.remove(iso) }
+        guard days.count < 7, days != restDays else { return }
+        restDays = days
+        write(.statsRestDays, Self.restDaysValue(days))
+    }
+
+    func setStreakShown(_ shown: Bool) {
+        streakShown = shown
+        write(.statsStreak, shown ? "shown" : "hidden")
+    }
+
+    func setShareHeatmap(_ on: Bool) {
+        shareHeatmap = on
+        write(.statsShareHeatmap, on ? "on" : "off")
+    }
+
+    /// Pauses the streak from today, or ends the running pause: answered with the numbers.
+    func pauseStreak() { changeStreak(.pausing) }
+    func resumeStreak() { changeStreak(.resuming) }
+
+    private func changeStreak(_ change: StreakChange) {
+        guard streakChanging == nil else { return }
+        let ref = ref("streak")
+        streakChanging = change
+        streakChangeFailed = nil
+        pendingStreak = ref
+        // Its answer is the newest count.
+        latestGet = ref
+        let fields = calendarFields
+        send(change == .pausing
+            ? .streakPause(utcOffsets: fields.offsets, weekStart: fields.weekStart, ref: ref)
+            : .streakResume(utcOffsets: fields.offsets, weekStart: fields.weekStart, ref: ref))
+    }
+
+    /// The pause or resume was not answered within the time limit: said, and the button works
+    /// again.
+    func streakTimedOut(_ ref: String) {
+        guard ref == pendingStreak else { return }
+        streakChangeFailed = streakChanging
+        streakChanging = nil
+        pendingStreak = nil
+        // Its answer was to be the screen's numbers: none came.
+        if ref == latestGet, loadState == .loading {
+            loadState = .failed
+            pendingLoad = nil
+        }
+    }
+
+    /// stats.rest_days' value for `days`: `none`, or ascending and comma-separated.
+    nonisolated static func restDaysValue(_ days: Set<Int>) -> String {
+        days.isEmpty ? "none" : days.sorted().map(String.init).joined(separator: ",")
+    }
+
+    /// The rest days in stats.rest_days' value, read as the core reads it: anything it would not
+    /// take (a day twice, out of order, all seven) is none.
+    nonisolated static func restDays(_ value: String?) -> Set<Int> {
+        guard let value, value != "none" else { return [] }
+        var days: [Int] = []
+        for part in value.split(separator: ",", omittingEmptySubsequences: false) {
+            guard part.count == 1, let day = Int(part), (1...7).contains(day), day > (days.last ?? 0) else { return [] }
+            days.append(day)
+        }
+        return days.count < 7 ? Set(days) : []
+    }
+
     func setCelebrate(_ on: Bool) {
         celebrate = on
         write(.statsCelebrate, on ? "on" : "off")
@@ -200,6 +323,7 @@ final class StatsModel {
     func handles(_ failed: CommandFailed) -> Bool {
         switch failed.command {
         case "stats.get": failed.id?.hasPrefix("stats-") == true
+        case "streak.pause", "streak.resume": failed.id?.hasPrefix("streak-") == true
         case "setting.get", "setting.set": Self.settingIDs.contains(failed.id ?? "")
         default: false
         }
@@ -214,6 +338,9 @@ final class StatsModel {
             unechoed = [:]
             send(.settingGet(.statsCelebrate))
             send(.settingGet(.statsTypingWpm))
+            send(.settingGet(.statsRestDays))
+            send(.settingGet(.statsStreak))
+            send(.settingGet(.statsShareHeatmap))
             checkMilestones()
         case .dictationInserted(let inserted) where inserted.record != nil:
             somethingSaved()
@@ -221,10 +348,17 @@ final class StatsModel {
             somethingSaved()
         case .importFinished:
             if visible { load() }
-        case .statsCounted(let answer) where answer.ref != nil && answer.ref == latestGet:
+        case .statsCounted(let answer) where answer.ref != nil && (answer.ref == latestGet || answer.ref == pendingStreak):
+            if answer.ref == pendingStreak {
+                pendingStreak = nil
+                streakChanging = nil
+            }
+            guard answer.ref == latestGet else { break }
             counted = answer
             loadState = .loaded
             pendingLoad = nil
+            // A pause answered after its time limit did change: it failed only as far as was known.
+            if answer.ref?.hasPrefix("streak-") == true { streakChangeFailed = nil }
         case .milestonesReached(let answer) where answer.ref?.hasPrefix("milestones-") == true:
             // Every check's answer: each milestone is reported once ever. Usually none; several
             // only after a long gap, or from checks that overlapped. One line says the biggest.
@@ -235,7 +369,8 @@ final class StatsModel {
             celebration = Celebration(
                 serial: celebrationSerial, id: biggest.id,
                 note: StatsFormat.milestoneNote(
-                    kind: biggest.kind, threshold: biggest.threshold, locale: calendar.locale ?? .current))
+                    kind: biggest.kind, threshold: biggest.threshold, name: biggest.name,
+                    locale: calendar.locale ?? .current))
         case .settingValue(let value) where value.key == ShellSetting.statsCelebrate.rawValue:
             if earlierEcho(.statsCelebrate) { break }
             settingsFailed = false
@@ -248,9 +383,43 @@ final class StatsModel {
             typingWpm = wpm ?? Self.defaultTypingWpm
             // Time saved is counted against it; a hidden Stats counts when it shows.
             if visible, let counted, Int(counted.typingWpm) != typingWpm { load() }
+        case .settingValue(let value) where value.key == ShellSetting.statsRestDays.rawValue:
+            if earlierEcho(.statsRestDays) { break }
+            settingsFailed = false
+            restDays = Self.restDays(value.value)
+            // The streak is counted with them; a hidden Stats counts when it shows.
+            if visible, let counted, Set((counted.dictation.restDays ?? []).map(Int.init)) != restDays { load() }
+        case .settingValue(let value) where value.key == ShellSetting.statsStreak.rawValue:
+            if earlierEcho(.statsStreak) { break }
+            settingsFailed = false
+            streakShown = value.value != "hidden"
+            if visible, let counted, (counted.dictation.streakHidden ?? false) == streakShown { load() }
+        case .settingValue(let value) where value.key == ShellSetting.statsShareHeatmap.rawValue:
+            if earlierEcho(.statsShareHeatmap) { break }
+            settingsFailed = false
+            shareHeatmap = value.value == "on"
+        case .settingValue(let value) where value.key == ShellSetting.statsReviewDismissed.rawValue:
+            _ = earlierEcho(.statsReviewDismissed)
         case .commandFailed(let failed) where failed.command == "stats.get" && failed.id != nil && failed.id == latestGet:
             loadState = .failed
             pendingLoad = nil
+        case .commandFailed(let failed) where (failed.command == "streak.pause" || failed.command == "streak.resume")
+            && failed.id != nil && failed.id == pendingStreak:
+            streakChangeFailed = streakChanging
+            streakChanging = nil
+            pendingStreak = nil
+            // The pause's answer was to be the screen's numbers: none comes.
+            if failed.id == latestGet, loadState == .loading {
+                loadState = .failed
+                pendingLoad = nil
+            }
+        case .commandFailed(let failed) where failed.id == Self.reviewDismissedID:
+            if failed.command == "setting.set" {
+                _ = earlierEcho(.statsReviewDismissed)
+                // Not kept: the review shows again, and says so.
+                reviewDismissFailedWeek = dismissedWeek
+                dismissedWeek = nil
+            }
         case .commandFailed(let failed) where Self.settingIDs.contains(failed.id ?? ""):
             if failed.command == "setting.set", let key = Self.settingKey(failed.id) {
                 _ = earlierEcho(key)

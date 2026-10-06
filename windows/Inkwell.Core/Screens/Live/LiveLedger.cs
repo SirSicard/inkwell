@@ -106,7 +106,11 @@ public static class LiveHeader
         return null;
     }
 
-    /// <summary>Which mic, when the reason is worth saying ("why is it using the laptop mic?").</summary>
+    /// <summary>
+    /// Which mic, when the reason is worth saying ("why is it using the laptop mic?"): a mic that went
+    /// and the one in its place, one standing in for a chosen mic that isn't connected, or
+    /// Automatic's reason.
+    /// </summary>
     public static string? MicLine(LiveMeeting meeting)
     {
         ArgumentNullException.ThrowIfNull(meeting);
@@ -114,8 +118,13 @@ public static class LiveHeader
         {
             return null;
         }
+        if (meeting.MicSwitch is { } change)
+        {
+            return change.From is { } from ? $"{name}, since {from} went" : $"{name}, since your mic went";
+        }
         return meeting.MicReason switch
         {
+            MicReason.ChosenMissing => $"{name}, until your chosen mic is back",
             MicReason.BuiltInForBluetoothOutput => $"{name}, because your headphones are Bluetooth",
             MicReason.HeadsetMicSetting => $"{name}, the headset's own mic",
             // An LE Audio headset keeps full quality on its own mic, so Windows records it.
