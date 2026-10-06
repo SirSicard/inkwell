@@ -49,6 +49,9 @@ enum CoreCommand: Equatable, Sendable {
     case meetingStart(app: String?, title: String?)
     case meetingStop
     case meetingDismiss(app: String)
+    /// "Stop and delete", in a meeting's first minute (until its `delete_until_unix_ms`): the
+    /// recording ends and is deleted as if never made (`meeting.stopped`, `meeting.discarded`).
+    case meetingDiscard
     /// The call policies: `meetings.calls` with `ref`, or a `command.failed` with it as the id.
     case meetingsCallsList(ref: String)
     /// One app's call policy, by the identity detection reports: always, ask, never, or default
@@ -157,6 +160,7 @@ enum CoreCommand: Equatable, Sendable {
                 .merging(title.map { ["title": $0] } ?? [:]) { a, _ in a }
         case .meetingStop: ["cmd": "meeting.stop", "id": "meeting.stop"]
         case .meetingDismiss(let app): ["cmd": "meeting.dismiss", "app": app, "id": "meeting.dismiss"]
+        case .meetingDiscard: ["cmd": "meeting.discard", "id": "meeting.discard"]
         case .meetingsCallsList(let ref): ["cmd": "meetings.calls.list", "id": ref]
         case .meetingsCallsSet(let app, let policy, let replace, let ref):
             ["cmd": "meetings.calls.set", "app": app, "policy": policy, "id": ref]
@@ -230,6 +234,7 @@ enum CoreCommand: Equatable, Sendable {
         case .meetingStart: "meeting.start"
         case .meetingStop: "meeting.stop"
         case .meetingDismiss: "meeting.dismiss"
+        case .meetingDiscard: "meeting.discard"
         case .meetingsCallsList: "meetings.calls.list"
         case .meetingsCallsSet: "meetings.calls.set"
         case .meetingAsk: "meeting.ask"

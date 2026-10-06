@@ -1,10 +1,12 @@
 // Meetings as the user drives them (S2.8): record now, record the call the Drop offers or say
-// not this one, stop, and the settings that shape them: the headset mic, and how long the library
-// keeps records (the call policies, which replaced listening for calls, are CallPolicyModel's).
+// not this one, stop, stop and delete, and the settings that shape them: the headset mic, and how
+// long the library keeps records (the call policies are CallPolicyModel's).
 //
-// Recording starts only when the user asks (the Drop's "Record this call", Today's "Record now",
-// the menu). Detection only offers. A meeting's title comes from the calendar when a call is on it
-// now, read without prompting; otherwise the summary's headline names it later.
+// Recording starts when the user asks (the Drop's "Record this call", Today's "Record now", the
+// menu), or for an app the user chose Always for: the core starts that one itself, and the Drop
+// shows it with Stop, and Stop and delete for its first minute. A meeting's title comes from the
+// calendar when a call is on it now, read without prompting; otherwise the summary's headline
+// names it later.
 import EventKit
 import Foundation
 import InkBridge
@@ -76,6 +78,10 @@ final class MeetingModel {
         case dismiss
         /// Stop, in Live.
         case stop
+        /// Stop, on the Drop of a call recorded by its app's Always.
+        case dropStop
+        /// "Stop and delete", on that Drop.
+        case discard
     }
 
     /// The places that show a meeting command's failure.
@@ -96,6 +102,11 @@ final class MeetingModel {
     }
 
     private(set) var failure: Failure?
+    /// The meeting Stop and delete can still delete: one its app's Always started, until its
+    /// delete_until_unix_ms. Cleared at that moment by one scheduled wake, never by polling.
+    private(set) var deletable: String?
+    /// The meeting being stopped and deleted, until the core says it is gone.
+    private(set) var discarding: String?
     /// With Bluetooth output, record the headset's own mic.
     private(set) var headsetMic = false
     /// How long the library keeps records; nil until the store answers.
@@ -107,17 +118,29 @@ final class MeetingModel {
     @ObservationIgnored private let titles: any CallTitles
     @ObservationIgnored private let now: () -> Date
     @ObservationIgnored private let log: ScreenLog
+    /// Sleeps until a deadline (tests shorten it).
+    @ObservationIgnored private let sleep: @Sendable (Duration) async throws -> Void
     /// Where the start in flight was asked for (a start's command id is the same from both).
     @ObservationIgnored private var starting: Origin = .recordNow
+    /// Where the stop in flight was asked for.
+    @ObservationIgnored private var stopping: Origin = .stop
+    /// The one wake that ends Stop and delete's minute.
+    @ObservationIgnored private var deleteDeadline: Task<Void, Never>?
 
     init(
         send: @escaping SendCommand, titles: any CallTitles = EventKitCallTitles(),
-        now: @escaping () -> Date = Date.init, log: ScreenLog = .system
+        now: @escaping () -> Date = Date.init, log: ScreenLog = .system,
+        sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
     ) {
         self.send = send
         self.titles = titles
         self.now = now
         self.log = log
+        self.sleep = sleep
+    }
+
+    isolated deinit {
+        deleteDeadline?.cancel()
     }
 
     /// What `place` says about the last failure, or nil when it was not asked there.
@@ -128,8 +151,10 @@ final class MeetingModel {
             return "Couldn't start recording: \(failure.message)"
         case (.drop, .dismiss):
             return "Couldn't dismiss the offer: \(failure.message)"
-        case (.liveStop, .stop):
+        case (.liveStop, .stop), (.drop, .dropStop):
             return "Couldn't stop: \(failure.message)"
+        case (.drop, .discard):
+            return failure.message
         default:
             return nil
         }
@@ -165,9 +190,23 @@ final class MeetingModel {
         send(.meetingDismiss(app: app))
     }
 
-    func stop() {
+    func stop(from origin: Origin = .stop) {
         failure = nil
+        stopping = origin
         send(.meetingStop)
+    }
+
+    /// "Stop and delete": only while the meeting's first minute lasts.
+    func discard() {
+        guard let record = deletable else { return }
+        failure = nil
+        discarding = record
+        send(.meetingDiscard)
+    }
+
+    /// Whether Stop and delete is offered for `record` now.
+    func canDiscard(_ record: String?) -> Bool {
+        record != nil && deletable == record && discarding == nil
     }
 
     /// A button on the Drop.
@@ -176,9 +215,52 @@ final class MeetingModel {
         case .record(let app): record(app: app)
         case .dismiss(let app): dismiss(app: app)
         case .allowSystemAudio: permissions.request(.hearTheOthers)
-        // Not a meeting's: ScreenModels.performDropAction opens Today for it.
-        case .showSpeechModels: break
+        case .stop: stop(from: .dropStop)
+        case .stopAndDelete: discard()
+        // Not a meeting's: ScreenModels.performDropAction opens Today for the one, and sets the
+        // app's call policy for the others.
+        case .showSpeechModels, .always, .never: break
         }
+    }
+
+    /// Words for a Stop and delete the core refused: past the minute, only Stop is left.
+    static func discardFailure(_ failed: CommandFailed) -> String {
+        failed.code == .deleteWindowOver
+            ? "The first minute is over. Stop it, then delete it in the Library."
+            : "Couldn't delete it: \(failed.message)"
+    }
+
+    /// A meeting started: Stop and delete is offered until its deadline when its app's Always
+    /// started it. One scheduled wake ends the offer (architecture rule 9: nothing polls).
+    private func started(_ started: MeetingStarted) {
+        endDeleteWindow()
+        discarding = nil
+        // Only a start the policy made: one the user made has Live's Stop, and the library's
+        // delete afterwards.
+        guard started.auto == true, let until = started.deleteUntilUnixMs else { return }
+        let left = Double(until) / 1000 - now().timeIntervalSince1970
+        guard left > 0 else { return }
+        let record = started.record
+        deletable = record
+        let sleep = self.sleep
+        deleteDeadline = Task { @MainActor [weak self] in
+            do { try await sleep(.milliseconds(Int64((left * 1000).rounded(.up)))) } catch { return }
+            guard let self, self.deletable == record else { return }
+            self.deletable = nil
+            self.deleteDeadline = nil
+        }
+    }
+
+    private func endDeleteWindow() {
+        deleteDeadline?.cancel()
+        deleteDeadline = nil
+        deletable = nil
+    }
+
+    /// The meeting `record` ended, one way or another.
+    private func ended(_ record: String) {
+        if deletable == record { endDeleteWindow() }
+        if discarding == record { discarding = nil }
     }
 
     func setHeadsetMic(_ on: Bool) {
@@ -200,11 +282,32 @@ final class MeetingModel {
                 retention = value.value.flatMap(Retention.init(rawValue:)) ?? .forever
             default: break
             }
-        case .meetingStarted:
+        case .meetingStarted(let meeting):
             failure = nil
+            started(meeting)
+        case .meetingStopped(let stopped):
+            // Stopped: Stop and delete is no longer offered (a discard in flight goes on).
+            if deletable == stopped.record { endDeleteWindow() }
+        case .meetingFinished(let finished):
+            ended(finished.record)
+        case .meetingDiscarded(let discarded):
+            ended(discarded.record)
+        case .meetingFailed(let failed):
+            if let record = failed.record { ended(record) }
+        case .meetingWorkerFailed(let failed):
+            ended(failed.record)
+        case .coreStopped:
+            endDeleteWindow()
+            discarding = nil
+        case .commandFailed(let failed) where failed.command == "meeting.discard":
+            discarding = nil
+            // Refused for good (the minute is over, or it had stopped): only Stop is left.
+            endDeleteWindow()
+            failure = Failure(origin: .discard, message: Self.discardFailure(failed))
+            log.write("command.failed for a meeting.discard command; shown where it was asked")
         case .commandFailed(let failed) where ["meeting.start", "meeting.stop", "meeting.dismiss"].contains(failed.command):
             let origin: Origin = switch failed.command {
-            case "meeting.stop": .stop
+            case "meeting.stop": stopping
             case "meeting.dismiss": .dismiss
             default: starting
             }

@@ -458,6 +458,10 @@ final class LiveModel {
             end()
         case .meetingWorkerFailed(let failed) where failed.record == record:
             end()
+        case .meetingDiscarded(let discarded) where discarded.record == record:
+            // Stop and delete: the meeting and its notes are gone with it; nothing is saved to it.
+            draft = nil
+            end()
         case .coreStopped:
             end()
         default:

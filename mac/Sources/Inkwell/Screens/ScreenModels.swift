@@ -420,7 +420,16 @@ final class ScreenModels {
         switch action {
         case .showSpeechModels:
             show(.today)
-        case .record, .dismiss, .allowSystemAudio: meetings.perform(action, permissions: permissions)
+        case .always(let app, _):
+            // The app is Always from now on, and this call is recorded now: an app offered and
+            // made Always stays offered until it is started (inkwell.h, meetings.calls.set).
+            calls.choose(.always, for: app, from: .drop)
+            if calls.dropFailure == nil { meetings.record(app: app) }
+        case .never(let app, _):
+            // The core withdraws the offer (meeting.detection_ended, dismissed).
+            calls.choose(.never, for: app, from: .drop)
+        case .record, .dismiss, .allowSystemAudio, .stop, .stopAndDelete:
+            meetings.perform(action, permissions: permissions)
         }
     }
 
@@ -440,7 +449,7 @@ final class ScreenModels {
         switch failed.command {
         case "permissions.check", "models.list", "modes.list", "commitment.set_done",
              "commitment.not_yet", "note.add", "note.update", "note.delete",
-             "meeting.start", "meeting.stop", "meeting.dismiss", "meeting.ask",
+             "meeting.start", "meeting.stop", "meeting.dismiss", "meeting.discard", "meeting.ask",
              "meetings.calls.list", "meetings.calls.set":
             true
         case "model.update":

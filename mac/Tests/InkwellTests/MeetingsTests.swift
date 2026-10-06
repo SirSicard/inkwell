@@ -57,8 +57,11 @@ final class ConsentDropTests: XCTestCase {
         for word in ["invisible", "undetectable", "hidden", "secret"] {
             XCTAssertFalse((text.title + text.detail).lowercased().contains(word), word)
         }
-        XCTAssertEqual(text.actions, [.record(app: "com.example.call"), .dismiss(app: "com.example.call")])
-        XCTAssertEqual(text.actions.map(\.title), ["Record this call", "Not this one"])
+        XCTAssertEqual(text.actions, [
+            .record(app: "com.example.call"), .dismiss(app: "com.example.call"),
+            .always(app: "com.example.call", name: "Example Call"), .never(app: "com.example.call", name: "Example Call"),
+        ])
+        XCTAssertEqual(text.actions.map(\.title), ["Record this call", "Not this one", "Always for Example Call", "Never for Example Call"])
         XCTAssertFalse(drop.panelIsKey, "asking never takes focus")
 
         // The answer withdrawn (the app let go of the mic): the Drop goes.
@@ -444,7 +447,7 @@ final class MeetingFailureTests: XCTestCase {
         XCTAssertEqual(ink.dropText.title, "Example Call opened the microphone")
         XCTAssertEqual(ink.dropText.detail, "Couldn't start recording: the other side's sound: permission denied")
         XCTAssertEqual(ink.dropText.tone, .alert)
-        XCTAssertEqual(ink.dropText.actions, [.record(app: "com.example.call"), .dismiss(app: "com.example.call")])
+        XCTAssertEqual(ink.dropText.actions.prefix(2), [.record(app: "com.example.call"), .dismiss(app: "com.example.call")])
         XCTAssertNil(meetings.failure(on: .recordNow), "not claimed on Today")
         meetings.dismiss(app: "com.example.call")
         XCTAssertEqual(ink.dropText.detail, "Recording keeps both sides on this Mac. Tell the others you are recording.", "a new answer clears it")
@@ -554,7 +557,7 @@ final class MergedDropTests: XCTestCase {
         store.apply([event(#"{"type":"meeting.detected","app":"com.example.call","app_name":"Example Call"}"#)])
         drop.update()
         XCTAssertEqual(drop.shownText?.title, "Example Call opened the microphone")
-        XCTAssertEqual(drop.shownText?.actions.count, 2)
+        XCTAssertEqual(drop.shownText?.actions.count, 4)
         XCTAssertEqual(drop.inkState, .idle)
 
         // A take: its live words, no buttons.

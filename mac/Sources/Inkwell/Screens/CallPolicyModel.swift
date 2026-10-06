@@ -197,7 +197,7 @@ final class CallPolicyModel {
     // MARK: - Words
 
     /// What the core calls an app whose name and identity show nothing.
-    static let nameless = "an app"
+    nonisolated static let nameless = "an app"
 
     /// The default's row.
     static let defaultTitle = "Calls in other apps"
