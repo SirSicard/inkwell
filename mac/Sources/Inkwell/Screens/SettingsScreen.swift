@@ -80,7 +80,7 @@ struct SettingsScreen: View {
                         SnippetsSection(snippets: screens.snippets).settingsCard(.snippets)
                         VoiceCommandsSection(commands: screens.voiceCommands).settingsCard(.voiceCommands)
                         AISection(polish: screens.polish, screens: screens, cloud: screens.cloud).settingsCard(.ai)
-                        MeetingsSection(permissions: screens.permissions, meetings: screens.meetings)
+                        MeetingsSection(permissions: screens.permissions, meetings: screens.meetings, calls: screens.calls)
                             .settingsCard(.meetings)
                         StatsSettingsSection(stats: screens.stats).settingsCard(.stats)
                         ModelsSection(catalogue: screens.catalogue).settingsCard(.models)
@@ -123,6 +123,7 @@ struct SettingsScreen: View {
             screens.modes.load()
             screens.polish.load()
             screens.meetingsConsent.load()
+            screens.calls.load()
             screens.dictation.load()
             screens.snippets.load()
             screens.voiceCommands.load()
@@ -770,14 +771,12 @@ private struct AISection: View {
 private struct MeetingsSection: View {
     let permissions: PermissionsModel
     let meetings: MeetingModel
+    let calls: CallPolicyModel
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             SectionTitle(text: "Meetings")
-            toggle(
-                "Offer to record calls",
-                detail: "When an app opens the microphone for a call, Inkwell asks whether to record it. It never records without you saying so.",
-                isOn: meetings.detect, set: { meetings.setDetect($0) })
+            CallPolicyRows(calls: calls)
             toggle(
                 "Use the headset's microphone",
                 detail: "With Bluetooth headphones, record their own microphone instead of the Mac's. It carries only call-quality sound.",
@@ -790,7 +789,7 @@ private struct MeetingsSection: View {
             VStack(alignment: .leading, spacing: 8) {
                 fact("Consent", "Tell the others in the call that you are recording. Inkwell shows while it records, and never hides that it does.")
                 fact("You", "Your microphone, as \u{201C}Hear you\u{201D} allows.")
-                fact("Them", "For a call you record when Inkwell offers, the call app's own sound. With Record now, or when Inkwell can't hear the call app alone, everything this Mac plays, and Inkwell says so. As \u{201C}Hear the others\u{201D} allows.")
+                fact("Them", "For a call Inkwell offers or records by itself, the call app's own sound. With Record now, or when Inkwell can't hear the call app alone, everything this Mac plays, and Inkwell says so. As \u{201C}Hear the others\u{201D} allows.")
                 fact("Headphones", "With Bluetooth headphones, Inkwell records the Mac's own microphone: a headset microphone carries only call-quality sound.")
                 fact("Where", "Recordings and transcripts stay on this Mac. Nothing is sent anywhere unless you add your own key for a model online.")
             }
