@@ -46,8 +46,16 @@ pub fn vad_source(shared: &Shared) -> VadSource {
         }
         Err(_) => return VadSource::Unavailable(VadUnavailable::ModelMissing),
     };
+    // Held for the meeting, so the model is not removed or replaced under it (model_in_use).
+    let Ok(used) = shared.gate.enter(&row.id) else {
+        log::warn!("meeting: the voice detection model is being updated or removed");
+        return VadSource::Unavailable(VadUnavailable::LoadFailed);
+    };
     match load_vad(&shared.models, &row) {
-        Ok(model) => VadSource::Installed(Arc::new(move || model.vad())),
+        Ok(model) => VadSource::Installed(Arc::new(move || {
+            let _held = &used;
+            model.vad()
+        })),
         Err(EngineError::ModelMissing(why)) => {
             log::warn!("meeting: no voice detection: {why}");
             VadSource::Unavailable(VadUnavailable::ModelMissing)
@@ -97,7 +105,13 @@ impl Diarizer for RoutedDiarizer {
             .registry
             .get(&self.info.id)
             .ok_or_else(|| EngineError::ModelMissing(self.info.id.clone()))?;
-        // Loaded for this call and dropped with it.
+        // Held for this call, so the model is not removed or replaced under it; loaded for it and
+        // dropped with it.
+        let _used = self
+            .shared
+            .gate
+            .enter(&row.id)
+            .map_err(|refused| EngineError::Failed(refused.to_string()))?;
         let model = load_diarizer(&self.shared.models, row)?;
         model.diarize(audio, cancel)
     }

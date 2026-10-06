@@ -421,3 +421,43 @@ fn the_language_model_in_use_is_removed_only_between_calls_and_then_none_is_used
     assert_eq!(rig.local.loads(), 1);
     rig.finish();
 }
+
+/// A meeting holds its voice detector for its length: removing the model meanwhile is refused,
+/// and allowed once it lets go. Needs Silero in the build (`ink-engines/engine-silero`) and its
+/// model at `$INK_BENCH_DIR/models/silero-vad/`.
+#[test]
+#[ignore = "needs engine-silero and the Silero model under $INK_BENCH_DIR; run locally"]
+fn a_meetings_voice_detector_is_never_removed_under_it() {
+    let Some(row) = Registry::builtin()
+        .unwrap()
+        .get(ink_engines::SILERO_VAD_ID)
+        .cloned()
+    else {
+        eprintln!("SKIPPED: this build has no Silero");
+        return;
+    };
+    let bench = std::path::PathBuf::from(std::env::var_os("INK_BENCH_DIR").expect("INK_BENCH_DIR"));
+    let rig = Rig::new("remove-vad", vec![row.clone()], &[], roomy());
+    let target = rig.models.file_path(&row, &row.files[0]);
+    std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+    std::fs::copy(
+        bench.join("models/silero-vad").join(&row.files[0].name),
+        &target,
+    )
+    .unwrap();
+    std::fs::write(rig.models.marker_path(&row), &row.revision).unwrap();
+    assert!(rig.models.is_installed(&row));
+
+    let vad = ink_ffi::engines::vad_source(rig.core().shared());
+    assert!(
+        matches!(vad, ink_pipeline::speech::VadSource::Installed(_)),
+        "the voice detector loaded"
+    );
+    let refused = rig.ask(json!({"cmd": "model.remove", "model": row.id}), "r1");
+    assert_eq!(refused["code"], "model_in_use", "{refused}");
+    assert!(rig.models.is_installed(&row));
+    drop(vad);
+    let listed = rig.ask(json!({"cmd": "model.remove", "model": row.id}), "r2");
+    assert_eq!(listed["type"], "models.listed", "{listed}");
+    rig.finish();
+}

@@ -271,10 +271,12 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *   {"cmd":"model.remove","model":"<registry id>","id":"<ref>"}
  *       Deletes a model's files (every revision's, and part files), from the screens' thread:
  *       "models.listed" with the "id" as "ref". While a job, a language model call or an update
- *       holds the model, "command.failed" with code model_in_use, and nothing is deleted: try
+ *       holds the model (a meeting holds its voice detector for its length, and its diarizer for
+ *       the final pass), "command.failed" with code model_in_use, and nothing is deleted: try
  *       again once it ends. A model loaded and idle is unloaded first. Removing the language
- *       model in use leaves the features with none (a mode pinned to engine:local reads
- *       missing); nothing falls through to another model. Only when the user asks.
+ *       model in use leaves a mode pinned to engine:local missing; while on_device is chosen the
+ *       features then have none, and nothing falls through to another model. Only when the
+ *       user asks.
  *   {"cmd":"engine.route","job":"dictation_final"}
  *       Which engine serves a job now: "engine.routed" with the job, and the engine's id and
  *       source ("registry" for a downloaded model, "shell" for an engine the shell registered),

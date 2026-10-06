@@ -477,8 +477,9 @@ impl std::fmt::Display for RemoveError {
 /// **Worker.** Deletes `row`'s files, speech or language: refused while a job, a call or an update
 /// holds it ([`ModelGate::hold`]); otherwise it is held for the delete, unloaded from whichever
 /// residency has it, and its directory is deleted ([`ModelDir::remove_row`](ink_engines::ModelDir::remove_row),
-/// which stays inside the models root). A removed language model in use stops being used (the
-/// features then have none of their own; nothing falls through to a cloud provider).
+/// which stays inside the models root). A removed language model in use stops being used: while
+/// `on_device` is chosen the features then have none, and nothing falls through to another model;
+/// with no provider chosen, a model the shell registered is used again (none on Windows).
 pub fn remove(shared: &Shared, row: &EngineRow) -> Result<(), RemoveError> {
     let hold = shared
         .gate
