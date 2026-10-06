@@ -35,14 +35,14 @@ public sealed partial class SoundSection : UserControl
     public SoundModel Model { get; }
 
     /// <summary>The test state last drawn: a level alone only moves the meter.</summary>
-    private (SoundModel.TestState, SoundModel.Devices?, string?, string?)? drawn;
+    private (SoundModel.TestState, SoundModel.Devices?, string?, string?, string?)? drawn;
 
     private void OnChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e) => Render();
 
     private void Render()
     {
         Meter.Value = Model.TestLevel;
-        var now = (Model.Test, Model.Current, Model.InputProblem ?? Model.OutputProblem, Model.TestRefused);
+        var now = (Model.Test, Model.Current, Model.InputProblem, Model.OutputProblem, Model.TestRefused);
         if (drawn == now)
         {
             // A level: the bar moves, and nothing else is read again (the meter's value is its own).
