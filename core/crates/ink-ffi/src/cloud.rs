@@ -418,8 +418,11 @@ fn stored(shared: &Shared) -> Result<Option<Selection>, String> {
 }
 
 /// **Worker.** Builds the stored choice, if any, as the provider features may use (at launch,
-/// before anything can call a model). A choice that cannot be read or built is none, and logged.
+/// before anything can call a model). A choice that cannot be built is none, and logged. One that
+/// cannot be read fails closed: no model is used until a choice is written again (it may have
+/// been this machine's model, or a provider).
 pub(crate) fn load(shared: &Shared) {
+    let mut unreadable = false;
     let (llm, on_device) = match stored(shared) {
         Ok(Some(Selection::Provider(choice))) => match build(shared, &choice) {
             Ok(llm) => (Some(llm), false),
@@ -429,8 +432,13 @@ pub(crate) fn load(shared: &Shared) {
             }
         },
         Ok(Some(Selection::OnDevice)) => (None, true),
-        Ok(None) | Err(_) => (None, false),
+        Ok(None) => (None, false),
+        Err(_) => {
+            unreadable = true;
+            (None, false)
+        }
     };
+    shared.llms.set_choice_unreadable(unreadable);
     shared.llms.set_on_device(on_device);
     shared.llms.set_cloud(llm);
 }
@@ -634,6 +642,8 @@ fn choose(
         shared.llms.set_cloud(llm);
         shared.llms.set_on_device(false);
     }
+    // Written now: what it says is what the features use.
+    shared.llms.set_choice_unreadable(false);
     chosen(shared, local);
     Ok(())
 }
@@ -697,6 +707,7 @@ fn choose_on_device(
     shared.local_only.set(true);
     shared.llms.set_cloud(None);
     shared.llms.set_on_device(true);
+    shared.llms.set_choice_unreadable(false);
     chosen(shared, "on");
     Ok(())
 }
@@ -960,6 +971,14 @@ fn test(shared: &Shared, reference: Option<&str>) -> Value {
 /// **Worker.** [`probe`] to the core's own model on this machine, when it is what the features use
 /// (no provider chosen): loaded first if it is not, the load and the answer timed apart.
 fn test_local(shared: &Shared, reference: Option<&str>) -> Value {
+    if shared.llms.choice_unreadable() {
+        log::warn!("command llm.test failed: the chosen provider cannot be read");
+        return events::command_failed(
+            "llm.test",
+            reference,
+            "couldn't read the chosen provider; choose one again",
+        );
+    }
     let Some(local) = shared.llms.local() else {
         let why = if shared.llms.on_device() {
             "no language model is downloaded on this computer"

@@ -260,3 +260,32 @@ fn the_test_loads_this_machines_model_and_times_the_load_and_the_answer() {
     assert_eq!(local.calls(), 2, "the local model is not asked");
     rig.events.assert_valid();
 }
+
+#[test]
+fn a_choice_that_cannot_be_read_uses_no_model_until_one_is_chosen_again() {
+    let rig = local_rig("on-device-unreadable");
+    rig.ask(json!({"cmd": "llm.choose", "provider": "on_device"}), "c1");
+    rig.core
+        .shared()
+        .store
+        .set_setting("llm.cloud", "{not json")
+        .unwrap();
+    // At the next launch it fails closed: it may have been this machine's model or a provider.
+    let rig = rig.restart_with(&[chat_row()]);
+    assert_eq!(setting_model(&rig, "m1"), Value::Null);
+    assert!(rig.core.shared().llms.pick().is_none());
+    let listed = rig.ask(json!({"cmd": "llm.providers"}), "p1");
+    assert!(
+        listed["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("the chosen provider")),
+        "{listed}"
+    );
+    let tested = rig.ask(json!({"cmd": "llm.test"}), "t1");
+    assert_eq!(tested["type"], "command.failed", "{tested}");
+    assert_eq!(rig.local.as_ref().unwrap().loads(), 0, "nothing loaded");
+
+    rig.ask(json!({"cmd": "llm.choose", "provider": "none"}), "c2");
+    assert_eq!(setting_model(&rig, "m2"), "engine:local");
+    rig.events.assert_valid();
+}

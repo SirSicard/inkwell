@@ -124,6 +124,9 @@ pub fn llm(shared: &Shared) -> Option<Arc<dyn Llm>> {
 /// else the core's own model's ([`LOCAL_CONTEXT_TOKENS`]), else the registered model's (the order
 /// [`ShellLlms::pick`](crate::llms::ShellLlms::pick) follows), else [`DEFAULT_CONTEXT_TOKENS`].
 pub fn context_tokens(shared: &Shared) -> u32 {
+    if shared.llms.choice_unreadable() {
+        return DEFAULT_CONTEXT_TOKENS;
+    }
     if let Some(cloud) = shared.llms.cloud() {
         return cloud.context_tokens().unwrap_or(DEFAULT_CONTEXT_TOKENS);
     }

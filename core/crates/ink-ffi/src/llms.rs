@@ -97,6 +97,9 @@ pub struct ShellLlms {
     /// The AI setting is this machine's model (`llm.choose` `on_device`): while none is
     /// installed, nothing stands in for it.
     on_device: AtomicBool,
+    /// The AI setting's choice could not be read: the user may have chosen this machine's model
+    /// or a provider, so nothing stands in for it until it is chosen again.
+    unreadable: AtomicBool,
 }
 
 impl ShellLlms {
@@ -126,8 +129,12 @@ impl ShellLlms {
 
     /// The model polish goes to now: the chosen own-key provider, else the core's own model on
     /// this machine, else a model the shell registered, if any. The user's choice wins: with this
-    /// machine's model chosen and none installed, there is none.
+    /// machine's model chosen and none installed, there is none, and with a choice that cannot be
+    /// read, none either (it may have been either).
     pub fn pick(&self) -> Option<Arc<dyn Llm>> {
+        if self.choice_unreadable() {
+            return None;
+        }
         if let Some(cloud) = self.cloud() {
             return Some(cloud as Arc<dyn Llm>);
         }
@@ -143,6 +150,9 @@ impl ShellLlms {
     /// **Any thread.** What [`pick`](Self::pick) gives, as a mode names it: the AI setting's
     /// model.
     pub fn pick_ref(&self) -> Option<ModelRef> {
+        if self.choice_unreadable() {
+            return None;
+        }
         if let Some(info) = self
             .cloud
             .read()
@@ -164,6 +174,17 @@ impl ShellLlms {
             .keys()
             .next()
             .map(|id| ModelRef::Engine(id.clone()))
+    }
+
+    /// Whether the AI setting's choice could not be read: then [`pick`](Self::pick) gives none
+    /// until a choice is written again.
+    pub fn choice_unreadable(&self) -> bool {
+        self.unreadable.load(Ordering::Acquire)
+    }
+
+    /// Sets whether the AI setting's choice could not be read.
+    pub fn set_choice_unreadable(&self, unreadable: bool) {
+        self.unreadable.store(unreadable, Ordering::Release);
     }
 
     /// Whether the AI setting is this machine's model (`llm.choose` `on_device`).
