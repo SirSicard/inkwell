@@ -57,8 +57,11 @@ final class ConsentDropTests: XCTestCase {
         for word in ["invisible", "undetectable", "hidden", "secret"] {
             XCTAssertFalse((text.title + text.detail).lowercased().contains(word), word)
         }
-        XCTAssertEqual(text.actions, [.record(app: "com.example.call"), .dismiss(app: "com.example.call")])
-        XCTAssertEqual(text.actions.map(\.title), ["Record this call", "Not this one"])
+        XCTAssertEqual(text.actions, [
+            .record(app: "com.example.call"), .dismiss(app: "com.example.call"),
+            .always(app: "com.example.call", name: "Example Call"), .never(app: "com.example.call", name: "Example Call"),
+        ])
+        XCTAssertEqual(text.actions.map(\.title), ["Record this call", "Not this one", "Always for Example Call", "Never for Example Call"])
         XCTAssertFalse(drop.panelIsKey, "asking never takes focus")
 
         // The answer withdrawn (the app let go of the mic): the Drop goes.
@@ -66,6 +69,17 @@ final class ConsentDropTests: XCTestCase {
         drop.update()
         XCTAssertFalse(drop.isShown)
         XCTAssertTrue(pressed.isEmpty, "nothing recorded without a click")
+    }
+
+    /// The consent line is laid out whole, on two lines: a tail-truncating field drew one, and the
+    /// reminder to tell the others was cut off.
+    func testTheConsentLineIsShownWholeOnTwoLines() {
+        let content = DropContentView()
+        content.setFrameSize(DropLayout.sizeWithActions)
+        let store = CoreStore()
+        store.apply([event(#"{"type":"meeting.detected","app":"com.example.call","app_name":"Example Call"}"#)])
+        content.show(ShellInk(store: store).dropText)
+        XCTAssertEqual(content.detailShownLines, 2)
     }
 
     func testTheDropsAnswersBecomeMeetingCommands() {
@@ -301,16 +315,14 @@ final class MeetingSettingsTests: XCTestCase {
         let sent = Sent()
         let meetings = MeetingModel(send: sent.send)
         meetings.load()
-        XCTAssertEqual(sent.commands, [.settingGet(.meetingsDetect), .settingGet(.retentionDays)])
+        // The old "Offer to record calls" switch is the call policies' default now (CallPolicyModel);
+        // the microphone is Settings > Sound's.
+        XCTAssertEqual(sent.commands, [.settingGet(.retentionDays)])
         XCTAssertNil(meetings.retention, "not known until the core answers")
-        meetings.apply(event(#"{"type":"setting.value","key":"meetings.detect","value":"off"}"#))
         meetings.apply(event(#"{"type":"setting.value","key":"retention.days"}"#))
-        XCTAssertFalse(meetings.detect)
         XCTAssertEqual(meetings.retention, .forever, "never set: forever")
         meetings.setRetention(.month)
         XCTAssertEqual(sent.commands.last, .settingSet(.retentionDays, "30"))
-        meetings.setDetect(true)
-        XCTAssertEqual(sent.commands.last, .settingSet(.meetingsDetect, "on"))
         meetings.apply(event(#"{"type":"command.failed","command":"setting.set","id":"setting:retention.days","message":"x"}"#))
         XCTAssertTrue(meetings.settingsFailed)
         XCTAssertEqual(Set(Retention.allCases.map(\.rawValue)), ["forever", "7", "30", "90", "365"], "the core's whitelist")
@@ -434,7 +446,7 @@ final class MeetingFailureTests: XCTestCase {
         XCTAssertEqual(ink.dropText.title, "Example Call opened the microphone")
         XCTAssertEqual(ink.dropText.detail, "Couldn't start recording: the other side's sound: permission denied")
         XCTAssertEqual(ink.dropText.tone, .alert)
-        XCTAssertEqual(ink.dropText.actions, [.record(app: "com.example.call"), .dismiss(app: "com.example.call")])
+        XCTAssertEqual(ink.dropText.actions.prefix(2), [.record(app: "com.example.call"), .dismiss(app: "com.example.call")])
         XCTAssertNil(meetings.failure(on: .recordNow), "not claimed on Today")
         meetings.dismiss(app: "com.example.call")
         XCTAssertEqual(ink.dropText.detail, "Recording keeps both sides on this Mac. Tell the others you are recording.", "a new answer clears it")
@@ -544,7 +556,7 @@ final class MergedDropTests: XCTestCase {
         store.apply([event(#"{"type":"meeting.detected","app":"com.example.call","app_name":"Example Call"}"#)])
         drop.update()
         XCTAssertEqual(drop.shownText?.title, "Example Call opened the microphone")
-        XCTAssertEqual(drop.shownText?.actions.count, 2)
+        XCTAssertEqual(drop.shownText?.actions.count, 4)
         XCTAssertEqual(drop.inkState, .idle)
 
         // A take: its live words, no buttons.

@@ -49,6 +49,15 @@ enum CoreCommand: Equatable, Sendable {
     case meetingStart(app: String?, title: String?)
     case meetingStop
     case meetingDismiss(app: String)
+    /// "Stop and delete", in a meeting's first minute (until its `delete_until_unix_ms`): the
+    /// recording ends and is deleted as if never made (`meeting.stopped`, `meeting.discarded`).
+    case meetingDiscard
+    /// The call policies: `meetings.calls` with `ref`, or a `command.failed` with it as the id.
+    case meetingsCallsList(ref: String)
+    /// One app's call policy, by the identity detection reports: always, ask, never, or default
+    /// (follow the default again). The core refuses it over a stored list it cannot read unless
+    /// `replaceUnreadable` (the user chose to start the list over).
+    case meetingsCallsSet(app: String, policy: String, replaceUnreadable: Bool, ref: String)
     /// `ref` comes back in `meeting.answered`, or as the id of a `command.failed`.
     case meetingAsk(question: String, ref: String)
     case meetingsRecover
@@ -167,6 +176,11 @@ enum CoreCommand: Equatable, Sendable {
                 .merging(title.map { ["title": $0] } ?? [:]) { a, _ in a }
         case .meetingStop: ["cmd": "meeting.stop", "id": "meeting.stop"]
         case .meetingDismiss(let app): ["cmd": "meeting.dismiss", "app": app, "id": "meeting.dismiss"]
+        case .meetingDiscard: ["cmd": "meeting.discard", "id": "meeting.discard"]
+        case .meetingsCallsList(let ref): ["cmd": "meetings.calls.list", "id": ref]
+        case .meetingsCallsSet(let app, let policy, let replace, let ref):
+            ["cmd": "meetings.calls.set", "app": app, "policy": policy, "id": ref]
+                .merging(replace ? ["replace_unreadable": true] : [:]) { a, _ in a }
         case .meetingAsk(let question, let ref): ["cmd": "meeting.ask", "question": question, "id": ref]
         case .meetingsRecover: ["cmd": "meetings.recover"]
         case .commitmentNotYet(let id): ["cmd": "commitment.not_yet", "commitment": id]
@@ -243,6 +257,9 @@ enum CoreCommand: Equatable, Sendable {
         case .meetingStart: "meeting.start"
         case .meetingStop: "meeting.stop"
         case .meetingDismiss: "meeting.dismiss"
+        case .meetingDiscard: "meeting.discard"
+        case .meetingsCallsList: "meetings.calls.list"
+        case .meetingsCallsSet: "meetings.calls.set"
         case .meetingAsk: "meeting.ask"
         case .meetingsRecover: "meetings.recover"
         case .commitmentNotYet: "commitment.not_yet"
@@ -299,8 +316,9 @@ enum ShellSetting: String, Sendable {
     /// "on" or "off": the user's switch for dictation polish. Only "off" is set this way: polish
     /// turns on through the consent step (`consentAllow`).
     case dictationPolish = "dictation.polish"
-    /// "on" (the default) or "off": listen for calls and offer to record them.
-    case meetingsDetect = "meetings.detect"
+    /// "ask" (the default), "always" or "never": the call policy for apps not chosen for. It
+    /// replaced "meetings.detect" ("Offer to record calls"), which the core migrates.
+    case meetingsCallsDefault = "meetings.calls.default"
     /// "on" or "off": the switch for a meeting's summary and Ask. Only "off" is set this way: they
     /// turn on through the consent step (`consentAllow`).
     case meetingsLLM = "meetings.llm"

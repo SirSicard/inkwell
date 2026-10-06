@@ -46,8 +46,15 @@ final class DropPanel: NSPanel {
 enum DropLayout {
     static let size = NSSize(width: 440, height: 76)
     /// With buttons (the consent offer, the watchdog's "Allow system audio"): taller, its corners
-    /// rounded rather than a pill's.
+    /// rounded rather than a pill's. At least this; taller when its lines and buttons need it
+    /// (the offer's four buttons take two rows).
     static let sizeWithActions = NSSize(width: 440, height: 116)
+    /// Above and below the lines and buttons, with buttons.
+    static let actionsPadding: CGFloat = 16
+    /// The room the lines and buttons have: the pill less the orb's side and the right margin.
+    static var linesWidth: CGFloat { sizeWithActions.width - inkWidth - 24 }
+    /// Between buttons, and between their rows.
+    static let buttonSpacing: CGFloat = 8
     /// The orb's circle, and its inset from the pill's left edge.
     static let orbSize: CGFloat = 58
     static let orbInset: CGFloat = 10
@@ -90,6 +97,8 @@ final class DropController {
     var panelIsKey: Bool { panel.isKeyWindow }
     /// What the Drop's lines say now.
     var shownText: DropText? { isShown ? content.text : nil }
+    /// The Drop's content (tests and renders).
+    var contentView: DropContentView { content }
 
     init(ink: ShellInk, notes: DictationModel? = nil, theme: GlowTheme? = nil) {
         self.ink = ink
@@ -142,8 +151,8 @@ final class DropController {
 
     /// Shows `text` beside the ink in `state`, the panel sized for its buttons.
     private func display(_ text: DropText, ink state: InkState) {
-        let size = text.actions.isEmpty ? DropLayout.size : DropLayout.sizeWithActions
         content.show(text)
+        let size = content.fittingPanelSize
         content.setCorner(text.actions.isEmpty ? DropLayout.cornerRadius : DropLayout.cornerRadiusWithActions)
         content.inkView.state = state
         if panel.frame.size != size {
@@ -226,8 +235,10 @@ final class DropContentView: NSView {
     let inkView = InkView(frame: NSRect(x: 0, y: 0, width: DropLayout.orbSize, height: DropLayout.orbSize))
     private let title = NSTextField(labelWithString: "")
     private let detail = NSTextField(labelWithString: "")
+    /// The buttons, in rows: as many to a row as fit beside the orb.
     private let buttons = NSStackView()
     private let orbHolder = NSView()
+    private let lines: NSStackView
     /// What the lines say now.
     private(set) var text = DropText(title: "", detail: "")
     /// A button was clicked.
@@ -245,6 +256,7 @@ final class DropContentView: NSView {
         size: 17) ?? NSFont.systemFont(ofSize: 17)
 
     init() {
+        lines = NSStackView(views: [title, detail, buttons])
         super.init(frame: NSRect(origin: .zero, size: DropLayout.size))
         wantsLayer = true
         guard let layer else { return }
@@ -267,14 +279,17 @@ final class DropContentView: NSView {
 
         title.font = .systemFont(ofSize: 12, weight: .semibold)
         detail.font = Self.lineFont
-        detail.lineBreakMode = .byTruncatingTail
+        // Wrapped by word, the last line cut: a tail-truncating field draws one line only, which
+        // cut the reminder to tell the others off the consent offer.
+        detail.lineBreakMode = .byWordWrapping
+        detail.cell?.truncatesLastVisibleLine = true
         detail.maximumNumberOfLines = 2
         detail.cell?.wraps = true
-        detail.preferredMaxLayoutWidth = DropLayout.sizeWithActions.width - DropLayout.inkWidth - 24
-        buttons.orientation = .horizontal
-        buttons.spacing = 8
+        detail.preferredMaxLayoutWidth = DropLayout.linesWidth
+        buttons.orientation = .vertical
+        buttons.alignment = .leading
+        buttons.spacing = DropLayout.buttonSpacing
         buttons.isHidden = true
-        let lines = NSStackView(views: [title, detail, buttons])
         lines.orientation = .vertical
         lines.alignment = .leading
         lines.spacing = 2
@@ -321,21 +336,64 @@ final class DropContentView: NSView {
         }
     }
 
+    /// The panel's size for what it shows: the pill alone, or tall enough for the lines and the
+    /// rows of buttons.
+    var fittingPanelSize: NSSize {
+        guard !text.actions.isEmpty else { return DropLayout.size }
+        layoutSubtreeIfNeeded()
+        let height = ceil(lines.fittingSize.height) + 2 * DropLayout.actionsPadding
+        return NSSize(width: DropLayout.sizeWithActions.width, height: max(DropLayout.sizeWithActions.height, height))
+    }
+
+    /// How many lines the detail takes at the Drop's width, and how many it may (tests: nothing
+    /// said is cut).
+    var detailLines: (needed: Int, allowed: Int) {
+        let font = detail.font ?? Self.lineFont
+        let height = (detail.stringValue as NSString).boundingRect(
+            with: NSSize(width: DropLayout.linesWidth, height: .greatestFiniteMagnitude),
+            options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: [.font: font]
+        ).height
+        let line = NSLayoutManager().defaultLineHeight(for: font)
+        return (Int((height / line).rounded()), detail.maximumNumberOfLines)
+    }
+
+    /// The buttons now, in order (tests).
+    var shownButtons: [NSButton] {
+        buttons.arrangedSubviews.flatMap { ($0 as? NSStackView)?.arrangedSubviews ?? [] }.compactMap { $0 as? NSButton }
+    }
+
     func show(_ text: DropText) {
         if text.actions != self.text.actions {
             buttons.arrangedSubviews.forEach { $0.removeFromSuperview() }
+            var row: NSStackView?
+            var rowWidth: CGFloat = 0
             for (index, action) in text.actions.enumerated() {
                 let button = DropButton(title: action.title, target: self, action: #selector(clicked(_:)))
                 button.tag = index
                 button.bezelStyle = .push
                 button.controlSize = .regular
+                // A long app name is cut in its middle, never past the Drop's edge.
+                button.lineBreakMode = .byTruncatingMiddle
+                button.setAccessibilityHelp(action.hint)
                 // The first is the offer's answer, prominent; the others are plain.
                 if index == 0 {
                     button.keyEquivalent = ""
                     button.bezelColor = Self.textColor
                     button.contentTintColor = Theme.dynamic { $0.buttonLabel.nsColor }
                 }
-                buttons.addArrangedSubview(button)
+                let width = min(button.fittingSize.width, DropLayout.linesWidth)
+                button.widthAnchor.constraint(lessThanOrEqualToConstant: DropLayout.linesWidth).isActive = true
+                if let current = row, rowWidth + DropLayout.buttonSpacing + width <= DropLayout.linesWidth {
+                    current.addArrangedSubview(button)
+                    rowWidth += DropLayout.buttonSpacing + width
+                } else {
+                    let next = NSStackView(views: [button])
+                    next.orientation = .horizontal
+                    next.spacing = DropLayout.buttonSpacing
+                    buttons.addArrangedSubview(next)
+                    row = next
+                    rowWidth = width
+                }
             }
             buttons.isHidden = text.actions.isEmpty
         }
@@ -347,15 +405,24 @@ final class DropContentView: NSView {
             detail.cell?.wraps = false
             detail.lineBreakMode = .byTruncatingHead
         } else {
-            detail.maximumNumberOfLines = 2
+            // With buttons, room for a third line (an Always app asked instead says why).
+            detail.maximumNumberOfLines = text.actions.isEmpty ? 2 : 3
             detail.cell?.wraps = true
-            detail.lineBreakMode = .byTruncatingTail
+            detail.lineBreakMode = .byWordWrapping
+            detail.cell?.truncatesLastVisibleLine = true
             detail.stringValue = text.detail
         }
         layer?.borderWidth = text.tone == .alert ? 1.5 : 1
         applyColours()
         // The live words are the user's: VoiceOver reads them (they are on screen), no log does.
         setAccessibilityLabel("Inkwell: \(text.title), \(text.detail)")
+    }
+
+    /// How many lines the detail is laid out on now (tests).
+    var detailShownLines: Int {
+        layoutSubtreeIfNeeded()
+        let line = NSLayoutManager().defaultLineHeight(for: detail.font ?? Self.lineFont)
+        return Int((detail.frame.height / line).rounded())
     }
 
     @objc private func clicked(_ sender: NSButton) {

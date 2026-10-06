@@ -222,6 +222,8 @@ final class ScreenModels {
     let owed: OwedModel
     let live: LiveModel
     let meetings: MeetingModel
+    /// Each app's call policy, and the default (Settings > Meetings, the Drop's offer).
+    let calls: CallPolicyModel
     let onboarding: OnboardingModel
     let storage: StorageModel
     let dictation: DictationModel
@@ -270,6 +272,8 @@ final class ScreenModels {
         owed = OwedModel(send: send)
         live = LiveModel(send: send)
         meetings = MeetingModel(send: send, titles: callTitles)
+        calls = CallPolicyModel(send: send, apps: apps)
+        live.discarding = { [meetings] record in meetings.discarding == record }
         onboarding = OnboardingModel(send: send, log: log)
         storage = StorageModel(dataDirectory: dataDirectory, modelsDirectory: modelsDirectory)
         dictation = DictationModel(send: send)
@@ -302,6 +306,7 @@ final class ScreenModels {
             owed.apply(event)
             live.apply(event)
             meetings.apply(event)
+            calls.apply(event)
             onboarding.apply(event)
             theme.apply(event)
             cloud.apply(event)
@@ -344,6 +349,7 @@ final class ScreenModels {
         owed.load()
         polish.load()
         meetings.load()
+        calls.load()
         permissions.refresh()
         catalogue.requery()
         // Reads the switch, then (unless it is off) the core holds the keys; without
@@ -421,7 +427,16 @@ final class ScreenModels {
         switch action {
         case .showSpeechModels:
             show(.today)
-        case .record, .dismiss, .allowSystemAudio: meetings.perform(action, permissions: permissions)
+        case .always(let app, _):
+            // The app is Always from now on, and this call is recorded once that is saved: an app
+            // offered and made Always stays offered until it is started (inkwell.h,
+            // meetings.calls.set). A save that failed records nothing and says so on the offer.
+            calls.choose(.always, for: app, from: .drop) { [meetings] in meetings.record(app: app) }
+        case .never(let app, _):
+            // The core withdraws the offer (meeting.detection_ended, dismissed).
+            calls.choose(.never, for: app, from: .drop)
+        case .record, .dismiss, .allowSystemAudio, .stop, .stopAndDelete:
+            meetings.perform(action, permissions: permissions)
         }
     }
 
@@ -441,7 +456,8 @@ final class ScreenModels {
         switch failed.command {
         case "permissions.check", "models.list", "modes.list", "commitment.set_done",
              "commitment.not_yet", "note.add", "note.update", "note.delete",
-             "meeting.start", "meeting.stop", "meeting.dismiss", "meeting.ask":
+             "meeting.start", "meeting.stop", "meeting.dismiss", "meeting.discard", "meeting.ask",
+             "meetings.calls.list", "meetings.calls.set":
             true
         case "model.update":
             // The download's row says it failed, and why (the first run and Settings > Models).
@@ -457,11 +473,13 @@ final class ScreenModels {
             stats.handles(failed) || failed.id == OnboardingModel.settingID || failed.id == PolishModel.settingID
                 || MeetingModel.settingIDs.contains(failed.id ?? "") || dictation.handles(failed)
                 || GlowTheme.settingIDs.contains(failed.id ?? "") || CloudModel.handles(failed)
+                || failed.id == CallPolicyModel.defaultSettingID
         case "setting.set":
             // Onboarding's is not shown (the first run shows again next launch), so it is logged.
             stats.handles(failed) || failed.id == PolishModel.settingID || MeetingModel.settingIDs.contains(failed.id ?? "")
                 || failed.id == Self.meetingsAISettingID || dictation.handles(failed) || sound.handles(failed)
                 || GlowTheme.settingIDs.contains(failed.id ?? "") || CloudModel.handles(failed)
+                || failed.id == CallPolicyModel.defaultSettingID
         case "dictation.enable", "dictation.disable":
             dictation.handles(failed)
         case "audio.devices", "audio.test", "audio.test_stop":

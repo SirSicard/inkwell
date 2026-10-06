@@ -19,16 +19,24 @@ final class ShellInk {
     /// The permission cards: a system-audio probe that says "off" during a meeting is a problem the
     /// Drop shows at once, before the watchdog has heard ten seconds of silence.
     @ObservationIgnored let permissions: PermissionsModel?
-    /// The meeting commands: a Drop answer that failed is said in the Drop.
+    /// The meeting commands: a Drop answer that failed is said in the Drop, and Stop and delete
+    /// shows while it can delete.
     @ObservationIgnored let meetings: MeetingModel?
+    /// The call policies: the Drop offers "Always for" an app not already Always, and says when
+    /// setting one failed.
+    @ObservationIgnored let calls: CallPolicyModel?
     /// A state held whatever the core says: the shell budget's live phase (INK_MEASURE=live) and
     /// the Drop's focus check (INK_DROP_DEMO). Nil in ordinary use.
     var held: InkState?
 
-    init(store: CoreStore, permissions: PermissionsModel? = nil, meetings: MeetingModel? = nil) {
+    init(
+        store: CoreStore, permissions: PermissionsModel? = nil, meetings: MeetingModel? = nil,
+        calls: CallPolicyModel? = nil
+    ) {
         self.store = store
         self.permissions = permissions
         self.meetings = meetings
+        self.calls = calls
     }
 
     /// Whether the system-audio probe says it is off.
@@ -46,10 +54,15 @@ final class ShellInk {
         if held != nil {
             return DropText.for(state, dictation: store.dictation, live: store.liveDictation)
         }
+        let record = store.meeting?.record
         return DropText.for(
             state, dictation: store.dictation, live: store.liveDictation, meeting: store.meeting,
-            offer: store.offer, systemAudioOff: systemAudioOff, failure: meetings?.failure(on: .drop),
-            micFallback: store.micFallback)
+            offer: store.offer, systemAudioOff: systemAudioOff,
+            failure: meetings?.failure(on: .drop) ?? calls?.dropFailure,
+            micFallback: store.micFallback,
+            deletable: meetings?.canDiscard(record) ?? false,
+            discarding: record != nil && meetings?.discarding == record,
+            offerPolicy: store.offer.flatMap { calls?.policy(of: $0.app) })
     }
 
     /// Whether the Drop shows: something is live, or the core offers to record a call.
@@ -102,6 +115,16 @@ struct DropText: Equatable, Sendable {
         case record(app: String)
         /// "Not this one" (meeting.dismiss).
         case dismiss(app: String)
+        /// "Always for Zoom": the app's calls are recorded without asking from now on, and this
+        /// one now (meetings.calls.set, then meeting.start).
+        case always(app: String, name: String)
+        /// "Never for Zoom": the app's calls are never offered or recorded (meetings.calls.set;
+        /// the core withdraws the offer).
+        case never(app: String, name: String)
+        /// Stop a call its app's Always recorded (meeting.stop).
+        case stop
+        /// "Stop and delete", in that call's first minute (meeting.discard).
+        case stopAndDelete
         /// Ask for system audio (as the Settings card does).
         case allowSystemAudio
         /// Bring the main window to Today, where the recommended speech models' download states
@@ -113,10 +136,60 @@ struct DropText: Equatable, Sendable {
             switch self {
             case .record: "Record this call"
             case .dismiss: "Not this one"
+            case .always(_, let name): "Always for \(DropText.named(name))"
+            case .never(_, let name): "Never for \(DropText.named(name))"
+            case .stop: "Stop"
+            case .stopAndDelete: "Stop and delete"
             case .allowSystemAudio: "Allow system audio"
             case .showSpeechModels: "Download speech models\u{2026}"
             }
         }
+
+        /// What VoiceOver says the button does, beyond its title.
+        var hint: String? {
+            switch self {
+            case .always(_, let name):
+                "Records this call, and from now on records \(DropText.named(name))'s calls without asking"
+            case .never(_, let name):
+                "Inkwell won't offer to record \(DropText.named(name))'s calls again"
+            case .stopAndDelete: "Stops recording and deletes this recording, as if it had never been made"
+            case .stop: "Stops recording; the final pass runs"
+            default: nil
+            }
+        }
+    }
+
+    /// What the core calls an app whose name and identity show nothing.
+    static var nameless: String { CallPolicyModel.nameless }
+
+    /// An app's name in a button or a line: "this app" for the core's stand-in for none.
+    static func named(_ name: String) -> String {
+        name == nameless ? "this app" : name
+    }
+
+    /// The offer's line when an Always app's own sound can't be recorded alone
+    /// (`meeting.detected`'s message is then the core's NOT_ALONE, word for word).
+    static let notAloneMessage = "Inkwell can only record everything this computer plays for this app, so it asks first"
+
+    /// Copy for each state, the tests read them.
+    static let consentLine = "Recording keeps both sides on this Mac. Tell the others you are recording."
+    /// The title names the app, so this line does not: a long name would push the reminder to
+    /// tell the others past the Drop's last line.
+    /// An Always app's start that failed (any other `meeting.detected` message).
+    static let startFailedLine = "Inkwell couldn't start recording it by itself. Tell the others you are recording."
+    static let notAloneLine = "Inkwell can't hear it alone: recording takes in everything this Mac plays. Tell the others you are recording."
+    static func autoTitle(_ name: String?) -> String {
+        "● Recording \(name.map(named) ?? "the call") automatically"
+    }
+    static func autoReminder(_ name: String?) -> String {
+        "Always is on for \(name.map(named) ?? "this app"). Tell the others you are recording."
+    }
+    static let discardingTitle = "Stop and delete"
+    static let discardingLine = "Deleting this recording"
+
+    /// `text` with its first letter capitalised ("an app opened…" begins a line).
+    static func sentence(_ text: String) -> String {
+        text.prefix(1).uppercased() + text.dropFirst()
     }
 
     var title: String
@@ -137,21 +210,56 @@ struct DropText: Equatable, Sendable {
     /// again. A dictation shows as `for(_:dictation:live:)` has it.
     /// `micFallback`: the chosen mic isn't connected and another records (said while the take
     /// listens with no words yet, and until the meeting's first line).
+    ///
+    /// The offer also sets the app's call policy: "Always for" (unless it is Always already:
+    /// `offerPolicy`, or a `message` saying why an Always app is asked), and "Never for". A call
+    /// its app's Always recorded says so, keeps the reminder to tell the others, and offers Stop,
+    /// and Stop and delete while `deletable` (its first minute); `discarding` once that was pressed.
     static func `for`(
         _ state: InkState, dictation: CoreStore.DictationPhase, live: CoreStore.LiveDictation? = nil,
         meeting: CoreStore.LiveMeeting?, offer: CoreStore.Offer?, systemAudioOff: Bool,
-        failure: String? = nil, micFallback: CoreStore.MicFallback? = nil
+        failure: String? = nil, micFallback: CoreStore.MicFallback? = nil, deletable: Bool = false,
+        discarding: Bool = false, offerPolicy: CallPolicy? = nil
     ) -> DropText {
+        if discarding, state == .meeting || state == .blotting || state == .problem {
+            return DropText(title: discardingTitle, detail: failure ?? discardingLine, tone: failure == nil ? .plain : .alert)
+        }
         switch state {
         case .idle:
             guard let offer else { return DropText.for(state, dictation: dictation, live: live) }
+            // An Always app asked instead: why, in the shell's words.
+            let line = switch offer.message {
+            case nil: consentLine
+            case notAloneMessage?: notAloneLine
+            // The platform's reason can run long and would cut the reminder: the core logged it.
+            case _?: startFailedLine
+            }
+            let alreadyAlways = offer.message != nil || offerPolicy == .always
+            var actions: [Action] = [.record(app: offer.app), .dismiss(app: offer.app)]
+            if !alreadyAlways { actions.append(.always(app: offer.app, name: offer.appName)) }
+            actions.append(.never(app: offer.app, name: offer.appName))
             return DropText(
-                title: "\(offer.appName) opened the microphone",
-                detail: failure ?? "Recording keeps both sides on this Mac. Tell the others you are recording.",
+                title: sentence("\(offer.appName) opened the microphone"),
+                detail: failure ?? line,
                 tone: failure == nil ? .plain : .alert,
-                actions: [.record(app: offer.app), .dismiss(app: offer.app)])
+                actions: actions)
         case .meeting:
             guard let meeting else { return DropText.for(state, dictation: dictation, live: live) }
+            if meeting.auto {
+                let latest = meeting.finals.last?.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                let reminder = autoReminder(meeting.appName)
+                // A mic that went mid-call is said over everything but a failure, as for any meeting.
+                let switched = meeting.micSwitch.flatMap { $0.atLine == meeting.ledger.seen ? Self.switchLine($0) : nil }
+                // The reminder holds the first minute, while Stop and delete is there; then the
+                // latest line, as any meeting's (before one, the stand-in mic if there is one).
+                let detail = switched ?? (deletable
+                    ? reminder
+                    : latest.flatMap { $0.isEmpty ? nil : $0 } ?? micFallback.map(Self.fallbackLine) ?? reminder)
+                return DropText(
+                    title: autoTitle(meeting.appName), detail: failure ?? detail,
+                    tone: failure == nil ? .recording : .alert,
+                    actions: deletable ? [.stop, .stopAndDelete] : [.stop])
+            }
             let source = meeting.appName ?? meeting.title
             let latest = meeting.finals.last?.text.trimmingCharacters(in: .whitespacesAndNewlines)
             // Said until the first line arrives (Live keeps saying it): other apps' sound is in
@@ -187,8 +295,12 @@ struct DropText: Equatable, Sendable {
             } else {
                 "Nothing is arriving from the call. Only your voice may be recorded."
             }
-            return DropText(
-                title: title, detail: detail, tone: .alert, actions: systemAudioOff ? [.allowSystemAudio] : [])
+            // A call its app's Always recorded keeps its Stop (and Stop and delete) here too.
+            var actions: [Action] = systemAudioOff ? [.allowSystemAudio] : []
+            if meeting?.auto == true {
+                actions += deletable ? [.stop, .stopAndDelete] : [.stop]
+            }
+            return DropText(title: title, detail: failure ?? detail, tone: .alert, actions: actions)
         case .blotting:
             return DropText(title: "Blotting · final pass", detail: meeting?.title ?? meeting?.appName ?? "The final pass")
         case .dictating:

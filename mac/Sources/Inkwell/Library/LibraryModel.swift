@@ -386,9 +386,9 @@ final class LibraryModel {
                 if lastMeeting?.record.record == named.record {
                     send(.recordOpen(record: named.record, ref: ref(for: .todayOpen)))
                 }
-            case .meetingFinished, .dictationInserted, .coreReady, .importFinished:
-                // A record was written or finished, or 0.2's came over: what the screens list has
-                // changed.
+            case .meetingFinished, .meetingDiscarded, .dictationInserted, .coreReady, .importFinished:
+                // A record was written, finished or deleted with Stop and delete, or 0.2's came
+                // over: what the screens list has changed.
                 libraryChanged = true
             default:
                 break

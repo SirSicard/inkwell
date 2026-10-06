@@ -84,6 +84,12 @@ public final class CoreStore {
         /// It was started for an app whose sound could not be recorded alone, so it records
         /// everything this Mac plays instead (`meeting.far_end_fallback`).
         public var farEndFallback = false
+        /// The app's call policy (Always) started it, without a tap: the Drop says so and offers
+        /// Stop, and Stop and delete while `deleteUntilUnixMs` has not passed.
+        public var auto = false
+        /// Until when, Unix ms, Stop and delete (meeting.discard) may delete it as if it had never
+        /// been made; nil for a meeting that cannot be deleted so.
+        public var deleteUntilUnixMs: Int64?
         /// `meeting.stopped` arrived: capture ended and the final pass is running.
         public var stopping = false
         /// The final pass's progress: the sides it has transcribed (`meeting.transcribed`), and
@@ -171,6 +177,15 @@ public final class CoreStore {
     public struct Offer: Equatable, Sendable {
         public let app: String
         public let appName: String
+        /// Why an app the user chose Always for is offered rather than recorded (its own sound
+        /// cannot be recorded alone, or its start failed); nil for an ordinary offer.
+        public let message: String?
+
+        public init(app: String, appName: String, message: String? = nil) {
+            self.app = app
+            self.appName = appName
+            self.message = message
+        }
     }
 
     /// Something the user may need to know or act on (the needs-you banner reads these).
@@ -381,12 +396,14 @@ public final class CoreStore {
             live.micName = started.micName
             live.micReason = started.micReason
             live.farEnd = started.farEnd
+            live.auto = started.auto ?? false
+            live.deleteUntilUnixMs = started.deleteUntilUnixMs
             meeting = live
             offer = nil
         case .meetingDetected(let detected):
             // Only while nothing is recorded: the core never offers during a meeting.
             if meeting == nil {
-                offer = Offer(app: detected.app, appName: detected.appName)
+                offer = Offer(app: detected.app, appName: detected.appName, message: detected.message)
             }
         case .meetingDetectionEnded(let ended):
             if offer?.app == ended.app {
@@ -451,6 +468,9 @@ public final class CoreStore {
         case .meetingFinished(let finished):
             lastRecord = finished.record
             endMeeting(finished.record)
+        case .meetingDiscarded(let discarded):
+            // Stop and delete: gone as if never made, so it is never the last record.
+            endMeeting(discarded.record)
         case .meetingFailed(let failed):
             notice(.meetingFailed, failed.message)
             // A failure without a record is a meeting that never started.

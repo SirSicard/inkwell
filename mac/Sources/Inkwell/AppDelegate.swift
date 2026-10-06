@@ -26,7 +26,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var mainWindow: MainWindowController?
     /// The ink every surface shows, and the Drop that shows it while something is live.
     private lazy var ink = ShellInk(
-        store: core.store, permissions: core.screens.permissions, meetings: core.screens.meetings)
+        store: core.store, permissions: core.screens.permissions, meetings: core.screens.meetings,
+        calls: core.screens.calls)
     private var drop: DropController?
     /// What the Dock tile and the menu-bar item show of the state.
     private let liveIcon = LiveIcon()

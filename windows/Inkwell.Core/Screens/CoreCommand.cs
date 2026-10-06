@@ -258,6 +258,44 @@ public abstract record CoreCommand
         private protected override IEnumerable<(string, object)> Fields() => [("cmd", Name), ("app", App), ("id", Name)];
     }
 
+    /// <summary>
+    /// "Stop and delete", in a meeting's first minute (until its delete_until_unix_ms): the
+    /// recording ends and is deleted as if never made (meeting.stopped, then meeting.discarded).
+    /// </summary>
+    public sealed record MeetingDiscard : CoreCommand
+    {
+        public override string Name => "meeting.discard";
+        private protected override IEnumerable<(string, object)> Fields() => [("cmd", Name), ("id", Name)];
+    }
+
+    /// <summary>The call policies: meetings.calls with <paramref name="Ref"/>, or a command.failed with it as the id.</summary>
+    public sealed record MeetingsCallsList(string Ref) : CoreCommand
+    {
+        public override string Name => "meetings.calls.list";
+        private protected override IEnumerable<(string, object)> Fields() => [("cmd", Name), ("id", Ref)];
+    }
+
+    /// <summary>
+    /// One app's call policy, by the identity detection reports: always, ask, never, or default
+    /// (follow the default again). The core refuses it over a stored list it cannot read unless
+    /// <paramref name="ReplaceUnreadable"/> (the user chose to start the list over).
+    /// </summary>
+    public sealed record MeetingsCallsSet(string App, string Policy, bool ReplaceUnreadable, string Ref) : CoreCommand
+    {
+        public override string Name => "meetings.calls.set";
+        private protected override IEnumerable<(string, object)> Fields()
+        {
+            yield return ("cmd", Name);
+            yield return ("app", App);
+            yield return ("policy", Policy);
+            yield return ("id", Ref);
+            if (ReplaceUnreadable)
+            {
+                yield return ("replace_unreadable", true);
+            }
+        }
+    }
+
     /// <summary><paramref name="Ref"/> comes back in meeting.answered, or as the id of a command.failed.</summary>
     public sealed record MeetingAsk(string Question, string Ref) : CoreCommand
     {
@@ -624,8 +662,11 @@ public enum ShellSetting
     OnboardingDone,
     /// <summary>"on" or "off": the user's switch for dictation polish. Only "off" is set this way: polish turns on through the consent step.</summary>
     DictationPolish,
-    /// <summary>"on" (the default) or "off": listen for calls and offer to record them.</summary>
-    MeetingsDetect,
+    /// <summary>
+    /// "ask" (the default), "always" or "never": the call policy for apps not chosen for. It
+    /// replaced "meetings.detect" ("Offer to record calls"), which the core migrates.
+    /// </summary>
+    MeetingsCallsDefault,
     /// <summary>"on" or "off": the switch for a meeting's summary and Ask. Only "off" is set this way.</summary>
     MeetingsLlm,
     /// <summary>The microphone for dictation, meetings and the test: "auto" (the default) or a device's id from audio.devices, connected when set.</summary>
@@ -683,7 +724,7 @@ public static class ShellSettings
     {
         ShellSetting.OnboardingDone => "onboarding.done",
         ShellSetting.DictationPolish => "dictation.polish",
-        ShellSetting.MeetingsDetect => "meetings.detect",
+        ShellSetting.MeetingsCallsDefault => "meetings.calls.default",
         ShellSetting.MeetingsLlm => "meetings.llm",
         ShellSetting.AudioInput => "audio.input",
         ShellSetting.AudioOutput => "audio.output",
