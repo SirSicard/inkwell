@@ -30,6 +30,14 @@ private struct FakeCalendar: CalendarAccess {
     func request(done: @escaping @MainActor @Sendable () -> Void) {}
 }
 
+/// What a model logged.
+private final class LoggedLines: @unchecked Sendable {
+    private let lock = NSLock()
+    private var all: [String] = []
+    var lines: [String] { lock.withLock { all } }
+    var log: ScreenLog { ScreenLog { [self] line in lock.withLock { all.append(line) } } }
+}
+
 private struct NoTitle: CallTitles {
     func titleNow(_ now: Date) -> String? { nil }
 }
@@ -39,18 +47,53 @@ private struct NoApps: AppDirectory {
     func app(bundleID: String) -> (name: String, icon: NSImage)? { nil }
 }
 
-/// Counts the waits a model schedules, and sleeps for real (shortened deadlines in the tests).
+/// The waits a model schedules, held until the test lets them end (`fire`); a cancelled one ends
+/// at once, throwing, as Task.sleep does. Nothing here sleeps for real.
 private final class Sleeps: @unchecked Sendable {
     private let lock = NSLock()
     private var count = 0
+    private var waiting: [Int: CheckedContinuation<Void, Error>] = [:]
+    private(set) var asked: [Duration] = []
     var scheduled: Int { lock.withLock { count } }
+    var pending: Int { lock.withLock { waiting.count } }
 
     var sleep: @Sendable (Duration) async throws -> Void {
         { [self] duration in
-            lock.withLock { count += 1 }
-            try await Task.sleep(for: duration)
+            let id = lock.withLock {
+                count += 1
+                asked.append(duration)
+                return count
+            }
+            try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { continuation in
+                    let cancelled = lock.withLock { () -> Bool in
+                        if Task.isCancelled { return true }
+                        waiting[id] = continuation
+                        return false
+                    }
+                    if cancelled { continuation.resume(throwing: CancellationError()) }
+                }
+            } onCancel: {
+                lock.withLock { waiting.removeValue(forKey: id) }?.resume(throwing: CancellationError())
+            }
         }
     }
+
+    /// Ends every wait still held, as their deadlines passing would.
+    func fire() {
+        let all = lock.withLock { () -> [CheckedContinuation<Void, Error>] in
+            let all = Array(waiting.values)
+            waiting = [:]
+            return all
+        }
+        all.forEach { $0.resume() }
+    }
+}
+
+/// Lets the main actor run what a wake or an answer queued.
+@MainActor
+private func settle() async {
+    for _ in 0..<5 { await Task.yield() }
 }
 
 private let zoom = "us.zoom.xos"
@@ -98,10 +141,7 @@ final class CallPolicyDropTests: XCTestCase {
 
         // Always for Zoom: from now on, and this call now (the core keeps it offered until started).
         screens.performDropAction(.always(app: zoom, name: "Zoom")) { _ in }
-        XCTAssertEqual(sent.commands.suffix(2), [
-            .meetingsCallsSet(app: zoom, policy: "always", replaceUnreadable: false, ref: "calls:1"),
-            .meetingStart(app: zoom, title: nil),
-        ])
+        XCTAssertEqual(sent.commands.last, .meetingsCallsSet(app: zoom, policy: "always", replaceUnreadable: false, ref: "calls:1"))
         // Never for Zoom: only the policy; the core withdraws the offer.
         sent.commands = []
         screens.performDropAction(.never(app: zoom, name: "Zoom")) { _ in }
@@ -161,7 +201,7 @@ final class CallPolicyDropTests: XCTestCase {
         let start = Date()
         let (store, ink, _) = models(sent, now: { start }, sleep: sleeps)
         let meetings = try XCTUnwrap(ink.meetings)
-        let first = [started(auto: true, deleteUntil: start.addingTimeInterval(0.3))]
+        let first = [started(auto: true, deleteUntil: start.addingTimeInterval(60))]
         store.apply(first)
         first.forEach(meetings.apply)
         var text = ink.dropText
@@ -175,16 +215,42 @@ final class CallPolicyDropTests: XCTestCase {
         store.apply([line])
         XCTAssertEqual(ink.dropText.detail, "Always is on for Zoom. Tell the others you are recording.")
 
-        try await Task.sleep(for: .milliseconds(700))
+        await settle()
+        XCTAssertEqual(sleeps.scheduled, 1, "one deadline, never a poll")
+        XCTAssertEqual(sleeps.asked, [.seconds(60)], "until the core's delete_until_unix_ms")
+        sleeps.fire()
+        await settle()
         text = ink.dropText
         XCTAssertEqual(text.actions, [.stop], "past the minute only Stop is left")
         XCTAssertEqual(text.detail, "can everyone hear me")
         XCTAssertEqual(text.title, "● Recording Zoom automatically", "still said as automatic")
-        XCTAssertEqual(sleeps.scheduled, 1, "one deadline, never a poll")
+        XCTAssertEqual(sleeps.scheduled, 1, "nothing woke again")
 
         // Stop from the Drop is meeting.stop.
         ink.meetings?.perform(.stop, permissions: PermissionsModel(send: sent.send, calendar: FakeCalendar()))
         XCTAssertEqual(sent.commands.last, .meetingStop)
+    }
+
+    /// A second meeting while the first's minute is pending: the first's wake is cancelled, and
+    /// Stop and delete follows the new one. A stop before the deadline cancels it too.
+    func testANewMeetingOrAStopCancelsThePendingWake() async throws {
+        let sent = Sent()
+        let sleeps = Sleeps()
+        let start = Date()
+        let (_, ink, _) = models(sent, now: { start }, sleep: sleeps)
+        let meetings = try XCTUnwrap(ink.meetings)
+        meetings.apply(started(auto: true, deleteUntil: start.addingTimeInterval(60), record: "r1"))
+        await settle()
+        meetings.apply(started(auto: true, deleteUntil: start.addingTimeInterval(60), record: "r2"))
+        await settle()
+        XCTAssertEqual(sleeps.scheduled, 2)
+        XCTAssertEqual(sleeps.pending, 1, "the first wake was cancelled")
+        XCTAssertFalse(meetings.canDiscard("r1"))
+        XCTAssertTrue(meetings.canDiscard("r2"))
+        meetings.apply(event(#"{"type":"meeting.stopped","record":"r2"}"#))
+        await settle()
+        XCTAssertFalse(meetings.canDiscard("r2"), "stopped: only the final pass is left")
+        XCTAssertEqual(sleeps.pending, 0, "its wake was cancelled")
     }
 
     /// A start the user made is shown as before: no Stop and delete, whatever the core allows.
@@ -231,6 +297,27 @@ final class CallPolicyDropTests: XCTestCase {
         XCTAssertNil(meetings.discarding)
     }
 
+    /// Notes typed in a meeting being stopped and deleted are never saved into it.
+    func testNotesAreNotSavedIntoAMeetingBeingDeleted() {
+        let sent = Sent()
+        let start = Date()
+        let screens = ScreenModels(send: sent.send, calendar: FakeCalendar(), apps: NoApps(), callTitles: NoTitle())
+        let first = started(auto: true, deleteUntil: start.addingTimeInterval(60))
+        screens.apply([first])
+        screens.live.notesEdited("a thought of my own", caretParagraph: 0)
+        screens.meetings.discard()
+        XCTAssertEqual(sent.commands.last, .meetingDiscard)
+        screens.apply([event(#"{"type":"meeting.stopped","record":"r1"}"#)])
+        screens.apply([event(#"{"type":"meeting.discarded","record":"r1","audio_left":false,"scrubbed":true}"#)])
+        XCTAssertFalse(sent.commands.contains { if case .noteAdd = $0 { true } else { false } }, "no note.add for a record being deleted")
+        // An ordinary stop still saves them.
+        sent.commands = []
+        screens.apply([started(auto: true, deleteUntil: start.addingTimeInterval(60), record: "r2")])
+        screens.live.notesEdited("kept", caretParagraph: 0)
+        screens.apply([event(#"{"type":"meeting.stopped","record":"r2"}"#)])
+        XCTAssertTrue(sent.commands.contains { if case .noteAdd = $0 { true } else { false } })
+    }
+
     /// Past the minute the core refuses it: said in the Drop, and only Stop is left.
     func testAStopAndDeleteRefusedAfterTheMinuteLeavesOnlyStop() {
         let sent = Sent()
@@ -247,6 +334,72 @@ final class CallPolicyDropTests: XCTestCase {
         XCTAssertEqual(ink.dropText.actions, [.stop])
         meetings.discard()
         XCTAssertEqual(sent.commands.filter { $0 == .meetingDiscard }.count, 1, "not offered, not sent")
+        // The transcript moving on takes the refusal's words away; the next offer never shows them.
+        let line = event(#"{"type":"meeting.final","record":"r1","channel":"far","start_ms":0,"end_ms":900,"text":"next item"}"#)
+        store.apply([line])
+        meetings.apply(line)
+        XCTAssertEqual(ink.dropText.detail, "next item")
+        meetings.discard()
+        let finished = event(#"{"type":"meeting.finished","record":"r1","revision":2}"#)
+        store.apply([finished, detected()])
+        meetings.apply(finished)
+        meetings.apply(detected())
+        XCTAssertEqual(ink.dropText.detail, DropText.consentLine)
+    }
+
+    /// Another refusal (the store failed) keeps the button for its minute; one that comes after
+    /// the meeting ended shows nowhere; a core that stopped while deleting leaves nothing pending.
+    func testOtherDiscardRefusalsKeepTheButtonAndLateOnesShowNowhere() {
+        let sent = Sent()
+        let start = Date()
+        let logged = LoggedLines()
+        let store = CoreStore()
+        let meetings = MeetingModel(send: sent.send, titles: NoTitle(), now: { start }, log: logged.log, sleep: Sleeps().sleep)
+        let ink = ShellInk(store: store, meetings: meetings)
+        let first = started(auto: true, deleteUntil: start.addingTimeInterval(60))
+        store.apply([first])
+        meetings.apply(first)
+        meetings.discard()
+        meetings.apply(event(#"{"type":"command.failed","command":"meeting.discard","id":"meeting.discard","message":"database is locked"}"#))
+        XCTAssertEqual(ink.dropText.detail, "Couldn't delete it: database is locked")
+        XCTAssertEqual(ink.dropText.actions, [.stop, .stopAndDelete], "pressed again, it may pass")
+        meetings.discard()
+        meetings.apply(event(#"{"type":"meeting.failed","record":"r1","message":"capture stopped"}"#))
+        XCTAssertNil(meetings.discarding)
+        meetings.apply(event(#"{"type":"command.failed","command":"meeting.discard","id":"meeting.discard","message":"the meeting had already stopped, or failed"}"#))
+        XCTAssertNil(meetings.failure(on: .drop), "its meeting had ended")
+        XCTAssertTrue(logged.lines.last?.contains("nothing shows it") == true)
+        // A core that stops while deleting.
+        let second = started(auto: true, deleteUntil: start.addingTimeInterval(60), record: "r2")
+        meetings.apply(second)
+        meetings.discard()
+        meetings.apply(event(#"{"type":"core.stopped"}"#))
+        XCTAssertNil(meetings.discarding)
+        XCTAssertFalse(meetings.canDiscard("r2"))
+    }
+
+    /// "Always for": the call is recorded once Always is saved; a save that failed records nothing
+    /// and says so on the offer, which stays; over a list the core can't read nothing is sent.
+    func testAlwaysForRecordsOnlyOnceItIsSaved() async {
+        let sent = Sent()
+        let (store, ink, screens) = models(sent)
+        store.apply([detected()])
+        screens.performDropAction(.always(app: zoom, name: "Zoom")) { _ in }
+        XCTAssertEqual(sent.commands, [.meetingsCallsSet(app: zoom, policy: "always", replaceUnreadable: false, ref: "calls:1")])
+        screens.calls.apply(callsEvent(#"{"app":"us.zoom.xos","app_name":"Zoom","policy":"always","chosen":true}"#, ref: "calls:1"))
+        XCTAssertEqual(sent.commands.last, .meetingStart(app: zoom, title: nil), "saved: this call is recorded")
+
+        sent.commands = []
+        screens.performDropAction(.always(app: zoom, name: "Zoom")) { _ in }
+        screens.calls.apply(event(#"{"type":"command.failed","command":"meetings.calls.set","id":"calls:2","message":"database is locked"}"#))
+        XCTAssertFalse(sent.commands.contains(.meetingStart(app: zoom, title: nil)), "not saved: nothing recorded")
+        XCTAssertEqual(ink.dropText.detail, "Couldn't save that: database is locked")
+
+        sent.commands = []
+        screens.calls.apply(callsEvent("", message: "the stored choices cannot be read"))
+        screens.performDropAction(.always(app: zoom, name: "Zoom")) { _ in }
+        XCTAssertTrue(sent.commands.isEmpty)
+        XCTAssertEqual(ink.dropText.detail, CallPolicyModel.unreadableFromDrop)
     }
 
     /// The far end going silent in an automatic call keeps its Stop and Stop and delete.

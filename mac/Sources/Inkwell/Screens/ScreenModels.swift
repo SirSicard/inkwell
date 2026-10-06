@@ -268,6 +268,7 @@ final class ScreenModels {
         live = LiveModel(send: send)
         meetings = MeetingModel(send: send, titles: callTitles)
         calls = CallPolicyModel(send: send, apps: apps)
+        live.discarding = { [meetings] record in meetings.discarding == record }
         onboarding = OnboardingModel(send: send, log: log)
         storage = StorageModel(dataDirectory: dataDirectory, modelsDirectory: modelsDirectory)
         dictation = DictationModel(send: send)
@@ -421,10 +422,10 @@ final class ScreenModels {
         case .showSpeechModels:
             show(.today)
         case .always(let app, _):
-            // The app is Always from now on, and this call is recorded now: an app offered and
-            // made Always stays offered until it is started (inkwell.h, meetings.calls.set).
-            calls.choose(.always, for: app, from: .drop)
-            if calls.dropFailure == nil { meetings.record(app: app) }
+            // The app is Always from now on, and this call is recorded once that is saved: an app
+            // offered and made Always stays offered until it is started (inkwell.h,
+            // meetings.calls.set). A save that failed records nothing and says so on the offer.
+            calls.choose(.always, for: app, from: .drop) { [meetings] in meetings.record(app: app) }
         case .never(let app, _):
             // The core withdraws the offer (meeting.detection_ended, dismissed).
             calls.choose(.never, for: app, from: .drop)

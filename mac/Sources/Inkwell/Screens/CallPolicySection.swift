@@ -18,13 +18,15 @@ struct CallPolicyRows: View {
             defaultRow
             appsRows
         }
+        // The buttons act on the choice the dialog was shown for, whatever the binding does first.
         .confirmationDialog(
             CallPolicyModel.startOverTitle,
-            isPresented: Binding(get: { calls.startingOver != nil }, set: { if !$0 { calls.cancelStartOver() } })
-        ) {
-            Button("Start over and save") { calls.confirmStartOver() }
+            isPresented: Binding(get: { calls.startingOver != nil }, set: { if !$0 { calls.cancelStartOver() } }),
+            presenting: calls.startingOver
+        ) { choice in
+            Button("Start over and save") { calls.confirmStartOver(choice) }
             Button("Cancel", role: .cancel) { calls.cancelStartOver() }
-        } message: {
+        } message: { _ in
             Text(CallPolicyModel.startOverDetail)
         }
     }
@@ -85,13 +87,14 @@ struct CallPolicyRows: View {
 
     @ViewBuilder
     private var appsRows: some View {
+        let rows = calls.rows
         if let unreadable = calls.unreadable {
             Text(CallPolicyModel.unreadableLine(unreadable))
                 .font(Typography.caption)
                 .foregroundStyle(Theme.alert)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        if calls.loaded && calls.rows.isEmpty {
+        if calls.loaded && rows.isEmpty {
             SettingColumns {
                 Text(CallPolicyModel.appsTitle)
             } controls: {
@@ -101,11 +104,11 @@ struct CallPolicyRows: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             .font(Typography.body)
-        } else if !calls.rows.isEmpty {
+        } else if !rows.isEmpty {
             Paper.Eyebrow(text: CallPolicyModel.appsTitle)
                 .padding(.top, 4)
                 .accessibilityAddTraits(.isHeader)
-            ForEach(calls.rows) { row in
+            ForEach(rows) { row in
                 CallAppRow(calls: calls, row: row)
             }
         }

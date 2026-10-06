@@ -105,7 +105,8 @@ final class MeetingModel {
     /// The meeting Stop and delete can still delete: one its app's Always started, until its
     /// delete_until_unix_ms. Cleared at that moment by one scheduled wake, never by polling.
     private(set) var deletable: String?
-    /// The meeting being stopped and deleted, until the core says it is gone.
+    /// The meeting being stopped and deleted, until the core says it is gone (or refuses). Live
+    /// reads it: notes typed in it are never saved into a record being deleted.
     private(set) var discarding: String?
     /// With Bluetooth output, record the headset's own mic.
     private(set) var headsetMic = false
@@ -257,10 +258,19 @@ final class MeetingModel {
         deletable = nil
     }
 
-    /// The meeting `record` ended, one way or another.
+    /// The meeting `record` ended, one way or another: its Drop buttons' failures go with it.
     private func ended(_ record: String) {
         if deletable == record { endDeleteWindow() }
         if discarding == record { discarding = nil }
+        clearMeetingFailure()
+    }
+
+    /// A Stop or Stop and delete failure said on the Drop: only while that meeting's Drop shows,
+    /// and only until its transcript moves on (it said why the buttons changed).
+    private func clearMeetingFailure() {
+        if let origin = failure?.origin, origin == .dropStop || origin == .discard {
+            failure = nil
+        }
     }
 
     func setHeadsetMic(_ on: Bool) {
@@ -285,6 +295,11 @@ final class MeetingModel {
         case .meetingStarted(let meeting):
             failure = nil
             started(meeting)
+        case .meetingDetected:
+            // A new offer is a new question: a meeting's button failure is not its.
+            clearMeetingFailure()
+        case .meetingFinal:
+            clearMeetingFailure()
         case .meetingStopped(let stopped):
             // Stopped: Stop and delete is no longer offered (a discard in flight goes on).
             if deletable == stopped.record { endDeleteWindow() }
@@ -300,9 +315,16 @@ final class MeetingModel {
             endDeleteWindow()
             discarding = nil
         case .commandFailed(let failed) where failed.command == "meeting.discard":
+            // The command names no meeting: a refusal is this shell's only while it waits for one
+            // (a meeting that ended meanwhile took its buttons with it).
+            guard discarding != nil else {
+                log.write("command.failed for a meeting.discard command; its meeting had ended, so nothing shows it")
+                break
+            }
             discarding = nil
-            // Refused for good (the minute is over, or it had stopped): only Stop is left.
-            endDeleteWindow()
+            // Past the minute only Stop is left; another refusal (a store that failed) may pass, so
+            // the button stays for its minute to be pressed again.
+            if failed.code == .deleteWindowOver { endDeleteWindow() }
             failure = Failure(origin: .discard, message: Self.discardFailure(failed))
             log.write("command.failed for a meeting.discard command; shown where it was asked")
         case .commandFailed(let failed) where ["meeting.start", "meeting.stop", "meeting.dismiss"].contains(failed.command):

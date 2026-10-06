@@ -77,13 +77,26 @@ final class CallPolicyModel {
     /// The last failure asked for from the Drop.
     private(set) var dropFailure: String?
     /// A choice that would start an unreadable list over, waiting for the user to confirm it.
-    private(set) var startingOver: (app: String, choice: CallChoice)?
+    private(set) var startingOver: StartOver?
+
+    /// A choice waiting for the user's yes to start the list over.
+    struct StartOver: Equatable {
+        let app: String
+        let choice: CallChoice
+    }
 
     @ObservationIgnored private let send: SendCommand
     @ObservationIgnored private let directory: any AppDirectory
     @ObservationIgnored private var nextRef = 0
-    /// Each set in flight: its app, what was chosen, and where.
-    @ObservationIgnored private var inFlight: [String: (app: String, choice: CallChoice, origin: Origin)] = [:]
+    /// Each set in flight: its app, what was chosen, where, and what follows once it is saved.
+    @ObservationIgnored private var inFlight: [String: InFlight] = [:]
+
+    private struct InFlight {
+        let app: String
+        let choice: CallChoice
+        let origin: Origin
+        let saved: (@MainActor () -> Void)?
+    }
     /// The set that starts an unreadable list over, until its answer.
     @ObservationIgnored private var startOverRef: String?
     /// Choices in flight, by app: shown as made until the core answers.
@@ -122,35 +135,40 @@ final class CallPolicyModel {
         return apps.first { $0.app == app }?.policy
     }
 
-    /// Chooses for one app. Over a list the core cannot read, it waits for `confirmStartOver`.
-    func choose(_ choice: CallChoice, for app: String, from origin: Origin) {
+    /// Chooses for one app; `saved` runs once the core has saved it (never when it failed). Over
+    /// a list the core cannot read, it waits for `confirmStartOver`.
+    func choose(
+        _ choice: CallChoice, for app: String, from origin: Origin, saved: (@MainActor () -> Void)? = nil
+    ) {
         clearFailure(origin)
         if unreadable != nil {
             // Starting the list over asks first, in Settings; the Drop has no room to ask.
             switch origin {
-            case .settings: startingOver = (app, choice)
+            case .settings: startingOver = StartOver(app: app, choice: choice)
             case .drop: dropFailure = Self.unreadableFromDrop
             }
             return
         }
-        set(choice, for: app, from: origin, replaceUnreadable: false)
+        set(choice, for: app, from: origin, replaceUnreadable: false, saved: saved)
     }
 
-    /// The user agreed to start the unreadable list over with the choice they made.
-    func confirmStartOver() {
-        guard let (app, choice) = startingOver else { return }
+    /// The user agreed to start the unreadable list over with `choice`, the one the dialog showed.
+    func confirmStartOver(_ choice: StartOver) {
         startingOver = nil
-        set(choice, for: app, from: .settings, replaceUnreadable: true)
+        set(choice.choice, for: choice.app, from: .settings, replaceUnreadable: true, saved: nil)
     }
 
     func cancelStartOver() {
         startingOver = nil
     }
 
-    private func set(_ choice: CallChoice, for app: String, from origin: Origin, replaceUnreadable: Bool) {
+    private func set(
+        _ choice: CallChoice, for app: String, from origin: Origin, replaceUnreadable: Bool,
+        saved: (@MainActor () -> Void)?
+    ) {
         let ref = ref()
         if replaceUnreadable { startOverRef = ref }
-        inFlight[ref] = (app, choice, origin)
+        inFlight[ref] = InFlight(app: app, choice: choice, origin: origin, saved: saved)
         pending[app] = choice
         send(.meetingsCallsSet(app: app, policy: choice.rawValue, replaceUnreadable: replaceUnreadable, ref: ref))
     }
@@ -244,8 +262,10 @@ final class CallPolicyModel {
             apps = calls.apps
             loaded = true
             let message = calls.message.flatMap { $0.isEmpty ? nil : $0 }
+            var saved: (@MainActor () -> Void)?
             if let ref = calls.ref, let done = inFlight.removeValue(forKey: ref) {
                 if pending[done.app] == done.choice { pending[done.app] = nil }
+                saved = done.saved
             }
             if let ref = calls.ref, ref == startOverRef {
                 // The list was started over and is readable again; under a default of Always the
@@ -256,9 +276,19 @@ final class CallPolicyModel {
             } else {
                 unreadable = message
             }
-        case .meetingDetected, .meetingDetectionEnded, .meetingStarted:
-            // A new offer, or none: a failure said for the last one is over.
+            // After the state is the answer's (an Always saved from the Drop records the call).
+            saved?()
+        case .meetingDetected, .meetingDetectionEnded:
+            // A new offer, or none: a failure said for the last one is over. (Not at a meeting's
+            // start: an Always that failed to save is said on the offer, which stays.)
             dropFailure = nil
+        case .coreStopped:
+            // A core that starts again answers none of the old one's commands: nothing is in
+            // flight, and what is stored is read again at core.ready.
+            inFlight = [:]
+            pending = [:]
+            startOverRef = nil
+            startingOver = nil
         case .settingValue(let value) where value.key == ShellSetting.meetingsCallsDefault.rawValue:
             defaultPolicy = value.value.flatMap(CallPolicy.init(rawValue:)) ?? .ask
         case .commandFailed(let failed) where failed.command == "meetings.calls.set":

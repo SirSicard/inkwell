@@ -117,7 +117,7 @@ final class CallPolicySettingsTests: XCTestCase {
         calls.cancelStartOver()
         XCTAssertNil(calls.startingOver)
         calls.choose(.never, for: zoom, from: .settings)
-        calls.confirmStartOver()
+        calls.confirmStartOver(try! XCTUnwrap(calls.startingOver))
         XCTAssertEqual(sent.commands, [.meetingsCallsSet(app: zoom, policy: "never", replaceUnreadable: true, ref: "calls:1")])
         calls.apply(callsEvent(#"{"app":"us.zoom.xos","policy":"never","chosen":true}"#, default: "ask",
                           message: "the stored choices could not be read and were started over; the default is Ask now", ref: "calls:1"))
@@ -127,6 +127,21 @@ final class CallPolicySettingsTests: XCTestCase {
         calls.apply(callsEvent("", message: "unreadable again"))
         calls.choose(.always, for: zoom, from: .drop)
         XCTAssertEqual(calls.dropFailure, CallPolicyModel.unreadableFromDrop)
+    }
+
+    /// A core that stopped answers nothing in flight: the rows show what is stored again.
+    func testACoreThatStoppedLeavesNoChoiceInFlight() {
+        let sent = Sent()
+        let calls = CallPolicyModel(send: sent.send, apps: NoApps())
+        calls.apply(callsEvent(list))
+        var saved = false
+        calls.choose(.never, for: zoom, from: .settings) { saved = true }
+        XCTAssertEqual(calls.rows[0].choice, .never)
+        calls.apply(event(#"{"type":"core.stopped"}"#))
+        XCTAssertEqual(calls.rows[0].choice, .always, "the stored choice")
+        // A late answer with the old ref runs nothing.
+        calls.apply(callsEvent(list, ref: "calls:1"))
+        XCTAssertFalse(saved)
     }
 
     func testTheLastCallCaption() {

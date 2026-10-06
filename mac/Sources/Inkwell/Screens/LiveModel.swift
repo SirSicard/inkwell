@@ -358,6 +358,8 @@ final class LiveModel {
     private(set) var notesText = ""
 
     @ObservationIgnored private var draft: LiveNotesDraft?
+    /// Whether a record is being stopped and deleted (MeetingModel's): its notes are never saved.
+    @ObservationIgnored var discarding: (String) -> Bool = { _ in false }
     @ObservationIgnored private var nextAsk = 0
     @ObservationIgnored private let send: SendCommand
     @ObservationIgnored private let now: () -> Date
@@ -441,8 +443,13 @@ final class LiveModel {
         case .commandFailed(let failed) where failed.command == "meeting.ask":
             answered(ref: failed.id, .failed(failed.message))
         case .meetingStopped(let stopped) where stopped.record == record:
-            // Capture ended: whatever is typed is saved now.
-            notesLeft()
+            // Capture ended: whatever is typed is saved now, unless the meeting is being deleted
+            // (Stop and delete): its words never go into a record that is going.
+            if discarding(stopped.record) {
+                draft = nil
+            } else {
+                notesLeft()
+            }
         case .noteAdded(let added) where added.record == record:
             guard let ref = added.ref else { return }
             update { $0.added(ref: ref, note: added.note) }
