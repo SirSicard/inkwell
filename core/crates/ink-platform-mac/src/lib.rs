@@ -15,6 +15,7 @@
 //! | [`HotkeySource`](ink_core::HotkeySource) | `MacHotkeySource` | `hotkey` |
 //! | [`TextInserter`](ink_core::TextInserter) | `MacTextInserter` | `insert` |
 //! | [`FocusReader`](ink_core::FocusReader) | `MacFocusReader` | `focus` |
+//! | [`SystemInfo`](ink_core::SystemInfo) | `MacSystemInfo` | `system` |
 //!
 //! Permissions: the hotkey tap, insertion and selected-text reads all need Accessibility, and
 //! nothing in this crate ever asks for it. Every check is the non-prompting kind; the prompt
@@ -43,6 +44,7 @@ pub mod focus;
 pub mod hotkey;
 pub mod insert;
 pub mod permissions;
+pub mod system;
 
 #[cfg(target_os = "macos")]
 pub use capture::{MacCapture, MacFarEndSource, MacMicSource};
@@ -58,6 +60,8 @@ pub use hotkey::MacHotkeySource;
 pub use insert::MacTextInserter;
 #[cfg(target_os = "macos")]
 pub use permissions::MacPermissionProbe;
+#[cfg(target_os = "macos")]
+pub use system::MacSystemInfo;
 
 /// **Worker.** The focused text element's length in characters, when it reports one; never its
 /// text. Needs Accessibility (without it, `None`). For hand-run timing (`examples/dictation_timing.rs`):
@@ -77,7 +81,7 @@ mod tests {
     ];
 
     /// Every source file in the crate, read at compile time.
-    const SOURCES: [(&str, &str); 24] = [
+    const SOURCES: [(&str, &str); 25] = [
         ("lib.rs", include_str!("lib.rs")),
         ("ax.rs", include_str!("ax.rs")),
         ("clock.rs", include_str!("clock.rs")),
@@ -100,6 +104,7 @@ mod tests {
         ("detect.rs", include_str!("detect.rs")),
         ("permissions.rs", include_str!("permissions.rs")),
         ("permissions/tone.rs", include_str!("permissions/tone.rs")),
+        ("system.rs", include_str!("system.rs")),
         (
             "capture_check.rs",
             include_str!("../examples/capture_check.rs"),

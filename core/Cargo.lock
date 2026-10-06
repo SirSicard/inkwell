@@ -758,6 +758,7 @@ dependencies = [
  "dispatch2",
  "ink-audio",
  "ink-core",
+ "libc",
  "objc2",
  "objc2-app-kit",
  "objc2-core-audio",
