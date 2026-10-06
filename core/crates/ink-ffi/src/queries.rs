@@ -245,6 +245,16 @@ pub enum Query {
     },
     /// `models.list`: the catalogue's models for this OS.
     ModelsList,
+    /// `model.cancel`: stops a model's download, running or queued ([`crate::models::cancel`]).
+    ModelCancel {
+        /// The model being downloaded (`model.update`'s `next`).
+        model: String,
+    },
+    /// `model.remove`: deletes a model's files ([`crate::models::remove`]).
+    ModelRemove {
+        /// The model.
+        model: String,
+    },
     /// `engine.route`: what serves a job now. A router read, so it is here, where a model
     /// download on the command thread never delays it.
     EngineRoute(ink_core::Job),
@@ -318,6 +328,7 @@ fn fields(name: &str) -> Option<&'static [&'static str]> {
         "note.delete" => &["note"],
         "speaker.name" => &["record", "speaker", "name"],
         "record.delete" => &["record"],
+        "model.cancel" | "model.remove" => &["model"],
         "setting.get" => &["key"],
         "setting.set" => &["key", "value"],
         "hotkey.check" => &["binding"],
@@ -453,6 +464,12 @@ fn parse_known(name: &str, allowed: &[&str], v: &Value) -> Result<Query, String>
             record: text("record")?,
         },
         "models.list" => Query::ModelsList,
+        "model.cancel" => Query::ModelCancel {
+            model: text("model")?,
+        },
+        "model.remove" => Query::ModelRemove {
+            model: text("model")?,
+        },
         "engine.route" => Query::EngineRoute(
             events::parse_job(&text("job")?).ok_or_else(|| format!("{name}: unknown job"))?,
         ),
@@ -903,6 +920,17 @@ impl Ctx<'_> {
                 }
             }
             Query::ModelsList => emit(self.catalogue(id.as_deref())),
+            Query::ModelCancel { model } => {
+                if let Err((message, code)) = crate::models::cancel(self.shared, &model) {
+                    fail_coded(message, Some(code));
+                }
+            }
+            Query::ModelRemove { model } => {
+                match crate::models::remove(self.shared, &model, id.as_deref()) {
+                    Ok(listed) => emit(listed),
+                    Err((message, code)) => fail_coded(message, code),
+                }
+            }
             Query::EngineRoute(job) => emit(routed(self.shared, job)),
             Query::SettingGet { key } => match if crate::calls::is_calls_setting(&key) {
                 crate::calls::setting_value(store, &key)

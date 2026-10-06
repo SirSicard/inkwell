@@ -351,7 +351,7 @@
     },
     "FailureCode": {
       "type": "string",
-      "description": "A command.failed a shell acts on. list_unreadable: a snippets.save, voice_commands.save, meetings.calls.set, modes.save or modes.delete refused because the stored list cannot be read (send a save again with replace_unreadable to start over). meeting_recording: an audio.test refused because a meeting records: the mic test waits until it ends. delete_window_over: a meeting.discard after the meeting's first minute: only Stop is left, and the record can be deleted from the library once it is finished. For modes.save and modes.delete: name_blank (a mode needs a name), name_taken (another mode's name sounds the same: case and spacing aside), name_is_style (formal, casual and relaxed are the styles' names in voice commands), too_long (a name over 64 characters, polish instructions over 2,000, more than 64 apps in a mode or an app identity over 256 characters, or more than 50 modes; a mode the 0.2 import brought with more than 64 apps saves a change to its apps only once they are 64 or fewer, so the editor says \"Shorten to 64 apps or fewer.\"), default_mode (the default mode can't be deleted or given apps), app_taken (an app the mode is given is another mode's: send the save again with take_apps to move it), mode_not_found (no mode has that id) model_unknown (no language model the core holds has that id: modes.listed lists them), model_name_invalid (a polish_model_name that is over 128 characters or holds a control character, or one given for a model that is not a provider's, or without a model), destination_changed (a polish_model_confirm whose model sends somewhere else now than its polish_model_confirm_to, the destination the user agreed to: list the modes again and ask again; nothing was saved) and app_invalid (an app identity with a control character, of one character, or with no letter: as a substring of the frontmost app's identity it would match nearly every app).",
+      "description": "A command.failed a shell acts on. list_unreadable: a snippets.save, voice_commands.save, meetings.calls.set, modes.save or modes.delete refused because the stored list cannot be read (send a save again with replace_unreadable to start over). meeting_recording: an audio.test refused because a meeting records: the mic test waits until it ends. delete_window_over: a meeting.discard after the meeting's first minute: only Stop is left, and the record can be deleted from the library once it is finished. For modes.save and modes.delete: name_blank (a mode needs a name), name_taken (another mode's name sounds the same: case and spacing aside), name_is_style (formal, casual and relaxed are the styles' names in voice commands), too_long (a name over 64 characters, polish instructions over 2,000, more than 64 apps in a mode or an app identity over 256 characters, or more than 50 modes; a mode the 0.2 import brought with more than 64 apps saves a change to its apps only once they are 64 or fewer, so the editor says \"Shorten to 64 apps or fewer.\"), default_mode (the default mode can't be deleted or given apps), app_taken (an app the mode is given is another mode's: send the save again with take_apps to move it), mode_not_found (no mode has that id) model_unknown (no language model the core holds has that id: modes.listed lists them), model_name_invalid (a polish_model_name that is over 128 characters or holds a control character, or one given for a model that is not a provider's, or without a model), destination_changed (a polish_model_confirm whose model sends somewhere else now than its polish_model_confirm_to, the destination the user agreed to: list the modes again and ask again; nothing was saved) and app_invalid (an app identity with a control character, of one character, or with no letter: as a substring of the frontmost app's identity it would match nearly every app). For the models: not_enough_space (a model.update refused before anything is fetched: the volume models go on has less free than the download still needs plus a 1 GiB margin; needed_bytes and free_bytes say how much, and nothing on disk changed), model_in_use (a model.remove refused while a job, a call or an update holds the model: nothing was deleted; try again once it ends) and not_downloading (a model.cancel naming a model no download is running or queued for).",
       "enum": [
         "list_unreadable",
         "meeting_recording",
@@ -366,7 +366,10 @@
         "model_unknown",
         "model_name_invalid",
         "destination_changed",
-        "app_invalid"
+        "app_invalid",
+        "not_enough_space",
+        "model_in_use",
+        "not_downloading"
       ]
     },
     "Refusal": {
@@ -672,6 +675,16 @@
         "code": {
           "$ref": "#/$defs/FailureCode",
           "description": "Which failure, for the few a shell acts on; absent for the rest. Match on this, never on the message."
+        },
+        "needed_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "For not_enough_space: the bytes that must be free, the download's remaining bytes plus the 1 GiB margin."
+        },
+        "free_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "For not_enough_space: the bytes free to this user on the volume models go on."
         }
       },
       "required": [
@@ -895,7 +908,7 @@
     },
     "ModelUpdateFinished": {
       "type": "object",
-      "description": "A model update ended, and its hold is released.",
+      "description": "A model update ended, and its hold is released. A model.cancel of an update still queued answers with this at once, without a model.update_started before it.",
       "properties": {
         "type": {
           "const": "model.update_finished"
@@ -919,6 +932,10 @@
         "message": {
           "type": "string",
           "description": "Why it failed, when it did."
+        },
+        "cancelled": {
+          "type": "boolean",
+          "description": "Whether model.cancel stopped it. A cancelled download keeps its part files, so the next model.update resumes it. Always sent."
         }
       },
       "required": [

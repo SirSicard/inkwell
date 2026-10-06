@@ -924,12 +924,27 @@ public struct CommandFailed: Codable, Sendable, Equatable {
     public let code: FailureCode?
     /// The command's "cmd".
     public let command: String
+    /// For not_enough_space: the bytes free to this user on the volume models go on.
+    public let freeBytes: Int64?
     /// The command's "id", when it had one.
     public let id: String?
     /// Why. Names what failed, never what was said.
     public let message: String
+    /// For not_enough_space: the bytes that must be free, the download's remaining bytes plus
+    /// the 1 GiB margin.
+    public let neededBytes: Int64?
     /// Always `command.failed`.
     public let type: String
+
+    private enum CodingKeys: String, CodingKey {
+        case code
+        case command
+        case freeBytes = "free_bytes"
+        case id
+        case message
+        case neededBytes = "needed_bytes"
+        case type
+    }
 }
 
 /// A commitment: something promised in a record.
@@ -1615,7 +1630,12 @@ public enum FailedStage: String, Codable, Sendable, Equatable, CaseIterable {
 /// polish_model_confirm_to, the destination the user agreed to: list the modes again and ask
 /// again; nothing was saved) and app_invalid (an app identity with a control character, of one
 /// character, or with no letter: as a substring of the frontmost app's identity it would match
-/// nearly every app).
+/// nearly every app). For the models: not_enough_space (a model.update refused before anything
+/// is fetched: the volume models go on has less free than the download still needs plus a 1 GiB
+/// margin; needed_bytes and free_bytes say how much, and nothing on disk changed), model_in_use
+/// (a model.remove refused while a job, a call or an update holds the model: nothing was
+/// deleted; try again once it ends) and not_downloading (a model.cancel naming a model no
+/// download is running or queued for).
 public enum FailureCode: String, Codable, Sendable, Equatable, CaseIterable {
     case listUnreadable = "list_unreadable"
     case meetingRecording = "meeting_recording"
@@ -1631,6 +1651,9 @@ public enum FailureCode: String, Codable, Sendable, Equatable, CaseIterable {
     case modelNameInvalid = "model_name_invalid"
     case destinationChanged = "destination_changed"
     case appInvalid = "app_invalid"
+    case notEnoughSpace = "not_enough_space"
+    case modelInUse = "model_in_use"
+    case notDownloading = "not_downloading"
 }
 
 /// What a meeting records as the other side: the sound of its app alone (a call recorded from
@@ -2966,8 +2989,12 @@ public struct ModelRefused: Codable, Sendable, Equatable {
     public let type: String
 }
 
-/// A model update ended, and its hold is released.
+/// A model update ended, and its hold is released. A model.cancel of an update still queued
+/// answers with this at once, without a model.update_started before it.
 public struct ModelUpdateFinished: Codable, Sendable, Equatable {
+    /// Whether model.cancel stopped it. A cancelled download keeps its part files, so the next
+    /// model.update resumes it. Always sent.
+    public let cancelled: Bool?
     /// The model that was to be replaced.
     public let id: String
     /// Why it failed, when it did.
@@ -2982,6 +3009,7 @@ public struct ModelUpdateFinished: Codable, Sendable, Equatable {
     public let type: String
 
     private enum CodingKeys: String, CodingKey {
+        case cancelled
         case id
         case message
         case next

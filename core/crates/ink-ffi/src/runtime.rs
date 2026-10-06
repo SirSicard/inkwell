@@ -483,6 +483,8 @@ pub struct Shared {
     /// The core's own language model on this machine: its residency and its thread's mailbox
     /// ([`local`](crate::local)).
     pub local: Arc<LocalLlms>,
+    /// The model downloads queued or running, for `model.cancel` ([`models`](crate::models)).
+    pub installs: crate::models::Installs,
     /// Ids of the engines the shell registered, of every kind: one id space.
     externals: Mutex<Vec<String>>,
     /// The ink's bands writer, lent by the C ABI; the pump publishes through it.
@@ -560,6 +562,8 @@ struct Envelope {
     name: String,
     id: Option<String>,
     command: Command,
+    /// A `model.update`'s download, registered as it is queued so `model.cancel` reaches it.
+    install: Option<Arc<crate::models::Install>>,
 }
 
 /// `v` as a JSON object, or why not.
@@ -639,7 +643,12 @@ fn parse_command(json: &str) -> Result<Envelope, String> {
         },
         other => return Err(format!("unknown command \"{other}\"")),
     };
-    Ok(Envelope { name, id, command })
+    Ok(Envelope {
+        name,
+        id,
+        command,
+        install: None,
+    })
 }
 
 /// The shell's platform pieces for dictation (S2.7 passes the Mac ones).
@@ -715,6 +724,7 @@ impl Core {
             models: parts.models,
             system: parts.local.system,
             local,
+            installs: crate::models::Installs::default(),
             router,
             residency: Residency::new(parts.loader, parts.clock.clone()),
             store: parts.store,
@@ -833,10 +843,17 @@ impl Core {
             }
             None => {}
         }
-        let envelope = parse_command(json)?;
-        self.commands
-            .send(envelope)
-            .map_err(|_| "the command thread has stopped".to_owned())
+        let mut envelope = parse_command(json)?;
+        if let Command::ModelUpdate { id, next } = &envelope.command {
+            envelope.install = Some(self.shared.installs.queue(id, next));
+        }
+        let install = envelope.install.clone();
+        self.commands.send(envelope).map_err(|_| {
+            if let Some(install) = &install {
+                self.shared.installs.done(install);
+            }
+            "the command thread has stopped".to_owned()
+        })
     }
 
     /// Registers a shell engine: offline and streaming engines with the router, language models
@@ -1013,6 +1030,8 @@ impl Core {
             sound,
         } = self;
         shared.shutdown.cancel();
+        // Each download has its own cancel (model.cancel's): every one queued or running stops.
+        shared.installs.cancel_all();
         drop(commands);
         if command_thread.join().is_err() {
             log::error!("the command thread panicked");
@@ -1232,7 +1251,12 @@ fn guarded(shared: &Arc<Shared>, runs: &Mutex<Runs>, envelope: Envelope) {
 }
 
 fn run_command(shared: &Arc<Shared>, runs: &Mutex<Runs>, envelope: Envelope) {
-    let Envelope { name, id, command } = envelope;
+    let Envelope {
+        name,
+        id,
+        command,
+        install,
+    } = envelope;
     let fail = |message: String| {
         log::warn!("command {name} failed: {message}");
         shared
@@ -1253,7 +1277,10 @@ fn run_command(shared: &Arc<Shared>, runs: &Mutex<Runs>, envelope: Envelope) {
             }
         }
         Command::ModelWarm { job } => warm(shared, job),
-        Command::ModelUpdate { id: current, next } => update(shared, &current, &next, &fail),
+        Command::ModelUpdate { id: current, next } => {
+            let install = install.unwrap_or_else(|| shared.installs.queue(&current, &next));
+            update(shared, &current, &next, &install, id.as_deref(), &fail);
+        }
         Command::EngineUnregister { id: engine } => {
             let known = {
                 let mut ids = lock(&shared.externals);
@@ -1316,12 +1343,54 @@ fn warm(shared: &Shared, job: Job) {
     }
 }
 
-fn update(shared: &Shared, current: &str, next: &str, fail: &dyn Fn(String)) {
+/// Unregisters a download from [`Shared::installs`] when its update returns, however it returns.
+struct Ended<'a> {
+    shared: &'a Shared,
+    install: &'a Arc<crate::models::Install>,
+}
+
+impl Drop for Ended<'_> {
+    fn drop(&mut self) {
+        self.shared.installs.done(self.install);
+    }
+}
+
+fn update(
+    shared: &Shared,
+    current: &str,
+    next: &str,
+    install: &Arc<crate::models::Install>,
+    reference: Option<&str>,
+    fail: &dyn Fn(String),
+) {
+    let _ended = Ended { shared, install };
+    if !install.start() {
+        // A model.cancel ended it while it waited, and said so then.
+        return;
+    }
     let (Some(current_row), Some(next_row)) =
         (shared.registry.get(current), shared.registry.get(next))
     else {
         return fail(format!("{current} and {next} must both be registry models"));
     };
+    // Before anything is held or fetched: a download that cannot fit changes nothing.
+    if let Err(space) = crate::models::check_space(shared, next_row) {
+        let message = format!(
+            "{next} needs {} bytes free and {} are",
+            space.needed, space.free
+        );
+        log::warn!("command model.update failed: {message}");
+        let mut failed = events::command_failed_coded(
+            "model.update",
+            reference,
+            &message,
+            Some(crate::models::NOT_ENOUGH_SPACE),
+        );
+        failed["needed_bytes"] = space.needed.into();
+        failed["free_bytes"] = space.free.into();
+        shared.events.emit(failed);
+        return;
+    }
     let ids: Vec<&str> = if current == next {
         vec![current]
     } else {
@@ -1354,7 +1423,7 @@ fn update(shared: &Shared, current: &str, next: &str, fail: &dyn Fn(String)) {
             shared.installer.as_ref(),
             current_row,
             next_row,
-            &shared.shutdown,
+            &install.token,
             update_progress(shared, current, next),
         ),
     };
@@ -1372,6 +1441,15 @@ fn update(shared: &Shared, current: &str, next: &str, fail: &dyn Fn(String)) {
         Ok(()) => (true, false, None),
         Err(e) => (false, e.no_model_warm(), Some(Value::from(e.to_string()))),
     };
+    // Stopped by model.cancel, not by the core shutting down.
+    let cancelled = matches!(
+        &result,
+        Err(ink_pipeline::update::UpdateError::Install {
+            error: ink_engines::DownloadError::Cancelled,
+            ..
+        })
+    ) && install.token.is_cancelled()
+        && !shared.shutdown.is_cancelled();
     if let Err(e) = &result {
         log::warn!("model update {current} -> {next} failed: {e}");
     }
@@ -1381,6 +1459,7 @@ fn update(shared: &Shared, current: &str, next: &str, fail: &dyn Fn(String)) {
             ("ok", Some(ok.into())),
             ("no_model_warm", Some(no_model_warm.into())),
             ("message", message),
+            ("cancelled", Some(cancelled.into())),
         ],
     ));
 }

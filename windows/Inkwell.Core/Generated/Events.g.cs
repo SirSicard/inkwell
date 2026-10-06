@@ -1163,6 +1163,12 @@ public sealed record CommandFailed : InkEvent
     public required string Command { get; init; }
 
     /// <summary>
+    /// For not_enough_space: the bytes free to this user on the volume models go on.
+    /// </summary>
+    [JsonPropertyName("free_bytes")]
+    public long? FreeBytes { get; init; }
+
+    /// <summary>
     /// The command's "id", when it had one.
     /// </summary>
     [JsonPropertyName("id")]
@@ -1173,6 +1179,13 @@ public sealed record CommandFailed : InkEvent
     /// </summary>
     [JsonPropertyName("message")]
     public required string Message { get; init; }
+
+    /// <summary>
+    /// For not_enough_space: the bytes that must be free, the download's remaining bytes plus
+    /// the 1 GiB margin.
+    /// </summary>
+    [JsonPropertyName("needed_bytes")]
+    public long? NeededBytes { get; init; }
 }
 
 /// <summary>
@@ -2288,7 +2301,12 @@ public enum FailedStage
 /// polish_model_confirm_to, the destination the user agreed to: list the modes again and ask
 /// again; nothing was saved) and app_invalid (an app identity with a control character, of one
 /// character, or with no letter: as a substring of the frontmost app's identity it would match
-/// nearly every app).
+/// nearly every app). For the models: not_enough_space (a model.update refused before anything
+/// is fetched: the volume models go on has less free than the download still needs plus a 1 GiB
+/// margin; needed_bytes and free_bytes say how much, and nothing on disk changed), model_in_use
+/// (a model.remove refused while a job, a call or an update holds the model: nothing was
+/// deleted; try again once it ends) and not_downloading (a model.cancel naming a model no
+/// download is running or queued for).
 /// </summary>
 [JsonConverter(typeof(StrictEnumConverter<FailureCode>))]
 public enum FailureCode
@@ -2321,6 +2339,12 @@ public enum FailureCode
     DestinationChanged,
     [JsonStringEnumMemberName("app_invalid")]
     AppInvalid,
+    [JsonStringEnumMemberName("not_enough_space")]
+    NotEnoughSpace,
+    [JsonStringEnumMemberName("model_in_use")]
+    ModelInUse,
+    [JsonStringEnumMemberName("not_downloading")]
+    NotDownloading,
 }
 
 /// <summary>
@@ -4561,10 +4585,18 @@ public sealed record ModelRefused : InkEvent
 }
 
 /// <summary>
-/// A model update ended, and its hold is released.
+/// A model update ended, and its hold is released. A model.cancel of an update still queued
+/// answers with this at once, without a model.update_started before it.
 /// </summary>
 public sealed record ModelUpdateFinished : InkEvent
 {
+    /// <summary>
+    /// Whether model.cancel stopped it. A cancelled download keeps its part files, so the next
+    /// model.update resumes it. Always sent.
+    /// </summary>
+    [JsonPropertyName("cancelled")]
+    public bool? Cancelled { get; init; }
+
     /// <summary>
     /// The model that was to be replaced.
     /// </summary>
