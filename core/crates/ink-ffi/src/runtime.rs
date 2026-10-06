@@ -1341,7 +1341,9 @@ fn warm(shared: &Shared, job: Job) {
     }
 }
 
-/// Unregisters a download from [`Shared::installs`] when its update returns, however it returns.
+/// Unregisters a download from [`Shared::installs`] when its update returns, however it returns
+/// (a panic included). Each way out unregisters it before it says how it ended, so a model.cancel
+/// either reaches it or is told there is no download to cancel.
 struct Ended<'a> {
     shared: &'a Shared,
     install: &'a Arc<crate::models::Install>,
@@ -1369,6 +1371,7 @@ fn update(
     let (Some(current_row), Some(next_row)) =
         (shared.registry.get(current), shared.registry.get(next))
     else {
+        shared.installs.done(install);
         return fail(format!("{current} and {next} must both be registry models"));
     };
     // Before anything is held or fetched: a download that cannot fit changes nothing.
@@ -1386,6 +1389,7 @@ fn update(
         );
         failed["needed_bytes"] = space.needed.into();
         failed["free_bytes"] = space.free.into();
+        shared.installs.done(install);
         shared.events.emit(failed);
         return;
     }
@@ -1397,7 +1401,10 @@ fn update(
     // Taken before anything is unloaded, and held until the new model is installed and warm.
     let hold = match shared.gate.hold(&ids) {
         Ok(hold) => hold,
-        Err(refused) => return fail(refused.to_string()),
+        Err(refused) => {
+            shared.installs.done(install);
+            return fail(refused.to_string());
+        }
     };
     let ids_event = |ty: &str, extra: &[(&str, Option<Value>)]| {
         let mut fields = vec![("id", Some(current.into())), ("next", Some(next.into()))];
@@ -1451,6 +1458,8 @@ fn update(
     if let Err(e) = &result {
         log::warn!("model update {current} -> {next} failed: {e}");
     }
+    // Ended before it is said: a model.cancel from now on finds no download to cancel.
+    shared.installs.done(install);
     shared.events.emit(ids_event(
         "model.update_finished",
         &[

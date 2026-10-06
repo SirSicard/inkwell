@@ -204,6 +204,9 @@ fn a_cancel_stops_a_running_download_at_once_and_the_next_one_resumes_it() {
         .expect("installed");
     assert_eq!(again["cancelled"], false);
     assert!(rig.models.is_installed(&row));
+    // Ended once it has said so: a cancel now has nothing to stop.
+    let late = rig.ask(json!({"cmd": "model.cancel", "model": "test-big"}), "x3");
+    assert_eq!(late["code"], "not_downloading", "{late}");
     let offsets = rig.served.offsets.lock().unwrap().clone();
     assert_eq!(
         offsets.last(),
@@ -239,6 +242,9 @@ fn a_cancel_of_a_queued_download_ends_it_before_it_starts() {
         1,
         "the running one goes on"
     );
+    // Cancelled once, it is no download to cancel again (it still waits behind the first).
+    let again = rig.ask(json!({"cmd": "model.cancel", "model": "test-big-2"}), "x2");
+    assert_eq!(again["code"], "not_downloading", "{again}");
 
     rig.send(json!({"cmd": "model.cancel", "model": "test-big"}));
     assert_eq!(rig.finished("test-big")["cancelled"], true);

@@ -97,7 +97,12 @@ impl Installs {
     /// for their answer. `None` when there was none.
     fn cancel(&self, model: &str) -> Option<Vec<Arc<Install>>> {
         let list = lock(&self.list);
-        let mine: Vec<&Arc<Install>> = list.iter().filter(|i| i.next == model).collect();
+        // One already ended by an earlier cancel, waiting for the command thread to pass it by,
+        // is no download.
+        let mine: Vec<&Arc<Install>> = list
+            .iter()
+            .filter(|i| i.next == model && *lock(&i.state) != InstallState::Answered)
+            .collect();
         if mine.is_empty() {
             return None;
         }
@@ -150,7 +155,9 @@ pub fn cancelled_event(current: &str, next: &str) -> Value {
 
 /// **Queries thread.** `model.cancel`: stops the download of `model`, running or queued. A running
 /// one keeps its part files and answers with its own `model.update_finished` (`cancelled`); a
-/// queued one is answered now. Nothing else answers it; no download of it is `not_downloading`.
+/// queued one is answered now. One cancelled while it checks the space or takes its hold, before
+/// it fetches, ends as that update would anyway (`command.failed`, or a download that stops at
+/// once, `cancelled`). Nothing else answers it; no download of it is `not_downloading`.
 pub fn cancel(shared: &Shared, model: &str) -> Result<(), (String, &'static str)> {
     let Some(answered) = shared.installs.cancel(model) else {
         return Err((

@@ -266,8 +266,10 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       waits behind the download. A running one stops at its next chunk and keeps its part
  *       files (the next model.update resumes them); one still queued never starts. Either ends
  *       with "model.update_finished" with "cancelled":true, the queued one at once (with no
- *       "model.update_started" before it); nothing else answers. No download of it:
- *       "command.failed" with code not_downloading.
+ *       "model.update_started" before it); nothing else answers. One cancelled just as it
+ *       starts, before it fetches, may end with that update's own "command.failed" instead (no
+ *       room, or the model held). No download of it, or one already ended: "command.failed"
+ *       with code not_downloading.
  *   {"cmd":"model.remove","model":"<registry id>","id":"<ref>"}
  *       Deletes a model's files (every revision's, and part files), from the screens' thread:
  *       "models.listed" with the "id" as "ref". While a job, a language model call or an update
