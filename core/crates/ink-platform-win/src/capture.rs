@@ -19,6 +19,10 @@
 //! whether it should move ([`far_end_moved`]): its output went, the default changed under "all
 //! output", or the app now plays on another output. Process loopback follows its app anyway.
 //!
+//! **Device changes** ([`WinCapture::watch_devices`](CaptureControl::watch_devices)): an
+//! `IMMNotificationClient` on a thread of its own ([`watch`]), whose callbacks only hand the change
+//! to the core, which enqueues it.
+//!
 //! **Mic routing** ([`route_mic`]): with Bluetooth output, a mic that is not Bluetooth, unless the
 //! headset is LE Audio or the headset-mic setting is on.
 //!
@@ -34,9 +38,10 @@ pub(crate) mod devices;
 mod loopback;
 mod routing;
 pub(crate) mod stream;
+mod watch;
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use ink_audio::{RealtimeGuard, unguarded};
 use ink_core::{
@@ -211,6 +216,9 @@ pub struct WinCapture {
     clock: WinClock,
     guard: RealtimeGuard,
     headset_mic: AtomicBool,
+    /// The device watch's thread, while watching. The lock is held only to swap it; the
+    /// callbacks never take it.
+    watch: Mutex<Option<watch::DeviceWatch>>,
 }
 
 impl WinCapture {
@@ -221,6 +229,7 @@ impl WinCapture {
             clock,
             guard: unguarded(),
             headset_mic: AtomicBool::new(false),
+            watch: Mutex::new(None),
         }
     }
 
@@ -421,14 +430,31 @@ impl CaptureControl for WinCapture {
         Ok(Box::new(self.open_far_end_source(target)?))
     }
 
-    /// Not yet: an `IMMNotificationClient` (devices added, removed, changing state, and the
-    /// defaults) comes with the Windows device branch. Until then the core reads the devices when
-    /// it opens a mic or is asked.
-    fn watch_devices(&self, _: EventSink<DeviceChange>) -> Result<(), PlatformError> {
-        Err(PlatformError::Unsupported("device change notifications"))
+    /// An `IMMNotificationClient` on its own thread: devices added, removed, changing state or
+    /// renamed, and the console defaults (the module docs). A second call stops the first watch
+    /// before starting the new one.
+    fn watch_devices(&self, on_change: EventSink<DeviceChange>) -> Result<(), PlatformError> {
+        let mut watch = self.watch.lock().unwrap_or_else(PoisonError::into_inner);
+        // The old watch first: once it has stopped, its callback never runs again.
+        if let Some(old) = watch.take() {
+            old.stop();
+        }
+        *watch = Some(watch::DeviceWatch::start(on_change)?);
+        Ok(())
     }
 
-    fn unwatch_devices(&self) {}
+    /// Unregisters the notification client and stops its thread; when it returns, the callback
+    /// will not run again.
+    fn unwatch_devices(&self) {
+        let old = self
+            .watch
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some(old) = old {
+            old.stop();
+        }
+    }
 }
 
 /// The core's [`AutoReason`] for the routing's reason.
