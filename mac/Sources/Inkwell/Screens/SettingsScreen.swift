@@ -1,5 +1,5 @@
 // Settings: General (open at login, updates, Inkwell 0.2's history), Appearance, permissions with
-// their live state, dictation's keys, modes, snippets and voice commands (PhrasesSections), AI (the
+// their live state, sound (the microphone and its test: SoundSection), dictation's keys, modes, snippets and voice commands (PhrasesSections), AI (the
 // language model you bring, local-only mode, polish, summaries and Ask), meetings, stats
 // (milestones and the typing speed), models (with measured accuracy, and Download for those not on
 // this Mac), storage, and About with every notice the app ships. Each section is a card, as
@@ -12,6 +12,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     case general
     case appearance
     case permissions
+    case sound
     case dictation
     case modes
     case snippets
@@ -30,6 +31,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .general: "General"
         case .appearance: "Appearance"
         case .permissions: "Permissions"
+        case .sound: "Sound"
         case .dictation: "Dictation"
         case .modes: "Modes"
         case .snippets: "Snippets"
@@ -74,6 +76,7 @@ struct SettingsScreen: View {
                         GeneralSection(screens: screens).settingsCard(.general)
                         AppearanceSection(theme: screens.theme).settingsCard(.appearance)
                         PermissionsSection(permissions: screens.permissions).settingsCard(.permissions)
+                        SoundSection(sound: screens.sound).settingsCard(.sound)
                         DictationSection(screens: screens, dictation: screens.dictation, permissions: screens.permissions)
                             .settingsCard(.dictation)
                         ModesSection(modes: screens.modes).settingsCard(.modes)
@@ -131,6 +134,7 @@ struct SettingsScreen: View {
             screens.cloud.load()
             screens.catalogue.requery()
             screens.storage.measure()
+            screens.sound.load()
         }
         .onDisappear { screens.permissions.screenDisappeared() }
     }

@@ -2000,6 +2000,13 @@ final class ScreensCoreContractTests: XCTestCase {
         }
         XCTAssertEqual(refused?.id, "note-line-7", "a refused note is matched to its line")
         XCTAssertFalse(refused?.message.contains("private") ?? true, "the error never quotes the note")
+        // Settings > Sound: the devices are listed (no permission needed; never the test, which
+        // would open the mic), and a stop with no test running is refused by its id.
+        let sound = try answer(.audioDevices(ref: SoundModel.devicesID)) { if case .audioDevices(let d) = $0 { d } else { nil } }
+        XCTAssertEqual(sound?.ref, SoundModel.devicesID)
+        XCTAssertEqual(sound?.input, "auto", "Automatic until a mic is chosen")
+        let stop = try answer(.audioTestStop(ref: SoundModel.stopID)) { if case .commandFailed(let f) = $0 { f } else { nil } }
+        XCTAssertEqual(stop?.id, SoundModel.stopID)
         let undecodable = events.withLock { $0 }.filter { if case .undecodable = $0 { true } else { false } }
         XCTAssertEqual(undecodable, [])
     }
@@ -2350,6 +2357,12 @@ final class SettingsCardsLayoutTests: XCTestCase {
         screens.catalogue.download(["silero-vad-v6-16k", "parakeet-tdt-0.6b-v3-coreml", "qwen3-asr-1.7b-q8"])
         screens.catalogue.apply(event(#"{"type":"model.update_finished","id":"silero-vad-v6-16k","next":"silero-vad-v6-16k","ok":false,"no_model_warm":false,"message":"the new files could not be installed: downloading silero_vad_16k_op15.onnx: the connection was reset by the server before the file was complete"}"#))
         screens.catalogue.apply(event(#"{"type":"model.update_progress","id":"parakeet-tdt-0.6b-v3-coreml","next":"parakeet-tdt-0.6b-v3-coreml","done_bytes":120000000,"total_bytes":483105645}"#))
+        // Sound: long device names, a chosen mic that isn't connected (the longest caption), and
+        // a test running.
+        screens.sound.apply(event(#"{"type":"audio.devices","input":"gone","wanted":{"id":"gone","name":"Elgato Wave:3 Studio Condenser Microphone","transport":"usb"},"inputs":[{"id":"mbp","name":"MacBook Pro Microphone","transport":"built_in","is_default":true},{"id":"pods","name":"Alex's AirPods Pro (2nd generation)","transport":"bluetooth","is_default":false}],"automatic":{"id":"mbp","name":"MacBook Pro Microphone","transport":"built_in","reason":"built_in_for_bluetooth_output"},"using":{"id":"mbp","name":"MacBook Pro Microphone","transport":"built_in","reason":"chosen_missing"}}"#))
+        screens.sound.toggleTest()
+        screens.sound.apply(event(#"{"type":"audio.test_started","mic_name":"MacBook Pro Microphone","mic_transport":"built_in","mic_reason":"chosen_missing","seconds":15}"#))
+        screens.sound.apply(event(#"{"type":"audio.test_level","level":0.6}"#))
         return screens
     }
 

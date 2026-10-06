@@ -240,6 +240,8 @@ final class ScreenModels {
     let cloud: CloudModel
     /// The Stats screen, milestones, and Settings > Stats.
     let stats: StatsModel
+    /// Settings > Sound: the microphone and its test.
+    let sound: SoundModel
 
     /// The id of the meetings switch's command (a `command.failed` carries it).
     static let meetingsAISettingID = "setting:\(ShellSetting.meetingsLLM.rawValue)"
@@ -258,6 +260,7 @@ final class ScreenModels {
         theme = GlowTheme(send: send)
         cloud = CloudModel(send: send)
         stats = StatsModel(send: send)
+        sound = SoundModel(send: send)
         permissions = PermissionsModel(send: send, calendar: calendar)
         polish = PolishModel(send: send)
         catalogue = CatalogueModel(send: send)
@@ -303,6 +306,7 @@ final class ScreenModels {
             import02.apply(event)
             storage.apply(event)
             stats.apply(event)
+            sound.apply(event)
             if onboarding.showing {
                 // The first run offers its import step only when there is something to import.
                 import02.checkOnce()
@@ -451,10 +455,13 @@ final class ScreenModels {
         case "setting.set":
             // Onboarding's is not shown (the first run shows again next launch), so it is logged.
             stats.handles(failed) || failed.id == PolishModel.settingID || MeetingModel.settingIDs.contains(failed.id ?? "")
-                || failed.id == Self.meetingsAISettingID || dictation.handles(failed)
+                || failed.id == Self.meetingsAISettingID || dictation.handles(failed) || sound.handles(failed)
                 || GlowTheme.settingIDs.contains(failed.id ?? "") || CloudModel.handles(failed)
         case "dictation.enable", "dictation.disable":
             dictation.handles(failed)
+        case "audio.devices", "audio.test", "audio.test_stop":
+            // Said in Settings > Sound.
+            sound.handles(failed)
         case "hotkey.check":
             // Said under the key's row.
             shortcuts.handles(failed)
