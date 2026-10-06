@@ -125,6 +125,8 @@ final class MeetingModel {
     @ObservationIgnored private var starting: Origin = .recordNow
     /// Where the stop in flight was asked for.
     @ObservationIgnored private var stopping: Origin = .stop
+    /// The meeting live now, as meeting.started named it: only its end clears its Drop failures.
+    @ObservationIgnored private var current: String?
     /// The one wake that ends Stop and delete's minute.
     @ObservationIgnored private var deleteDeadline: Task<Void, Never>?
 
@@ -258,17 +260,22 @@ final class MeetingModel {
         deletable = nil
     }
 
-    /// The meeting `record` ended, one way or another: its Drop buttons' failures go with it.
+    /// The meeting `record` ended, one way or another: its Drop buttons' failures go with it (an
+    /// earlier meeting's final pass ending never takes the live one's).
     private func ended(_ record: String) {
         if deletable == record { endDeleteWindow() }
         if discarding == record { discarding = nil }
-        clearMeetingFailure()
+        if current == record {
+            current = nil
+            clearMeetingFailure([.dropStop, .discard])
+        }
     }
 
-    /// A Stop or Stop and delete failure said on the Drop: only while that meeting's Drop shows,
-    /// and only until its transcript moves on (it said why the buttons changed).
-    private func clearMeetingFailure() {
-        if let origin = failure?.origin, origin == .dropStop || origin == .discard {
+    /// A Stop or Stop and delete failure said on the Drop, for `origins`: Stop's stays while its
+    /// meeting's Drop shows; Stop and delete's only until the transcript moves on (it said why the
+    /// button went).
+    private func clearMeetingFailure(_ origins: Set<Origin>) {
+        if let origin = failure?.origin, origins.contains(origin) {
             failure = nil
         }
     }
@@ -294,12 +301,13 @@ final class MeetingModel {
             }
         case .meetingStarted(let meeting):
             failure = nil
+            current = meeting.record
             started(meeting)
         case .meetingDetected:
             // A new offer is a new question: a meeting's button failure is not its.
-            clearMeetingFailure()
-        case .meetingFinal:
-            clearMeetingFailure()
+            clearMeetingFailure([.dropStop, .discard])
+        case .meetingFinal(let final) where final.record == current:
+            clearMeetingFailure([.discard])
         case .meetingStopped(let stopped):
             // Stopped: Stop and delete is no longer offered (a discard in flight goes on).
             if deletable == stopped.record { endDeleteWindow() }
@@ -314,6 +322,7 @@ final class MeetingModel {
         case .coreStopped:
             endDeleteWindow()
             discarding = nil
+            current = nil
         case .commandFailed(let failed) where failed.command == "meeting.discard":
             // The command names no meeting: a refusal is this shell's only while it waits for one
             // (a meeting that ended meanwhile took its buttons with it).

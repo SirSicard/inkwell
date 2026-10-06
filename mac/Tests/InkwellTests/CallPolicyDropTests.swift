@@ -318,6 +318,20 @@ final class CallPolicyDropTests: XCTestCase {
         XCTAssertTrue(sent.commands.contains { if case .noteAdd = $0 { true } else { false } })
     }
 
+    /// A delete refused after the stop keeps the meeting, and its notes are saved then.
+    func testNotesAreSavedWhenTheDeleteIsRefusedAfterTheStop() {
+        let sent = Sent()
+        let start = Date()
+        let screens = ScreenModels(send: sent.send, calendar: FakeCalendar(), apps: NoApps(), callTitles: NoTitle())
+        screens.apply([started(auto: true, deleteUntil: start.addingTimeInterval(60))])
+        screens.live.notesEdited("kept after all", caretParagraph: 0)
+        screens.meetings.discard()
+        screens.apply([event(#"{"type":"meeting.stopped","record":"r1"}"#)])
+        XCTAssertFalse(sent.commands.contains { if case .noteAdd = $0 { true } else { false } }, "held while the delete is pending")
+        screens.apply([event(#"{"type":"command.failed","command":"meeting.discard","id":"meeting.discard","message":"the meeting had already stopped, or failed: delete it from the library once it is there"}"#)])
+        XCTAssertTrue(sent.commands.contains { if case .noteAdd = $0 { true } else { false } }, "refused: saved")
+    }
+
     /// Past the minute the core refuses it: said in the Drop, and only Stop is left.
     func testAStopAndDeleteRefusedAfterTheMinuteLeavesOnlyStop() {
         let sent = Sent()
@@ -384,6 +398,7 @@ final class CallPolicyDropTests: XCTestCase {
         let sent = Sent()
         let (store, ink, screens) = models(sent)
         store.apply([detected()])
+        screens.calls.apply(detected())
         screens.performDropAction(.always(app: zoom, name: "Zoom")) { _ in }
         XCTAssertEqual(sent.commands, [.meetingsCallsSet(app: zoom, policy: "always", replaceUnreadable: false, ref: "calls:1")])
         screens.calls.apply(callsEvent(#"{"app":"us.zoom.xos","app_name":"Zoom","policy":"always","chosen":true}"#, ref: "calls:1"))
@@ -395,11 +410,62 @@ final class CallPolicyDropTests: XCTestCase {
         XCTAssertFalse(sent.commands.contains(.meetingStart(app: zoom, title: nil)), "not saved: nothing recorded")
         XCTAssertEqual(ink.dropText.detail, "Couldn't save that: database is locked")
 
+        // Recorded by hand after all: the failure goes with the offer, and never shows on a later
+        // call's Drop.
+        let taken = started(auto: false, deleteUntil: nil)
+        store.apply([taken])
+        screens.calls.apply(taken)
+        XCTAssertNil(screens.calls.dropFailure)
+        let finished = event(#"{"type":"meeting.finished","record":"r1","revision":2}"#)
+        let auto = started(auto: true, deleteUntil: nil, record: "r2")
+        store.apply([finished, auto])
+        screens.calls.apply(auto)
+        XCTAssertEqual(ink.dropText.detail, DropText.autoReminder("Zoom"))
+
+        // The call ended before Always was saved: nothing is recorded for it.
+        let over = event(#"{"type":"meeting.finished","record":"r2","revision":2}"#)
+        store.apply([over, detected()])
+        screens.calls.apply(detected())
         sent.commands = []
+        screens.performDropAction(.always(app: zoom, name: "Zoom")) { _ in }
+        let ended = event(#"{"type":"meeting.detection_ended","app":"us.zoom.xos","dismissed":false}"#)
+        store.apply([ended])
+        screens.calls.apply(ended)
+        guard case .meetingsCallsSet(_, _, _, let ref)? = sent.commands.last else { return XCTFail("no set sent") }
+        screens.calls.apply(callsEvent(#"{"app":"us.zoom.xos","app_name":"Zoom","policy":"always","chosen":true}"#, ref: ref))
+        XCTAssertEqual(sent.commands.count, 1, "saved, not recorded")
+
+        sent.commands = []
+        store.apply([detected()])
+        screens.calls.apply(detected())
         screens.calls.apply(callsEvent("", message: "the stored choices cannot be read"))
         screens.performDropAction(.always(app: zoom, name: "Zoom")) { _ in }
         XCTAssertTrue(sent.commands.isEmpty)
         XCTAssertEqual(ink.dropText.detail, CallPolicyModel.unreadableFromDrop)
+    }
+
+    /// A failed Stop stays said while its call records; a refused Stop and delete only until the
+    /// transcript moves on; an earlier meeting's end never takes the live one's.
+    func testDropFailuresLastAsLongAsTheyMean() {
+        let sent = Sent()
+        let start = Date()
+        let (store, ink, _) = models(sent, now: { start })
+        let meetings = try! XCTUnwrap(ink.meetings)
+        func both(_ e: InkEvent) {
+            store.apply([e])
+            meetings.apply(e)
+        }
+        both(started(auto: true, deleteUntil: start.addingTimeInterval(60)))
+        meetings.perform(.stop, permissions: PermissionsModel(send: sent.send, calendar: FakeCalendar()))
+        both(event(#"{"type":"command.failed","command":"meeting.stop","id":"meeting.stop","message":"the capture did not answer"}"#))
+        XCTAssertEqual(ink.dropText.detail, "Couldn't stop: the capture did not answer")
+        both(event(#"{"type":"meeting.final","record":"r1","channel":"far","start_ms":0,"end_ms":900,"text":"still talking"}"#))
+        XCTAssertEqual(ink.dropText.detail, "Couldn't stop: the capture did not answer", "the call still records: said until it ends")
+        // The previous meeting's final pass ending changes nothing here.
+        meetings.apply(event(#"{"type":"meeting.finished","record":"r0","revision":2}"#))
+        XCTAssertEqual(ink.dropText.detail, "Couldn't stop: the capture did not answer")
+        both(event(#"{"type":"meeting.finished","record":"r1","revision":2}"#))
+        XCTAssertNil(meetings.failure(on: .drop))
     }
 
     /// The far end going silent in an automatic call keeps its Stop and Stop and delete.

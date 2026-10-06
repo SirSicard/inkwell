@@ -360,6 +360,9 @@ final class LiveModel {
     @ObservationIgnored private var draft: LiveNotesDraft?
     /// Whether a record is being stopped and deleted (MeetingModel's): its notes are never saved.
     @ObservationIgnored var discarding: (String) -> Bool = { _ in false }
+    /// The meeting stopped while it was being deleted: its notes wait, unsaved, for the delete's
+    /// outcome (gone with it, or saved if the core refused the delete).
+    @ObservationIgnored private var flushHeld = false
     @ObservationIgnored private var nextAsk = 0
     @ObservationIgnored private let send: SendCommand
     @ObservationIgnored private let now: () -> Date
@@ -434,6 +437,7 @@ final class LiveModel {
             stack = QuestionStack()
             asked = []
             notesText = ""
+            flushHeld = false
             draft = LiveNotesDraft(record: started.record)
         case .meetingFinal(let final) where final.record == record:
             stack.heard(final)
@@ -446,10 +450,14 @@ final class LiveModel {
             // Capture ended: whatever is typed is saved now, unless the meeting is being deleted
             // (Stop and delete): its words never go into a record that is going.
             if discarding(stopped.record) {
-                draft = nil
+                flushHeld = true
             } else {
                 notesLeft()
             }
+        case .commandFailed(let failed) where failed.command == "meeting.discard" && flushHeld:
+            // The delete was refused after the stop: the meeting is kept, and so are its notes.
+            flushHeld = false
+            notesLeft()
         case .noteAdded(let added) where added.record == record:
             guard let ref = added.ref else { return }
             update { $0.added(ref: ref, note: added.note) }
@@ -485,7 +493,10 @@ final class LiveModel {
     }
 
     private func end() {
+        // A meeting being deleted keeps none of its notes.
+        if let record, discarding(record) { draft = nil }
         notesLeft()
+        flushHeld = false
         record = nil
         startedAt = nil
         draft = nil

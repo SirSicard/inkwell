@@ -97,6 +97,9 @@ final class CallPolicyModel {
         let origin: Origin
         let saved: (@MainActor () -> Void)?
     }
+    /// The app the core offers now (meeting.detected, until it is withdrawn or a meeting starts):
+    /// what follows an Always saved from the Drop runs only while its offer still stands.
+    @ObservationIgnored private var offered: String?
     /// The set that starts an unreadable list over, until its answer.
     @ObservationIgnored private var startOverRef: String?
     /// Choices in flight, by app: shown as made until the core answers.
@@ -262,10 +265,10 @@ final class CallPolicyModel {
             apps = calls.apps
             loaded = true
             let message = calls.message.flatMap { $0.isEmpty ? nil : $0 }
-            var saved: (@MainActor () -> Void)?
+            var answered: InFlight?
             if let ref = calls.ref, let done = inFlight.removeValue(forKey: ref) {
                 if pending[done.app] == done.choice { pending[done.app] = nil }
-                saved = done.saved
+                answered = done
             }
             if let ref = calls.ref, ref == startOverRef {
                 // The list was started over and is readable again; under a default of Always the
@@ -276,13 +279,26 @@ final class CallPolicyModel {
             } else {
                 unreadable = message
             }
-            // After the state is the answer's (an Always saved from the Drop records the call).
-            saved?()
-        case .meetingDetected, .meetingDetectionEnded:
-            // A new offer, or none: a failure said for the last one is over. (Not at a meeting's
-            // start: an Always that failed to save is said on the offer, which stays.)
+            // After the state is the answer's (an Always saved from the Drop records the call), and
+            // only while the call is still offered: one that ended meanwhile is not recorded.
+            if let answered, let saved = answered.saved, offered == answered.app {
+                saved()
+            }
+        case .meetingDetected(let detected):
+            // A new offer: a failure said for the last one is over.
+            offered = detected.app
+            dropFailure = nil
+        case .meetingDetectionEnded(let ended):
+            if offered == ended.app { offered = nil }
+            dropFailure = nil
+        case .meetingDetection(let detection) where !detection.listening:
+            offered = nil
+        case .meetingStarted:
+            // The offer was taken (or a meeting started otherwise): its failure goes with it.
+            offered = nil
             dropFailure = nil
         case .coreStopped:
+            offered = nil
             // A core that starts again answers none of the old one's commands: nothing is in
             // flight, and what is stored is read again at core.ready.
             inFlight = [:]
