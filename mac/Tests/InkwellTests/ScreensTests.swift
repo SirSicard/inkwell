@@ -2361,8 +2361,8 @@ final class SettingsCardsLayoutTests: XCTestCase {
         // a test running.
         screens.sound.apply(event(#"{"type":"audio.devices","input":"gone","wanted":{"id":"gone","name":"Elgato Wave:3 Studio Condenser Microphone","transport":"usb"},"inputs":[{"id":"mbp","name":"MacBook Pro Microphone","transport":"built_in","is_default":true},{"id":"pods","name":"Alex's AirPods Pro (2nd generation)","transport":"bluetooth","is_default":false}],"automatic":{"id":"mbp","name":"MacBook Pro Microphone","transport":"built_in","reason":"built_in_for_bluetooth_output"},"using":{"id":"mbp","name":"MacBook Pro Microphone","transport":"built_in","reason":"chosen_missing"}}"#))
         screens.sound.toggleTest()
-        screens.sound.apply(event(#"{"type":"audio.test_started","mic_name":"MacBook Pro Microphone","mic_transport":"built_in","mic_reason":"chosen_missing","seconds":15}"#))
-        screens.sound.apply(event(#"{"type":"audio.test_level","level":0.6}"#))
+        screens.sound.apply(event(#"{"type":"audio.test_started","ref":"sound.test","mic_name":"MacBook Pro Microphone","mic_transport":"built_in","mic_reason":"chosen_missing","seconds":15}"#))
+        screens.sound.apply(event(#"{"type":"audio.test_level","ref":"sound.test","level":0.6}"#))
         return screens
     }
 
