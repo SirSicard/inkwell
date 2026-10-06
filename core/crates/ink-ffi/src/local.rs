@@ -56,6 +56,9 @@ pub struct LocalLlms {
     residency: Residency<LocalModel>,
     gate: Arc<ModelGate>,
     clock: Arc<dyn Clock>,
+    /// The core's shutdown: no load starts after it, and a call whose load finished after it
+    /// lets go at once (a load already under way cannot be stopped: it finishes first).
+    shutdown: CancelToken,
     /// The `ink-llm-local` thread's mailbox, once it runs.
     mailbox: Mutex<Option<Sender<Wake>>>,
 }
@@ -73,16 +76,19 @@ enum Wake {
 }
 
 impl LocalLlms {
-    /// Loads through `loader`, measuring idle time on `clock`; calls go through `gate`.
+    /// Loads through `loader`, measuring idle time on `clock`; calls go through `gate`, and none
+    /// loads once `shutdown` is set.
     pub fn new(
         loader: Arc<dyn Loader<LocalModel>>,
         clock: Arc<dyn Clock>,
         gate: Arc<ModelGate>,
+        shutdown: CancelToken,
     ) -> Self {
         Self {
             residency: Residency::new(loader, clock.clone()),
             gate,
             clock,
+            shutdown,
             mailbox: Mutex::new(None),
         }
     }
@@ -135,8 +141,14 @@ impl LocalLlms {
     }
 
     /// The model `row` as a call holds it: through the gate (refused while an update or a
-    /// removal holds it), then from residency, loading it if it is not loaded.
+    /// removal holds it), then from residency, loading it if it is not loaded. Never once the
+    /// core is shutting down: a load would hold up the shutdown for seconds (one under way when
+    /// it begins still finishes), so the call is cancelled, and what loaded meanwhile is let go
+    /// of at once for the shutdown to unload.
     fn enter(&self, row: &EngineRow) -> Result<Held<'_>, LlmError> {
+        if self.shutdown.is_cancelled() {
+            return Err(LlmError::Cancelled);
+        }
         let used = self.gate.enter(&row.id).map_err(|refused| match refused {
             Refused::Held(_) => {
                 LlmError::Engine("the on-device model is being updated or removed".into())
@@ -147,6 +159,10 @@ impl LocalLlms {
             .residency
             .acquire(row)
             .map_err(|e| LlmError::Engine(format!("the on-device model did not load: {e}")))?;
+        if self.shutdown.is_cancelled() {
+            drop(lease);
+            return Err(LlmError::Cancelled);
+        }
         Ok(Held {
             lease,
             _used: used,
@@ -270,7 +286,8 @@ impl LocalThread {
         Ok(Self { tx, thread })
     }
 
-    /// Ends the thread once a warm-up under way is done.
+    /// Ends the thread once a warm-up under way is done: a load already under way cannot be
+    /// stopped, so this can wait seconds for it; none starts once the shutdown has begun.
     pub fn stop(self) {
         let _ = self.tx.send(Wake::Quit);
         if self.thread.join().is_err() {
@@ -550,6 +567,7 @@ mod tests {
             loader.clone(),
             clock.clone(),
             Arc::default(),
+            CancelToken::new(),
         ));
         let llm = local.handle(&row()).unwrap();
         assert_eq!(llm.info().endpoint, Endpoint::InProcess);
@@ -574,7 +592,12 @@ mod tests {
             loads: AtomicUsize::new(0),
         });
         let gate: Arc<ModelGate> = Arc::default();
-        let local = Arc::new(LocalLlms::new(loader.clone(), clock, gate.clone()));
+        let local = Arc::new(LocalLlms::new(
+            loader.clone(),
+            clock,
+            gate.clone(),
+            CancelToken::new(),
+        ));
         let llm = local.handle(&row()).unwrap();
         let hold = gate.hold(&[row().id.as_str()]).unwrap();
         let refused = llm.complete(&request(), &CancelToken::new()).unwrap_err();
@@ -592,6 +615,7 @@ mod tests {
             }),
             Arc::new(MockClock::new(1_000, 0)),
             Arc::default(),
+            CancelToken::new(),
         ));
         assert!(local.handle(&ink_engines::silero_vad()).is_none());
     }

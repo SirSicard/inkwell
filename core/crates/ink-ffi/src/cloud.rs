@@ -869,7 +869,8 @@ impl Tester {
     }
 
     /// Ends the thread once the test in flight is done: the shutdown's cancel ends it at once,
-    /// its request on the wire included (left to end on its own).
+    /// its request on the wire included (left to end on its own). A load of the on-device model
+    /// already under way cannot be stopped, so a test of it waits for that load (seconds) first.
     pub fn stop(self) {
         let _ = self.tx.send(Msg::Quit);
         if self.thread.join().is_err() {

@@ -421,9 +421,11 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       key, through local-only mode: "llm.tested" with the "id", saying whether it answered
  *       (and the HTTP status of a refusal) and how long the answer took ("answer_ms"). With no
  *       provider chosen and a language model downloaded, it goes to that model (provider
- *       "on_device", loaded first if it is not): "load_ms" times the load. One at a time; another sent meanwhile fails as busy.
- *       A provider that has not answered within 60 s fails it, and ink_shutdown never waits for
- *       its answer.
+ *       "on_device", loaded first if it is not): "load_ms" times the load. One at a time;
+ *       another sent meanwhile fails as busy. A provider that has not answered within 60 s fails
+ *       it, and ink_shutdown never waits for a provider's answer. A load of the on-device model
+ *       cannot be stopped: one already under way when ink_shutdown begins finishes first (none
+ *       starts after), so ink_shutdown can wait seconds for it.
  *   {"cmd":"modes.list","id":"<ref>"}
  *       "modes.listed": the user's modes, in the order they are matched, with the app identities
  *       each is picked for (on macOS, bundle ids: name them, never show them as they are), each

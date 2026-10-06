@@ -710,10 +710,12 @@ impl Core {
         #[cfg(all(windows, feature = "engine-llama"))]
         let router = router.with_gpu_probe(has_gpu);
         let gate: Arc<ModelGate> = Arc::default();
+        let shutdown = CancelToken::new();
         let local = Arc::new(LocalLlms::new(
             parts.local.llm_loader,
             parts.clock.clone(),
             gate.clone(),
+            shutdown.clone(),
         ));
         let shared = Arc::new(Shared {
             events: hub.events(),
@@ -728,7 +730,7 @@ impl Core {
             gate,
             registry: parts.registry,
             installer: parts.installer,
-            shutdown: CancelToken::new(),
+            shutdown,
             data_dir: parts.data_dir,
             llms: Arc::default(),
             local_only,
