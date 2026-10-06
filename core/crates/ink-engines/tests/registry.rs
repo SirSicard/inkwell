@@ -5,8 +5,9 @@ mod common;
 use common::{REV, row, sha256_hex};
 use ink_core::Job;
 use ink_engines::{
-    ALLOWED_WEIGHT_LICENCES, EngineRow, JobScore, MAX_RELATIVE_PATH_LEN, ModelDir, ModelFile, Os,
-    REVISION_MARKER, Registry, RegistryError, Runtime, builtin_rows,
+    ALLOWED_WEIGHT_LICENCES, ChatQuirks, EngineRow, JobScore, LanguageRow, LanguageSize,
+    MAX_RELATIVE_PATH_LEN, ModelDir, ModelFile, Os, REVISION_MARKER, Registry, RegistryError,
+    RowKind, Runtime, SMALL_BELOW_MEMORY, builtin_rows, suggested_language,
 };
 
 fn valid() -> EngineRow {
@@ -389,4 +390,91 @@ fn paths_at_the_name_limits_fit_the_windows_path_budget() {
             false => assert!(matches!(refused(deep), RegistryError::Invalid { .. })),
         }
     }
+}
+
+fn language(size: LanguageSize) -> RowKind {
+    RowKind::Language(LanguageRow {
+        name: "Synthetic Chat".into(),
+        size,
+        chat: ChatQuirks::default(),
+    })
+}
+
+#[test]
+fn a_language_row_fills_no_speech_job_and_is_one_gguf_for_llama_cpp() {
+    let mut chat = valid();
+    chat.scores.clear();
+    chat.files[0].name = "chat.gguf".into();
+    chat.files[0].url = chat.files[0].url.replace("weights.bin", "chat.gguf");
+    chat.kind = language(LanguageSize::Default);
+    Registry::new(vec![chat.clone()]).expect("a language row");
+    assert!(chat.info().jobs.is_empty());
+
+    let mut scored = chat.clone();
+    scored.scores = valid().scores;
+    assert!(matches!(refused(scored), RegistryError::Invalid { .. }));
+    let mut other_runtime = chat.clone();
+    other_runtime.runtime = Runtime::SherpaOnnx;
+    assert!(matches!(
+        refused(other_runtime),
+        RegistryError::Invalid { .. }
+    ));
+    let mut two_files = chat.clone();
+    let mut second = two_files.files[0].clone();
+    second.name = "more.gguf".into();
+    second.url = second.url.replace("chat.gguf", "more.gguf");
+    two_files.files.push(second);
+    assert!(matches!(refused(two_files), RegistryError::Invalid { .. }));
+    let mut not_gguf = valid();
+    not_gguf.scores.clear();
+    not_gguf.kind = language(LanguageSize::Default);
+    assert!(matches!(refused(not_gguf), RegistryError::Invalid { .. }));
+    for name in ["", " Synthetic", "Synthetic\n", &"x".repeat(65)] {
+        let mut named = chat.clone();
+        named.kind = RowKind::Language(LanguageRow {
+            name: name.into(),
+            size: LanguageSize::Default,
+            chat: ChatQuirks::default(),
+        });
+        assert!(
+            matches!(refused(named), RegistryError::Invalid { .. }),
+            "{name:?}"
+        );
+    }
+}
+
+#[test]
+fn the_suggested_language_model_is_the_default_unless_memory_is_under_12_gb() {
+    let row = |id: &str, size: LanguageSize, oses: &[Os]| {
+        let mut r = valid();
+        r.id = id.into();
+        r.scores.clear();
+        r.files[0].name = "chat.gguf".into();
+        r.files[0].url = r.files[0].url.replace("weights.bin", "chat.gguf");
+        r.oses = oses.to_vec();
+        r.kind = language(size);
+        r
+    };
+    let rows = [
+        valid(),
+        row("synthetic-small", LanguageSize::Small, &[Os::Windows]),
+        row("synthetic-default", LanguageSize::Default, &[Os::Windows]),
+    ];
+    let pick =
+        |memory: Option<u64>| suggested_language(&rows, Os::Windows, memory).map(|r| r.id.as_str());
+    assert_eq!(pick(Some(16 << 30)), Some("synthetic-default"));
+    // A PC fitted with 12 GB reports a little under 12 GiB.
+    assert_eq!(pick(Some(12_500_000_000)), Some("synthetic-default"));
+    assert_eq!(pick(Some(SMALL_BELOW_MEMORY)), Some("synthetic-default"));
+    assert_eq!(pick(Some(SMALL_BELOW_MEMORY - 1)), Some("synthetic-small"));
+    assert_eq!(pick(Some(8 << 30)), Some("synthetic-small"));
+    // Memory that could not be read: the Default.
+    assert_eq!(pick(None), Some("synthetic-default"));
+    // No language row for the OS (the Mac): none.
+    assert_eq!(suggested_language(&rows, Os::MacOs, Some(8 << 30)), None);
+    // With only one size there, that one, whatever the memory.
+    assert_eq!(
+        suggested_language(&rows[..2], Os::Windows, Some(64 << 30)).map(|r| r.id.as_str()),
+        Some("synthetic-small")
+    );
 }

@@ -491,6 +491,7 @@ fn quick_and_slow(s: &Scratch) -> (Registry, ModelDir) {
     );
     let quick = EngineRow {
         runtime: Runtime::SherpaOnnx,
+        kind: ink_engines::RowKind::Speech,
         ..row(
             "synthetic-sherpa",
             &[(Job::DictationFinal, 16.4), (Job::LivePartials, 27.9)],
@@ -629,4 +630,37 @@ fn an_installed_row_the_shell_runs_is_never_routed() {
     ] {
         assert_eq!(r.route(job).unwrap_err(), RouteError::NoEngine { job });
     }
+}
+
+#[test]
+fn a_language_row_installed_never_serves_a_speech_job() {
+    let s = Scratch::new("language");
+    let mut chat = row("synthetic-chat", &[]);
+    chat.files[0].name = "chat.gguf".into();
+    chat.files[0].url = chat.files[0].url.replace("weights.bin", "chat.gguf");
+    chat.kind = ink_engines::RowKind::Language(ink_engines::LanguageRow {
+        name: "Synthetic Chat".into(),
+        size: ink_engines::LanguageSize::Default,
+        chat: ink_engines::ChatQuirks::default(),
+    });
+    let speech = row("synthetic-asr", &[(Job::DictationFinal, 9.0)]);
+    let (r, dir) = router(&s, vec![chat.clone(), speech.clone()], Os::Windows);
+    install(&dir, &chat);
+    for job in [
+        Job::DictationFinal,
+        Job::MeetingFinal,
+        Job::LivePartials,
+        Job::Diarization,
+        Job::VoiceActivity,
+    ] {
+        assert!(
+            r.route(job).is_err(),
+            "{job:?} routed with only the chat model installed"
+        );
+    }
+    install(&dir, &speech);
+    assert_eq!(
+        model_id(r.route(Job::DictationFinal).unwrap()),
+        "synthetic-asr"
+    );
 }

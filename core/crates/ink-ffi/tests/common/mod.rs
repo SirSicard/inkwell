@@ -227,6 +227,7 @@ pub fn test_row(id: &str) -> EngineRow {
         licence: "Apache-2.0".into(),
         oses: vec![Os::MacOs, Os::Windows],
         runtime: Runtime::LlamaCpp,
+        kind: ink_engines::RowKind::Speech,
     }
 }
 

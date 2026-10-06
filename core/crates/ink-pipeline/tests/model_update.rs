@@ -36,6 +36,7 @@ fn row(id: &str, revision_digit: char) -> EngineRow {
         licence: "Apache-2.0".into(),
         oses: vec![Os::MacOs, Os::Windows],
         runtime: Runtime::LlamaCpp,
+        kind: ink_engines::RowKind::Speech,
     }
 }
 

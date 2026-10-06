@@ -58,6 +58,7 @@ pub fn row_with(id: &str, scores: &[(Job, f32)], oses: &[Os], bytes: &[u8]) -> E
         licence: "MIT".into(),
         oses: oses.to_vec(),
         runtime: Runtime::LlamaCpp,
+        kind: ink_engines::RowKind::Speech,
     }
 }
 

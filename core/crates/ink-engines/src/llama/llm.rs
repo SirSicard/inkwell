@@ -14,6 +14,9 @@
 //! - **Budget.** An answer that has not ended when [`LlmRequest::max_tokens`] runs out is an
 //!   error, not a shorter answer: a cut-off answer must not look like a finished one.
 //! - **Errors.** Failures of this model are [`LlmError::Engine`], naming the step, never the text.
+//! - **Thinking off.** A hybrid thinking model loaded with [`ChatQuirks::no_think`] gets the empty
+//!   think block its own template writes for `enable_thinking=false` at the start of its answer,
+//!   and a think block it writes anyway is taken off ([`crate::chat`]).
 
 use std::path::Path;
 
@@ -31,7 +34,9 @@ use super::{
     GenerateError, Stop, backend, compute, context_params, file_name, generate, model_params,
     require_file, with_cpu_fallback,
 };
+use crate::chat::{ThinkError, strip_think, with_no_think};
 use crate::compute::{Compute, physical_cores};
+use crate::registry::ChatQuirks;
 
 /// A grammar (llama.cpp's GBNF) for exactly one JSON object, with bounded whitespace so a model
 /// cannot spend its budget on blank lines. Written for this crate from the JSON specification
@@ -58,6 +63,7 @@ pub struct LlamaLlm {
     info: LlmInfo,
     backend: &'static LlamaBackend,
     compute: Compute,
+    chat: ChatQuirks,
 }
 
 impl LlamaLlm {
@@ -65,6 +71,12 @@ impl LlamaLlm {
     /// CPU on every physical core ([`super::compute`]). `model_id` is what [`Llm::info`] reports.
     /// Refuses a model with no chat template, or one llama.cpp cannot apply.
     pub fn load(path: &Path, model_id: &str) -> Result<Self, EngineError> {
+        Self::load_with(path, model_id, ChatQuirks::default())
+    }
+
+    /// **Worker.** [`load`](Self::load), with what the model's chat format needs beyond llama.cpp's
+    /// built-in template (a registry language row's [`ChatQuirks`]).
+    pub fn load_with(path: &Path, model_id: &str, chat: ChatQuirks) -> Result<Self, EngineError> {
         require_file(path, model_id)?;
         let backend = backend()?;
         let failed = |what: String| EngineError::Failed(format!("{model_id}: {what}"));
@@ -94,6 +106,7 @@ impl LlamaLlm {
             },
             backend,
             compute,
+            chat,
         })
     }
 
@@ -144,7 +157,7 @@ impl Llm for LlamaLlm {
             request.max_tokens,
             cancel,
         ) {
-            Ok((text, Stop::EndOfText)) => Ok(LlmResponse { text }),
+            Ok((text, Stop::EndOfText)) => self.answer(text),
             Ok((_, Stop::Budget)) => Err(engine("output hit the token budget")),
             Err(GenerateError::Cancelled) => Err(LlmError::Cancelled),
             Err(GenerateError::Failed(e)) => Err(engine(e)),
@@ -153,6 +166,23 @@ impl Llm for LlamaLlm {
 }
 
 impl LlamaLlm {
+    /// The answer as the caller gets it: for a model with thinking off, without a think block it
+    /// wrote anyway.
+    fn answer(&self, text: String) -> Result<LlmResponse, LlmError> {
+        if !self.chat.no_think {
+            return Ok(LlmResponse { text });
+        }
+        match strip_think(&text) {
+            Ok(answer) if answer.len() == text.len() => Ok(LlmResponse { text }),
+            Ok(answer) => Ok(LlmResponse {
+                text: answer.to_owned(),
+            }),
+            Err(ThinkError::Unclosed) => Err(engine(
+                "the answer was reasoning that never ended (thinking is off for this model)",
+            )),
+        }
+    }
+
     /// The request in the model's chat format, as tokens. Never empty.
     fn prompt(&self, request: &LlmRequest) -> Result<Vec<LlamaToken>, LlmError> {
         // User text with a NUL byte cannot cross into C; the error names the role, not the text.
@@ -165,10 +195,15 @@ impl LlamaLlm {
             chat.push(chat_message("system", &request.system)?);
         }
         chat.push(chat_message("user", &request.user)?);
-        let prompt = self
+        let mut prompt = self
             .model
             .apply_chat_template(&self.template, &chat, true)
             .map_err(|e| engine(format!("chat template: {e}")))?;
+        if self.chat.no_think {
+            // After the assistant's turn opens, as the model's own template does with thinking
+            // off.
+            prompt = with_no_think(prompt);
+        }
         // `Always` asks for the start token only where the model's vocabulary wants one.
         let tokens = self
             .model

@@ -2,7 +2,7 @@
 //!
 //! | Piece | Does |
 //! |---|---|
-//! | [`Registry`] | Rows of data: id, jobs with measured error rates, files (URL, sha256, size), pinned revision, licence, OSes, runtime. A row that is not pinned to a commit is refused. |
+//! | [`Registry`] | Rows of data: id, jobs with measured error rates, files (URL, sha256, size), pinned revision, licence, OSes, runtime, and whether it is a speech or a language model ([`RowKind`]). A row that is not pinned to a commit is refused. |
 //! | [`Downloader`] | Fetches a row's files: resumes part files, checks size and SHA-256 before a file is moved into place, stops on a [`CancelToken`](ink_core::CancelToken), reports progress. |
 //! | [`Router`] | Job → the installed engine for this OS with the lowest measured error rate. Engines the shell registers over the C ABI compete on the same terms. |
 //! | [`Residency`] | Keeps the dictation model warm, loads others on demand, unloads what has been idle for five minutes, never loads two copies. |
@@ -39,6 +39,7 @@
 #![warn(missing_docs)]
 
 mod adapters;
+pub mod chat;
 mod compute;
 mod download;
 #[cfg(feature = "http")]
@@ -72,14 +73,16 @@ pub use model_dir::{
 #[cfg(feature = "engine-nemo")]
 pub use nemo::{NemoDevice, NemoDiarizer, NemoLoader, OFFLINE_PRESET};
 pub use registry::{
-    ALLOWED_WEIGHT_LICENCES, EngineRow, JobScore, MAX_NAME_LEN, ModelFile, Os, Registry,
-    RegistryError, Runtime, builtin_rows,
+    ALLOWED_WEIGHT_LICENCES, ChatQuirks, EngineRow, JobScore, LanguageRow, LanguageSize,
+    MAX_NAME_LEN, ModelFile, Os, Registry, RegistryError, RowKind, Runtime, SMALL_BELOW_MEMORY,
+    builtin_rows, suggested_language,
 };
 pub use residency::{IDLE_UNLOAD, Lease, Loader, Residency, Unloaded};
 pub use router::{ExternalEngine, Route, RouteError, Router};
 pub use rows::{
     NEMOTRON_DIARIZATION_ID, PARAKEET_COREML_FOLDER, PARAKEET_COREML_ID, PARAKEET_INT8_ID,
-    SILERO_VAD_ID, nemotron_3_diarization, parakeet_tdt_v3_coreml, parakeet_tdt_v3_int8,
+    QWEN3_1_7B_ID, QWEN3_4B_INSTRUCT_ID, SILERO_VAD_ID, nemotron_3_diarization,
+    parakeet_tdt_v3_coreml, parakeet_tdt_v3_int8, qwen3_1_7b_q8, qwen3_4b_instruct_2507_q4km,
     silero_vad,
 };
 #[cfg(feature = "engine-silero")]
