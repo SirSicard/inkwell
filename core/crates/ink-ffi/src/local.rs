@@ -59,8 +59,12 @@ pub struct LocalLlms {
     /// The core's shutdown: no load starts after it, and a call whose load finished after it
     /// lets go at once (a load already under way cannot be stopped: it finishes first).
     shutdown: CancelToken,
-    /// The `ink-llm-local` thread's mailbox, once it runs.
+    /// The `ink-llm-local` thread's mailbox, once it runs. Unbounded on purpose, as the engine
+    /// warmer's: takes come at the pace of key presses, and a call's [`Wake::Used`] is sent only
+    /// while none is waiting ([`used_pending`](Self::used_pending)).
     mailbox: Mutex<Option<Sender<Wake>>>,
+    /// A [`Wake::Used`] is in the mailbox: another would say nothing new.
+    used_pending: std::sync::atomic::AtomicBool,
 }
 
 /// What wakes `ink-llm-local`.
@@ -90,6 +94,7 @@ impl LocalLlms {
             clock,
             shutdown,
             mailbox: Mutex::new(None),
+            used_pending: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -199,7 +204,10 @@ struct Told<'a>(&'a LocalLlms);
 
 impl Drop for Told<'_> {
     fn drop(&mut self) {
-        self.0.send(Wake::Used);
+        use std::sync::atomic::Ordering;
+        if !self.0.used_pending.swap(true, Ordering::AcqRel) {
+            self.0.send(Wake::Used);
+        }
     }
 }
 
@@ -252,6 +260,8 @@ impl Llm for LocalLlm {
         self.info.clone()
     }
 
+    /// `cancel` is read before the model loads and through the answer; a first load (seconds)
+    /// cannot be stopped once under way, so a call cancelled meanwhile ends when it has loaded.
     fn complete(
         &self,
         request: &LlmRequest,
@@ -261,6 +271,9 @@ impl Llm for LocalLlm {
             return Err(LlmError::Cancelled);
         }
         let held = self.owner.enter(&self.row)?;
+        if cancel.is_cancelled() {
+            return Err(LlmError::Cancelled);
+        }
         held.model().complete(request, cancel)
     }
 }
@@ -317,11 +330,23 @@ fn run(shared: &Shared, rx: &Receiver<Wake>) {
                     log::error!("warming the on-device model panicked; the thread goes on");
                 }
             }
-            Ok(Wake::Used) => {}
+            Ok(Wake::Used) => {
+                // Cleared before the next unload is read: a call that ends after this sends
+                // again.
+                local
+                    .used_pending
+                    .store(false, std::sync::atomic::Ordering::Release);
+            }
             Err(RecvTimeoutError::Timeout) => {
-                let unloaded = local.tick();
-                if !unloaded.is_empty() {
-                    log::info!("on-device model unloaded after idling: {unloaded:?}");
+                // A model's drop that panics costs that unload, never the thread.
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| local.tick())) {
+                    Ok(unloaded) if !unloaded.is_empty() => {
+                        log::info!("on-device model unloaded after idling: {unloaded:?}");
+                    }
+                    Ok(_) => {}
+                    Err(_) => {
+                        log::error!("unloading the on-device model panicked; the thread goes on")
+                    }
                 }
             }
             Ok(Wake::Quit) | Err(RecvTimeoutError::Disconnected) => break,
@@ -414,8 +439,13 @@ fn current_row(shared: &Shared) -> Option<&EngineRow> {
 /// it. Only while [`CURRENT_KEY`] names an installed row: without it, which one the user wants
 /// is not known, and nothing is deleted.
 pub fn tidy(shared: &Shared) {
-    let Ok(Some(current)) = shared.store.setting(CURRENT_KEY) else {
-        return;
+    let current = match shared.store.setting(CURRENT_KEY) {
+        Ok(Some(current)) => current,
+        Ok(None) => return,
+        Err(e) => {
+            log::warn!("the on-device model in use could not be read ({e}); nothing is tidied");
+            return;
+        }
     };
     let installed = installed_rows(shared);
     if !installed.iter().any(|r| r.id == current) {

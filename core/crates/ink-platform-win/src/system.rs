@@ -16,12 +16,20 @@ pub struct WinSystemInfo;
 
 impl SystemInfo for WinSystemInfo {
     fn free_disk_bytes(&self, path: &Path) -> Result<u64, PlatformError> {
-        if !path.exists() {
-            // Said as such, whatever GetDiskFreeSpaceExW would answer for it: the contract asks
-            // for an existing path.
-            return Err(PlatformError::Failed(
-                "free space: the path does not exist".into(),
-            ));
+        // Said as such, whatever GetDiskFreeSpaceExW would answer for it: the contract asks for
+        // an existing path. A path that cannot be checked is said as that, not as missing.
+        match path.try_exists() {
+            Ok(true) => {}
+            Ok(false) => {
+                return Err(PlatformError::Failed(
+                    "free space: the path does not exist".into(),
+                ));
+            }
+            Err(e) => {
+                return Err(PlatformError::Failed(format!(
+                    "free space: the path cannot be checked: {e}"
+                )));
+            }
         }
         let wide: Vec<u16> = path
             .as_os_str()
