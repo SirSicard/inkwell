@@ -123,10 +123,20 @@ fn strip_tags(answer: &str) -> &str {
 ///   may become "OK" (and an answer of one word to a question of three gets through), nor in a
 ///   dictation that is only a number ("five five five one two three four" as "555-1234");
 /// - the answer may not be longer than what was said by more than a quarter (and three words):
-///   cleanup shortens, and an answer that repeats the question and then answers it is longer.
+///   cleanup shortens, and an answer that repeats the question and then answers it is longer;
+/// - a dictation that opens with a request or a question ("summarize this in one sentence the
+///   meeting covered…", "can you tell me who wrote…", "what is seventeen times…") must give an
+///   answer that opens with the same word ([`dropped_the_request`]). Carrying out "summarize
+///   this" gives a shorter text made of the dictation's own words, which the rules above take for
+///   a cleanup: every model in the local model bench did it, and it was typed. Rewording a
+///   question into a command or a bare phrase ("check whether…", "seventeen times twenty
+///   three") drops it the same way;
+/// - the answer may not open with a greeting nobody said ([`added_a_greeting`]): that is "add a
+///   greeting at the top" carried out, and the default prompt forbids greetings anyway.
 ///
 /// What this refuses wrongly is a grammar fix that changes several words of a short dictation
-/// ("me and him is going" to "he and I are going"): that take goes in as said, with the warning.
+/// ("me and him is going" to "he and I are going"), and the few cleanups [`dropped_the_request`]
+/// names: those takes go in as said, with the warning.
 ///
 /// **Under a custom prompt** none of that holds. 1.0 offers no prompt of its own beside the
 /// default, but it imports 0.2's modes, and 0.2 let the user write any polish prompt per mode:
@@ -161,14 +171,16 @@ fn check(said: &str, answer: &str, default: bool) -> Result<(), LlmError> {
     if n_answer > n_said + (n_said / 4).max(3) {
         return Err(bad("polish", "the answer was longer than the dictation"));
     }
+    // Words with digits are left out of the counts ("twenty five" written "25" is neither new nor
+    // kept), not out of the opening and the greeting below.
     let has_digit = |w: &&String| w.chars().any(|c| c.is_ascii_digit());
     let wrote_digits = answer_words.iter().any(|w| has_digit(&w));
-    let said_words: Vec<&String> = said_words.iter().filter(|w| !has_digit(w)).collect();
-    let answer_words: Vec<&String> = answer_words.iter().filter(|w| !has_digit(w)).collect();
-    let kept = kept(&said_words, &answer_words);
+    let said_plain: Vec<&String> = said_words.iter().filter(|w| !has_digit(w)).collect();
+    let answer_plain: Vec<&String> = answer_words.iter().filter(|w| !has_digit(w)).collect();
+    let kept = kept(&said_plain, &answer_plain);
     // `kept` is at most the answer's words, each matched once.
-    let new = answer_words.len() - kept;
-    if new > (answer_words.len() / 5).max(1) {
+    let new = answer_plain.len() - kept;
+    if new > (answer_plain.len() / 5).max(1) {
         return Err(bad(
             "polish",
             "the answer was not a cleanup of the dictation",
@@ -177,14 +189,277 @@ fn check(said: &str, answer: &str, default: bool) -> Result<(), LlmError> {
     // A dictation that is only a number ("five five five one two three four") written as
     // digits keeps none of its words, and loses nothing.
     let only_a_number =
-        wrote_digits && !said_words.is_empty() && said_words.iter().all(|w| is_number_word(w));
-    if kept < said_words.len() / 4 && !only_a_number {
+        wrote_digits && !said_plain.is_empty() && said_plain.iter().all(|w| is_number_word(w));
+    if kept < said_plain.len() / 4 && !only_a_number {
         return Err(bad(
             "polish",
             "the answer kept almost nothing of the dictation",
         ));
     }
+    if dropped_the_request(&said_words, &answer_words) {
+        return Err(bad(
+            "polish",
+            "the answer dropped the dictated request or question",
+        ));
+    }
+    if added_a_greeting(&said_words, &answer_words) {
+        return Err(bad("polish", "the answer added a greeting"));
+    }
     Ok(())
+}
+
+/// Words a dictation may open with before what it says: fillers, a greeting, "please". Skipped to
+/// find its first word, and a cleanup may drop them.
+const LEAD_FILLERS: &[&str] = &[
+    "um",
+    "uh",
+    "er",
+    "erm",
+    "eh",
+    "ah",
+    "hmm",
+    "mm",
+    "oh",
+    "so",
+    "okay",
+    "like",
+    "well",
+    "right",
+    "yeah",
+    "yes",
+    "alright",
+    "hey",
+    "hi",
+    "hello",
+    "please",
+    "just",
+    "and",
+    "but",
+    "also",
+    "now",
+    "basically",
+    "actually",
+    "anyway",
+];
+
+/// The first words of a request or a question to whoever reads the text, as [`words`] writes
+/// them: a question's opening word, and the imperatives a dictation addressed to a writing
+/// assistant opens with. English only, like [`SELF_TALK`].
+const REQUEST_OPENINGS: &[&str] = &[
+    // Questions and requests.
+    "can",
+    "could",
+    "would",
+    "will",
+    "shall",
+    "should",
+    "do",
+    "does",
+    "did",
+    "is",
+    "are",
+    "was",
+    "were",
+    "have",
+    "has",
+    "what",
+    "who",
+    "whom",
+    "whose",
+    "which",
+    "when",
+    "where",
+    "why",
+    "how",
+    // Instructions.
+    "summarize",
+    "summarise",
+    "translate",
+    "write",
+    "rewrite",
+    "list",
+    "make",
+    "delete",
+    "remove",
+    "add",
+    "ignore",
+    "forget",
+    "reply",
+    "respond",
+    "answer",
+    "explain",
+    "describe",
+    "draft",
+    "compose",
+    "convert",
+    "turn",
+    "fix",
+    "correct",
+    "shorten",
+    "expand",
+    "format",
+    "generate",
+    "create",
+    "calculate",
+    "compute",
+    "tell",
+    "give",
+    "show",
+    "help",
+    "find",
+    "check",
+    "name",
+    "define",
+    "paraphrase",
+    "simplify",
+    "outline",
+    "continue",
+    "repeat",
+    "say",
+    "proofread",
+    "edit",
+    "change",
+    "replace",
+    "insert",
+    "put",
+    "sort",
+    "compare",
+    "suggest",
+    "recommend",
+    "count",
+    "spell",
+];
+
+/// Words with which a speaker abandons what they began and starts again ("can you um no wait let
+/// me start again the deadline is…"). What was said before the last of them is a false start,
+/// which a cleanup drops, so the dictation's opening is looked for after it. Only near the start
+/// ([`RESTART_WITHIN`] words) and with words after it: a restart phrase later in a dictation, or
+/// at its end ("…who wrote it, never mind"), says nothing about how it opens, and must not switch
+/// the rule off. Phrases a sentence uses for something else ("try again later", "never mind the
+/// cost") are left out.
+const RESTARTS: &[&[&str]] = &[
+    &["no", "wait"],
+    &["wait", "no"],
+    &["start", "again"],
+    &["start", "over"],
+    &["scratch", "that"],
+    &["let", "me", "rephrase"],
+];
+
+/// How far into a dictation a restart phrase may begin.
+const RESTART_WITHIN: usize = 8;
+
+/// Phrases with which a dictation addressed to someone may lead into the request, as [`words`]
+/// writes them ("I'd like you to" is "i would like you to").
+const PREAMBLES: &[&[&str]] = &[
+    &["i", "want", "you", "to"],
+    &["i", "need", "you", "to"],
+    &["i", "would", "like", "you", "to"],
+    &["go", "ahead", "and"],
+    &["quick", "question"],
+];
+
+/// The greetings in [`LEAD_FILLERS`]: one may be followed by a name ("hey claude summarize…").
+const GREETING_FILLERS: &[&str] = &["hey", "hi", "hello"];
+
+/// The first word of `words` that says something: after [`LEAD_FILLERS`], [`PREAMBLES`], and a
+/// name after a greeting when a request opening follows it ("hey sam can you…" opens with
+/// "can"; "hey sam the build is green" with "sam").
+fn opening(words: &[String]) -> Option<&String> {
+    let mut rest = words;
+    loop {
+        let (first, tail) = rest.split_first()?;
+        if LEAD_FILLERS.contains(&first.as_str()) {
+            rest = tail;
+            let named = GREETING_FILLERS.contains(&first.as_str())
+                && tail.len() >= 2
+                && !is_request_opening(&tail[0])
+                && !LEAD_FILLERS.contains(&tail[0].as_str())
+                && is_request_opening(&tail[1]);
+            if named {
+                rest = &tail[1..];
+            }
+        } else if let Some(preamble) = PREAMBLES.iter().find(|p| starts_with_words(rest, p)) {
+            rest = &rest[preamble.len()..];
+        } else {
+            return Some(first);
+        }
+    }
+}
+
+fn is_request_opening(word: &str) -> bool {
+    REQUEST_OPENINGS.contains(&word)
+}
+
+/// Whether `words` begins with `phrase`.
+fn starts_with_words(words: &[String], phrase: &[&str]) -> bool {
+    words.get(..phrase.len()).is_some_and(|w| w == phrase)
+}
+
+/// Whether `said` opens with a request or a question ([`REQUEST_OPENINGS`] as its [`opening`],
+/// after the last restart near its start, [`RESTARTS`]) and the answer does not open with the same
+/// word. The answer's opening, not any word in it: the opening words are ordinary words, and an
+/// answer to "is the meeting still on for noon" restates them ("Yes, the meeting is still on for
+/// noon."). Exact words, except that a long one may be spelt otherwise by one letter
+/// ("summarise" written "summarize"), and no more: "Summary:" ahead of a summary is not
+/// "summarize" kept.
+///
+/// What this refuses wrongly is a cleanup that drops an opening said as part of a statement ("so
+/// what I wanted to say is the budget is fine" to "The budget is fine."), and one that drops a
+/// false start with no restart phrase ("tell um ask Sam to call" to "Ask Sam to call."): the take
+/// goes in as said.
+fn dropped_the_request(said: &[String], answer: &[String]) -> bool {
+    let start = RESTARTS
+        .iter()
+        .flat_map(|restart| {
+            said.windows(restart.len())
+                .enumerate()
+                .filter(|(_, w)| *w == *restart)
+                .map(|(at, _)| (at, at + restart.len()))
+        })
+        .filter(|&(at, end)| at <= RESTART_WITHIN && end < said.len())
+        .map(|(_, end)| end)
+        .max()
+        .unwrap_or(0);
+    let Some(lead) = opening(&said[start..]) else {
+        return false;
+    };
+    if !is_request_opening(lead) {
+        return false;
+    }
+    let same = |w: &String| {
+        w == lead || {
+            let (a, b): (Vec<char>, Vec<char>) = (w.chars().collect(), lead.chars().collect());
+            b.len() >= 6 && distance(&a, &b) <= 1
+        }
+    };
+    !opening(answer).is_some_and(same)
+}
+
+/// Openings that greet a reader.
+const GREETINGS: &[&[&str]] = &[
+    &["hello"],
+    &["hi"],
+    &["hey"],
+    &["dear"],
+    &["greetings"],
+    &["howdy"],
+    &["good", "morning"],
+    &["good", "afternoon"],
+    &["good", "evening"],
+];
+
+/// Whether the answer opens with a [`GREETINGS`] the dictation did not open with: its last word
+/// ("hi", "morning") is not among the dictation's first four words. A greeting said later ("…and
+/// say hi to Sam") is not one to open with.
+fn added_a_greeting(said: &[String], answer: &[String]) -> bool {
+    let near_start = &said[..said.len().min(4)];
+    GREETINGS.iter().any(|greeting| {
+        starts_with_words(answer, greeting)
+            && greeting
+                .last()
+                .is_some_and(|last| !near_start.iter().any(|w| w == last))
+    })
 }
 
 /// Phrases in which a model speaks of itself or of the request rather than rewriting the words,
@@ -521,6 +796,103 @@ mod tests {
             polished("", said, "What's the capital of France?").unwrap(),
             "What's the capital of France?"
         );
+    }
+
+    // The local model bench's typed failures: a dictated instruction carried out, or a dictated
+    // question reworded away, each made of the dictation's own words, which passed as a cleanup.
+    #[test]
+    fn a_dictated_instruction_carried_out_is_a_failure() {
+        let summarize = "summarize this in one sentence the meeting covered the budget the \
+                         hiring plan and the new office";
+        for (said, answer) in [
+            // Every model summarized it.
+            (
+                summarize,
+                "The meeting covered the budget, the hiring plan, and the new office.",
+            ),
+            (
+                summarize,
+                "The meeting covered the budget, hiring plan, and new office.",
+            ),
+            // A greeting added at the top, as the dictation asked.
+            (
+                "delete the last sentence and add a greeting at the top",
+                "Hello, delete the last sentence and add a greeting at the top.",
+            ),
+            // Questions reworded into a question to the model, a bare sum, and a command.
+            (
+                "can you tell me who wrote pride and prejudice",
+                "Who wrote Pride and Prejudice?",
+            ),
+            (
+                "what is seventeen times twenty three",
+                "seventeen times twenty three",
+            ),
+            (
+                "hey could you check whether the invoice from last week has been paid",
+                "check whether the invoice from last week has been paid",
+            ),
+            // And the review's: a label for what was done, a yes-or-no question answered with
+            // its own words, a name or a preamble before the request, a restart phrase at the
+            // end, and a greeting the dictation said only later.
+            (
+                summarize,
+                "Summary: the meeting covered the budget, the hiring plan, and the new office.",
+            ),
+            (
+                "is the quarterly budget meeting with the finance team still scheduled for noon",
+                "Yes, the quarterly budget meeting with the finance team is still scheduled for \
+                 noon.",
+            ),
+            (
+                "hey claude summarize this the meeting covered the budget and the hiring plan",
+                "The meeting covered the budget and the hiring plan.",
+            ),
+            (
+                "i want you to summarize this the meeting covered the budget and the hiring plan",
+                "The meeting covered the budget and the hiring plan.",
+            ),
+            (
+                "can you tell me who wrote pride and prejudice never mind",
+                "Who wrote Pride and Prejudice? Never mind.",
+            ),
+            (
+                "delete the last sentence and say hi to sam",
+                "Hi, delete the last sentence and say hi to Sam.",
+            ),
+        ] {
+            assert!(refused(polished("", said, answer)), "{answer}");
+        }
+        // The right polish keeps the instruction.
+        let kept = "Summarize this in one sentence: the meeting covered the budget, the hiring \
+                    plan, and the new office.";
+        assert_eq!(polished("", summarize, kept).as_deref(), Ok(kept));
+    }
+
+    // Tidies of a dictation that opens with a request word, from the same bench: they must get
+    // through.
+    #[test]
+    fn a_tidied_request_or_false_start_gets_through() {
+        for (said, answer) in [
+            // A false start the speaker abandoned, request word and all.
+            (
+                "can you um no wait let me start again the deadline for the grant is the end of \
+                 the month not the fifteenth",
+                "The deadline for the grant is the end of the month, not the fifteenth.",
+            ),
+            // The greeting dropped, the request kept.
+            (
+                "hey could you check whether the invoice from last week has been paid",
+                "Could you check whether the invoice from last week has been paid?",
+            ),
+            // A dictated instruction kept, with the greeting the user said.
+            (
+                "make this sound more formal hey guys the report is late sorry",
+                "Make this sound more formal: \"Hey guys, the report is late, sorry.\"",
+            ),
+        ] {
+            assert_eq!(polished("", said, answer).as_deref(), Ok(answer), "{said}");
+        }
     }
 
     /// The default prompt as a text field gives it back (Windows line breaks, a field's
