@@ -63,6 +63,8 @@ final class SoundModel {
     nonisolated static let settingID = "setting:\(ShellSetting.audioInput.rawValue)"
 
     @ObservationIgnored private let send: SendCommand
+    /// Settings shows Sound (between `load` and `disappeared`).
+    @ObservationIgnored private var visible = false
 
     init(send: @escaping SendCommand) {
         self.send = send
@@ -70,6 +72,7 @@ final class SoundModel {
 
     /// Settings shows Sound: what the devices are now.
     func load() {
+        visible = true
         send(.audioDevices(ref: Self.devicesID))
     }
 
@@ -88,18 +91,23 @@ final class SoundModel {
         send(.settingSet(.audioInput, id))
     }
 
-    /// Settings goes away: a running test stops (it would keep the mic open until its time is up).
+    /// Settings goes away: a running test stops (it would keep the mic open until its time is up),
+    /// and a refused choice is old news when it comes back.
     func disappeared() {
+        visible = false
+        choiceProblem = nil
         if isTesting {
             send(.audioTestStop(ref: Self.stopID))
         }
     }
 
-    /// A finished test's line is about the mic it ran on; another mic, or other devices, make it stale.
-    private func forgetTestResult() {
-        if case .ended = test {
-            test = .idle
-        }
+    /// A finished test's line is about the mic it ran on; another mic makes it stale, and so do
+    /// other devices, unless it says why the test failed or stopped for a meeting (the devices
+    /// change that follows a mic going mid-test must not hide why it stopped).
+    private func forgetTestResult(keepingWhy: Bool = false) {
+        guard case .ended(let how, _, _) = test else { return }
+        if keepingWhy, how == .failed || how == .meeting { return }
+        test = .idle
     }
 
     var isTesting: Bool {
@@ -131,15 +139,19 @@ final class SoundModel {
             // A test the core never ended (it stopped, or started again) is over.
             test = .idle
             testRefused = nil
+            // A core started again while Settings shows: the devices as it sees them.
+            if case .coreReady = event, visible { load() }
         case .audioDevices(let d):
             devices = Devices(inputs: d.inputs, input: d.input, wantedName: d.wanted?.name, automatic: d.automatic, using: d.using)
             listProblem = nil
         case .audioDevicesChanged(let d):
             devices = Devices(inputs: d.inputs, input: d.input, wantedName: d.wanted?.name, automatic: d.automatic, using: d.using)
-            forgetTestResult()
+            forgetTestResult(keepingWhy: true)
         // Only this screen's test (its ref): a late answer to one stopped earlier never ends the next.
         case .audioTestStarted(let started) where started.ref == Self.testID && isTesting:
             test = .running(mic: started.micName, level: 0)
+            // Settings went while it was opening: its Stop reached the core first and found nothing.
+            if !visible { send(.audioTestStop(ref: Self.stopID)) }
         case .audioTestLevel(let level) where level.ref == Self.testID:
             if case .running(let mic, _) = test {
                 test = .running(mic: mic, level: min(max(level.level, 0), 1))

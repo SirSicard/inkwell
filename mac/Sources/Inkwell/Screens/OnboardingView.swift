@@ -233,7 +233,8 @@ struct OnboardingView: View {
     }
 }
 
-/// The Ready step's orb's height.
+/// The Ready step's orb's height (here, not on FirstRunReadyStep: a generic type holds no static
+/// stored property).
 let readyOrbHeight: CGFloat = 150
 
 /// The Ready step: how to dictate, the try-it with the orb answering the voice (`orb`, the sheet's;

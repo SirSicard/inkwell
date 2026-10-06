@@ -78,6 +78,9 @@ final class SoundModelTests: XCTestCase {
         XCTAssertNotNil(sound.problem, "and still says why")
         sound.choose("odd")
         XCTAssertNil(sound.problem, "until the user picks again")
+        sound.apply(event(#"{"type":"command.failed","command":"setting.set","id":"setting:audio.input","message":"x"}"#))
+        sound.disappeared()
+        XCTAssertNil(sound.problem, "or leaves Settings")
         // A list that failed is said until a list arrives.
         sound.apply(event(#"{"type":"command.failed","command":"audio.devices","id":"sound.devices","message":"the audio service is not answering"}"#))
         XCTAssertEqual(sound.problem, "Couldn't list the microphones: the audio service is not answering")
@@ -183,6 +186,31 @@ final class SoundModelTests: XCTestCase {
         sound.apply(event(#"{"type":"audio.test_started","ref":"sound.test","mic_name":"M","mic_transport":"usb","mic_reason":"chosen","seconds":15}"#))
         sound.apply(devices(type: "audio.devices_changed"))
         XCTAssertTrue(sound.isTesting, "a running test goes on")
+        // The mic went mid-test: the core ends it, then the devices change; why it stopped stays.
+        sound.apply(event(#"{"type":"audio.tested","ref":"sound.test","ended":"failed","heard":true,"peak":0.4,"message":"the microphone M went away"}"#))
+        sound.apply(devices(type: "audio.devices_changed"))
+        XCTAssertEqual(sound.testLine, "The test stopped: the microphone M went away.")
+        sound.choose("pods")
+        XCTAssertEqual(sound.test, .idle, "another mic: gone")
+    }
+
+    /// Settings went while the test was opening: its Stop found nothing, so the start is stopped
+    /// when it arrives. A core started again while Settings shows is asked for the devices.
+    func testATestOpeningAsSettingsGoesIsStoppedAndARestartedCoreIsAskedAgain() {
+        let sent = Sent()
+        let sound = SoundModel(send: sent.send)
+        sound.load()
+        sound.toggleTest()
+        sound.disappeared()
+        sound.apply(event(#"{"type":"command.failed","command":"audio.test_stop","id":"sound.test_stop","message":"no mic test is running"}"#))
+        sent.commands = []
+        sound.apply(event(#"{"type":"audio.test_started","ref":"sound.test","mic_name":"M","mic_transport":"usb","mic_reason":"chosen","seconds":15}"#))
+        XCTAssertEqual(sent.commands, [.audioTestStop(ref: SoundModel.stopID)])
+        sound.apply(event(#"{"type":"core.ready","version":"1.0.0","abi":2}"#))
+        XCTAssertEqual(sent.commands.last, .audioTestStop(ref: SoundModel.stopID), "not shown: not asked")
+        sound.load()
+        sound.apply(event(#"{"type":"core.ready","version":"1.0.0","abi":2}"#))
+        XCTAssertEqual(sent.commands.last, .audioDevices(ref: SoundModel.devicesID))
     }
 
     /// Only this screen's test, by its ref; a test the core never ended is over when the core
