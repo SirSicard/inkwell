@@ -230,6 +230,7 @@ public static class MeetingDrop
 
     private static DropActions AutoStops(bool deletable) =>
         deletable ? new DropActions(new DropAction.StopRecording(), new DropAction.StopAndDelete()) : new DropActions(new DropAction.StopRecording());
+
     /// <summary>"Headset (AirPods Pro) isn't connected. Using Microphone (Realtek)."</summary>
     public static string FallbackLine(MicFallback fallback)
     {

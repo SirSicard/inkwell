@@ -87,10 +87,13 @@ name or a meeting title into this file or a bug: the repository is public.
 
 ## 4. Settings
 
-- [ ] Settings > Meetings: turn "Offer to record calls" off; Today reads "Not listening for
-      meetings" and a call gets no Drop. Turn it on again.
-- [ ] "Use the headset's microphone" on, with Bluetooth headphones: the next meeting's header names
-      the headset's mic. Turn it off again.
+- [ ] Settings > Meetings: set "Calls in other apps" to Never with no app chosen for; Today reads
+      "Not listening for calls" and a call gets no Drop. Set it to Always: a call from an app not
+      chosen for is recorded at once, the Drop says "Recording {app} automatically" with Stop and
+      Stop and delete, and Stop and delete goes after its first minute. Set it back to Ask. In the
+      app list, choose Never for one app: its next call gets no Drop. Set it back to Default.
+- [ ] Settings > Sound, with Bluetooth headphones: choose the headset's mic as the microphone; the
+      next meeting's header names it. Set it back to Automatic.
 - [ ] Settings > Storage > Keep records: choose 30 days on a library that has meetings or
       dictations older than that (or wait): they leave the Library at once, imports stay, and
       Settings > Storage's sizes go down after a relaunch. Set it back to Forever.

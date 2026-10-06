@@ -528,6 +528,35 @@ final class CallPolicyDropTests: XCTestCase {
         XCTAssertEqual(ink.dropText.actions, [.stop])
     }
 
+    /// Sound's mic lines in a call its app's Always recorded: a mic that went is said (in the first
+    /// minute too) until a line comes after it; past the minute, before any line, the stand-in for
+    /// a chosen mic that isn't connected; then the latest line.
+    func testAnAutoCallSaysItsMicLines() {
+        let store = CoreStore()
+        func line(deletable: Bool) -> String {
+            DropText.for(
+                .meeting, dictation: .idle, meeting: store.meeting, offer: nil, systemAudioOff: false,
+                micFallback: store.micFallback, deletable: deletable
+            ).detail
+        }
+        store.apply([
+            event(#"{"type":"audio.input_fallback","wanted":{"id":"pods","name":"AirPods Pro","transport":"bluetooth"},"mic_name":"MacBook Pro Microphone","mic_transport":"built_in"}"#),
+            started(auto: true, deleteUntil: nil),
+        ])
+        XCTAssertEqual(line(deletable: true), DropText.autoReminder("Zoom"), "the first minute: the reminder")
+        XCTAssertEqual(line(deletable: false), "AirPods Pro isn't connected. Using MacBook Pro Microphone.", "past it, before a line: the stand-in")
+
+        store.apply([event(#"{"type":"meeting.mic_switched","record":"r1","from_name":"MacBook Pro Microphone","from_transport":"built_in","mic_name":"Studio Mic","mic_transport":"usb","mic_reason":"default_input"}"#)])
+        let switched = "MacBook Pro Microphone went. Now recording with Studio Mic."
+        XCTAssertEqual(line(deletable: true), switched)
+        XCTAssertEqual(line(deletable: false), switched)
+
+        // A line after the switch: the switch is old news.
+        store.apply([event(#"{"type":"meeting.final","record":"r1","channel":"far","start_ms":0,"end_ms":900,"text":"can you hear me now"}"#)])
+        XCTAssertEqual(line(deletable: true), DropText.autoReminder("Zoom"))
+        XCTAssertEqual(line(deletable: false), "can you hear me now")
+    }
+
     /// A choice from the Drop that failed is said there; a new offer clears it.
     func testADropChoiceThatFailedIsSaidInTheDrop() {
         let sent = Sent()

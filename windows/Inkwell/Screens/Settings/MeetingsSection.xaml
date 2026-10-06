@@ -141,7 +141,7 @@
             <TextBlock Grid.Row="1" Style="{StaticResource FactLabel}" Text="You" />
             <TextBlock Grid.Row="1" Grid.Column="1" Style="{StaticResource FactText}" Text="Your microphone, as &#x201C;Hear you&#x201D; allows." />
             <TextBlock Grid.Row="2" Style="{StaticResource FactLabel}" Text="Them" />
-            <TextBlock Grid.Row="2" Grid.Column="1" Style="{StaticResource FactText}" Text="For a call Inkwell offers or records by itself, the call app's own sound. With Record now, or when Inkwell can't hear the call app alone, everything this PC plays, and Inkwell says so." />
+            <TextBlock Grid.Row="2" Grid.Column="1" Style="{StaticResource FactText}" Text="For a call from an app, its own sound. With Record now, or when Inkwell can't hear the call app alone, everything this PC plays, and Inkwell says so." />
             <TextBlock Grid.Row="3" Style="{StaticResource FactLabel}" Text="Headphones" />
             <TextBlock Grid.Row="3" Grid.Column="1" Style="{StaticResource FactText}" Text="With classic Bluetooth headphones, Automatic records another microphone: a headset microphone carries only call-quality sound. Settings &gt; Sound picks another." />
             <TextBlock Grid.Row="4" Style="{StaticResource FactLabel}" Text="Where" />

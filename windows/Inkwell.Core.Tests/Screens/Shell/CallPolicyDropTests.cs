@@ -415,6 +415,34 @@ public sealed class CallPolicyDropTests
         Assert.Equal(["Stop"], rig.Titles);
     }
 
+    /// <summary>
+    /// Sound's mic lines in a call its app's Always recorded, as the Mac's: a mic that went is said
+    /// (in the first minute too) until a line comes after it; past the minute, before any line, the
+    /// stand-in for a chosen mic that isn't connected; then the latest line.
+    /// </summary>
+    [Fact]
+    public void AnAutoCallSaysItsMicLines()
+    {
+        var store = new CoreStore();
+        string Line(bool deletable) => MeetingDrop.Live(store.Meeting!, DropInk.Meeting, store.MicFallback, deletable).Detail;
+        store.Apply([
+            Ev.Of("""{"type":"audio.input_fallback","wanted":{"id":"hs","name":"Headset (Buds)","transport":"bluetooth"},"mic_name":"Microphone (Realtek Audio)","mic_transport":"built_in"}"""),
+            Ev.Of(Started(auto: true, null)),
+        ]);
+        Assert.Equal(MeetingDrop.AutoReminder("Zoom"), Line(deletable: true)); // the first minute: the reminder
+        Assert.Equal("Headset (Buds) isn't connected. Using Microphone (Realtek Audio).", Line(deletable: false)); // past it, before a line
+
+        store.Apply([Ev.Of("""{"type":"meeting.mic_switched","record":"r1","from_name":"Microphone (Realtek Audio)","from_transport":"built_in","mic_name":"Studio Mic","mic_transport":"usb","mic_reason":"default_input"}""")]);
+        const string Switched = "Microphone (Realtek Audio) went. Now recording with Studio Mic.";
+        Assert.Equal(Switched, Line(deletable: true));
+        Assert.Equal(Switched, Line(deletable: false));
+
+        // A line after the switch: the switch is old news.
+        store.Apply([Ev.Of("""{"type":"meeting.final","record":"r1","channel":"far","start_ms":0,"end_ms":900,"text":"can you hear me now"}""")]);
+        Assert.Equal(MeetingDrop.AutoReminder("Zoom"), Line(deletable: true));
+        Assert.Equal("can you hear me now", Line(deletable: false));
+    }
+
     [Fact]
     public void TheScreensShowTheNewFailures()
     {

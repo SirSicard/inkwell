@@ -1,7 +1,7 @@
 // Settings > Meetings. The call policies are their model's (the default, each app's choice, and a
-// stored list that can't be read, started over only after the user agrees); the headset switch is
-// the meetings model's. A failed read or save is said where it was asked. The models read at
-// core.ready (the aggregator's), so nothing loads here.
+// stored list that can't be read, started over only after the user agrees); the microphone is
+// Settings > Sound's (SoundModel). A failed read or save is said where it was asked. The models
+// read at core.ready (the aggregator's), so nothing loads here.
 using Inkwell.Core.Events;
 using Inkwell.Core.Screens;
 using Microsoft.UI.Xaml;
