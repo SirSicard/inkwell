@@ -280,8 +280,12 @@ enum StatsFormat {
     }
 
     /// The review's numbers: words, time saved when there was some, meetings when there were some.
+    /// A week of meetings alone does not lead with "0 words".
     static func reviewNumbers(_ r: WeekReview, locale: Locale = .current) -> [(String, String)] {
-        var numbers = [(count(r.words, locale: locale), r.words == 1 ? "word" : "words")]
+        var numbers: [(String, String)] = []
+        if r.words > 0 || r.meetings == 0 {
+            numbers.append((count(r.words, locale: locale), r.words == 1 ? "word" : "words"))
+        }
         if let saved = r.savedMs, saved > 0 { numbers.append((LibraryFormat.duration(ms: saved), "saved")) }
         if r.meetings > 0 {
             numbers.append((LibraryFormat.duration(ms: r.meetingMs), r.meetings == 1 ? "in 1 meeting" : "in \(r.meetings) meetings"))

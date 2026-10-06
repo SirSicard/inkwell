@@ -93,6 +93,10 @@ struct StatsSettingsSection: View {
             .accessibilityElement(children: .combine)
         }
         .onAppear { stats.settingsAppeared() }
+        // A pause or resume that failed is read aloud: the line appears away from the focus.
+        .onChange(of: stats.streakChangeFailed) { _, failed in
+            if let failed { AccessibilityNotification.Announcement(Self.streakFailure(failed)).post() }
+        }
         // A pause that is never answered is said, and the button works again: one wait per change.
         .task(id: stats.pendingStreak) {
             guard let ref = stats.pendingStreak else { return }

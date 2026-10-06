@@ -128,7 +128,7 @@ struct WeekReviewCard: View {
             NumberRow(numbers: StatsFormat.reviewNumbers(review, locale: locale))
             ForEach(StatsFormat.reviewLines(review, calendar: calendar), id: \.self) { Line(text: $0) }
             if failed {
-                Line(text: "Couldn't dismiss it. It stays until you try again.", alert: true)
+                Line(text: Self.failedText, alert: true)
             }
         }
         .padding(.horizontal, 22)
@@ -136,7 +136,13 @@ struct WeekReviewCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .paperCard()
         .accessibilityElement(children: .contain)
+        // Read aloud when the dismissal could not be saved: the card the user dismissed is back.
+        .onChange(of: failed, initial: true) { _, failed in
+            if failed { AccessibilityNotification.Announcement(Self.failedText).post() }
+        }
     }
+
+    static let failedText = "Couldn't dismiss it. It stays until you try again."
 }
 
 /// A card's frame: the eyebrow over the content, padded, translucent over the orb.

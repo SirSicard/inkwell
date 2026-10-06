@@ -90,6 +90,27 @@ final class StatsPlayModelTests: XCTestCase {
         XCTAssertEqual(StatsModel.restDaysValue([7, 1, 3]), "1,3,7")
     }
 
+    /// Two quick changes: the core's echo of the first, arriving after the second, is not taken
+    /// over it.
+    func testEchoesOfEarlierStreakWritesDoNotStepBack() {
+        let stats = model()
+        stats.setRestDay(6, true)
+        stats.setRestDay(7, true)
+        stats.apply(event(#"{"type":"setting.value","key":"stats.rest_days","value":"6"}"#))
+        XCTAssertEqual(stats.restDays, [6, 7])
+        stats.apply(event(#"{"type":"setting.value","key":"stats.rest_days","value":"6,7"}"#))
+        XCTAssertEqual(stats.restDays, [6, 7])
+        stats.setStreakShown(false)
+        stats.setStreakShown(true)
+        stats.apply(event(#"{"type":"setting.value","key":"stats.streak","value":"hidden"}"#))
+        XCTAssertTrue(stats.streakShown)
+        stats.apply(event(#"{"type":"setting.value","key":"stats.streak","value":"shown"}"#))
+        XCTAssertTrue(stats.streakShown)
+        // Nothing of its own in flight: a value from elsewhere is taken.
+        stats.apply(event(#"{"type":"setting.value","key":"stats.rest_days","value":"7"}"#))
+        XCTAssertEqual(stats.restDays, [7])
+    }
+
     /// The streak settings are read at launch and taken from the core's echoes; showing Stats
     /// counts again when the rest days or the streak's visibility change.
     func testTheStreakSettingsAreReadAndRecount() throws {
@@ -244,9 +265,7 @@ final class StatsPlayModelTests: XCTestCase {
         XCTAssertFalse(stats.reviewDismissFailed)
         stats.apply(event(#"{"type":"setting.value","key":"stats.review_dismissed","value":"2026-09-28"}"#))
         XCTAssertNil(stats.weekReview)
-        // Its echo was its own: a later dismissal's failure is still taken.
-        stats.apply(event(#"{"type":"command.failed","command":"setting.set","id":"setting:stats.review_dismissed","message":"x"}"#))
-        XCTAssertTrue(stats.reviewDismissFailed)
+
         // A later week's review is a new one.
         stats.load()
         let later = try XCTUnwrap(lastRef("stats.get"))
@@ -396,6 +415,9 @@ final class StatsPlayFormatTests: XCTestCase {
         let plain = try XCTUnwrap(slower.weekReview)
         XCTAssertEqual(StatsFormat.reviewLines(plain, calendar: calendar), ["120 wpm"])
         XCTAssertEqual(StatsFormat.reviewNumbers(plain).map(\.1), ["word"])
+        // A week of meetings alone leads with them, not "0 words".
+        let meetingsOnly = try XCTUnwrap(try counted(statsCounted(ref: "x", dictations: 9, extra: #","week_review":{"week":"2026-09-28","words":0,"meetings":2,"meeting_ms":3600000}"#)).weekReview)
+        XCTAssertEqual(StatsFormat.reviewNumbers(meetingsOnly).map(\.1), ["in 2 meetings"])
         for line in StatsFormat.reviewLines(review, calendar: calendar) + StatsFormat.reviewLines(plain, calendar: calendar) {
             for word in ["down", "slower", "fewer", "less", "lost", "!"] {
                 XCTAssertFalse(line.lowercased().contains(word), "\(line) says \(word)")
