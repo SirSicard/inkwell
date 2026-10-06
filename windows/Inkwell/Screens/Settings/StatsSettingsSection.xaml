@@ -130,7 +130,8 @@
             <StackPanel Grid.Column="1" Spacing="4">
                 <Button x:Name="PauseButton" Click="OnPauseClicked" />
                 <TextBlock x:Name="PauseCaption" AutomationProperties.AccessibilityView="Raw" Style="{StaticResource InkCaptionStyle}" />
-                <TextBlock x:Name="PauseFailure" Style="{StaticResource InkAlertTextStyle}" Visibility="Collapsed" />
+                <!-- A live region: Narrator reads a failed pause where it appears. -->
+                <TextBlock x:Name="PauseFailure" AutomationProperties.LiveSetting="Polite" Style="{StaticResource InkAlertTextStyle}" />
             </StackPanel>
         </Grid>
         <TextBlock

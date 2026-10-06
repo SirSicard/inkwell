@@ -27,19 +27,20 @@ public class StatsPlayTests
 
     private sealed class Wakes : IWakeScheduler
     {
-        public List<(TimeSpan Delay, Action Wake)> Scheduled { get; } = [];
+        public List<(TimeSpan Delay, Action Wake, Handle Handle)> Scheduled { get; } = [];
 
         public IDisposable After(TimeSpan delay, Action wake)
         {
-            Scheduled.Add((delay, wake));
-            return new Handle();
+            var handle = new Handle();
+            Scheduled.Add((delay, wake, handle));
+            return handle;
         }
 
-        private sealed class Handle : IDisposable
+        public sealed class Handle : IDisposable
         {
-            public void Dispose()
-            {
-            }
+            public bool Disposed { get; private set; }
+
+            public void Dispose() => Disposed = true;
         }
     }
 
@@ -97,6 +98,28 @@ public class StatsPlayTests
         Assert.Equal("1,3,7", StatsModel.RestDaysValue([7, 1, 3]));
     }
 
+    /// <summary>Two quick changes: the core's echo of the first, arriving after the second, is not taken over it.</summary>
+    [Fact]
+    public void EchoesOfEarlierStreakWritesDoNotStepBack()
+    {
+        var rig = new Rig();
+        rig.Stats.SetRestDay(6, true);
+        rig.Stats.SetRestDay(7, true);
+        rig.Stats.Apply(Ev.Of("""{"type":"setting.value","key":"stats.rest_days","value":"6"}"""));
+        Assert.Equal([6, 7], rig.Stats.RestDays.Order());
+        rig.Stats.Apply(Ev.Of("""{"type":"setting.value","key":"stats.rest_days","value":"6,7"}"""));
+        Assert.Equal([6, 7], rig.Stats.RestDays.Order());
+        rig.Stats.SetStreakShown(false);
+        rig.Stats.SetStreakShown(true);
+        rig.Stats.Apply(Ev.Of("""{"type":"setting.value","key":"stats.streak","value":"hidden"}"""));
+        Assert.True(rig.Stats.StreakShown);
+        rig.Stats.Apply(Ev.Of("""{"type":"setting.value","key":"stats.streak","value":"shown"}"""));
+        Assert.True(rig.Stats.StreakShown);
+        // Nothing of its own in flight: a value from elsewhere is taken.
+        rig.Stats.Apply(Ev.Of("""{"type":"setting.value","key":"stats.rest_days","value":"7"}"""));
+        Assert.Equal([7], rig.Stats.RestDays);
+    }
+
     /// <summary>The streak settings are read from the core's echoes; showing Stats counts again when they change what is counted.</summary>
     [Fact]
     public void TheStreakSettingsAreReadAndRecount()
@@ -145,14 +168,19 @@ public class StatsPlayTests
         rig.Stats.ResumeStreak();
         Assert.Single(rig.Sent.Commands); // one change at a time
 
+        var limit = rig.Wakes.Scheduled[^1].Handle;
+        Assert.False(limit.Disposed);
         rig.Stats.Apply(Ev.Of(StatsModelTests.Counted(reference, dictations: 3, dictationExtra: ""","streak_paused_since":"2026-10-03" """)));
         Assert.Null(rig.Stats.StreakChanging);
         Assert.Equal("2026-10-03", rig.Stats.Counted?.Dictation.StreakPausedSince);
+        Assert.True(limit.Disposed); // answered: its limit is let go
 
         rig.Stats.ResumeStreak();
         var failed = Ev.Of<CommandFailed>($$"""{"type":"command.failed","command":"streak.resume","id":"{{rig.LastRef("streak.resume")}}","message":"x"}""");
         Assert.True(StatsModel.Handles(failed));
+        var resumeLimit = rig.Wakes.Scheduled[^1].Handle;
         rig.Stats.Apply(failed);
+        Assert.True(resumeLimit.Disposed); // failed: its limit is let go too
         Assert.Null(rig.Stats.StreakChanging);
         Assert.Equal(StatsModel.StreakChange.Resuming, rig.Stats.StreakChangeFailed);
         Assert.Equal("2026-10-03", rig.Stats.Counted?.Dictation.StreakPausedSince); // still paused
@@ -368,6 +396,9 @@ public class StatsPlayTests
             StatsFormat.ReviewLines(review, Gb));
         var plain = Counted(StatsModelTests.Counted("x", dictations: 9, extra: ""","week_review":{"week":"2026-09-28","words":1,"wpm":120,"meetings":0,"meeting_ms":0}""")).WeekReview!;
         Assert.Equal(["120 wpm"], StatsFormat.ReviewLines(plain, Gb));
+        // A week of meetings alone leads with them, not "0 words".
+        var meetingsOnly = Counted(StatsModelTests.Counted("x", dictations: 9, extra: ""","week_review":{"week":"2026-09-28","words":0,"meetings":2,"meeting_ms":3600000}""")).WeekReview!;
+        Assert.Equal(["in 2 meetings"], StatsFormat.ReviewNumbers(meetingsOnly, Gb).Select(n => n.Label));
         Assert.Equal(["word"], StatsFormat.ReviewNumbers(plain, Gb).Select(n => n.Label));
         foreach (var line in StatsFormat.ReviewLines(review, Gb).Concat(StatsFormat.ReviewLines(plain, Gb)))
         {
@@ -405,7 +436,6 @@ public class StatsPlayTests
         var us = CultureInfo.GetCultureInfo("en-US");
         Assert.Equal([7, 1, 2, 3, 4, 5, 6], StatsFormat.Weekdays(us).Select(w => w.Iso));
         Assert.Equal("Sun", StatsFormat.Weekdays(us)[0].Abbreviated);
-        Assert.Equal("Saturday, rest day", StatsModel.RestDaySpoken(StatsFormat.Weekdays(Gb)[5], rest: true));
     }
 
     [Fact]
@@ -503,12 +533,40 @@ public class StatsPlayTests
             Assert.True(n * cw + (n - 1) * 24 <= w + 0.5, $"{w}");
             Assert.True(n == 1 || cw >= 150, $"{w}");
         }
-        // The review's numbers and the heatmap's 12 weeks of 12 + 3 fit the same width.
-        Assert.True(12 * 15 <= narrow);
-        // The rest days wrap in the narrowest Settings column, each button whole.
-        var buttons = Enumerable.Repeat((44.0, 32.0), 7).ToList();
+        // The heatmap's 12 weeks of 12-epx days, 3 apart, fit the same width.
+        Assert.True(12 * 12 + 11 * 3 <= narrow);
+        // The rest days wrap in a narrow Settings column, each button whole: a three-letter day
+        // in 14-epx text is under 36 epx, with 12 epx of padding each side and a 1-epx border.
+        var buttons = Enumerable.Repeat((36.0 + 24 + 2, 32.0), 7).ToList();
         var (places, wrapped, _) = WrapLayout.Place(buttons, 186, 6, 6);
         Assert.True(wrapped <= 186);
         Assert.Equal(7, places.Count);
+    }
+
+    /// <summary>
+    /// StatsLayout's measures are the views' own: the navigation pane's open length, the Stats
+    /// page's padding and widest, and the card's padding. A change to one there fails this until
+    /// StatsLayout (and so the 720 check above) follows it.
+    /// </summary>
+    [Fact]
+    public void TheMeasuresAreTheViews()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, "windows", "Inkwell", "MainWindow.xaml")))
+        {
+            dir = dir.Parent;
+        }
+        Assert.NotNull(dir);
+        string Read(params string[] path) => File.ReadAllText(Path.Combine([dir.FullName, "windows", "Inkwell", .. path]));
+        var inv = CultureInfo.InvariantCulture;
+        Assert.Contains($"OpenPaneLength=\"{StatsLayout.NavigationPane.ToString(inv)}\"", Read("MainWindow.xaml"), StringComparison.Ordinal);
+        var page = Read("Screens", "Stats", "StatsScreen.xaml");
+        Assert.Contains($"MaxWidth=\"{StatsLayout.PageWidth.ToString(inv)}\"", page, StringComparison.Ordinal);
+        Assert.Contains($"Padding=\"{StatsLayout.PagePadding.ToString(inv)},34,{StatsLayout.PagePadding.ToString(inv)},28\"", page, StringComparison.Ordinal);
+        var app = Read("App.xaml");
+        var card = app[app.IndexOf("x:Key=\"InkCardStyle\"", StringComparison.Ordinal)..];
+        card = card[..card.IndexOf("</Style>", StringComparison.Ordinal)];
+        Assert.Contains($"Property=\"Padding\" Value=\"{StatsLayout.CardPadding.ToString(inv)},18\"", card, StringComparison.Ordinal);
+        Assert.Contains($"Property=\"BorderThickness\" Value=\"{StatsLayout.CardBorder.ToString(inv)}\"", card, StringComparison.Ordinal);
     }
 }

@@ -18,21 +18,32 @@ public sealed partial class EvenColumnsPanel : Panel
     /// <summary>Between rows.</summary>
     public double RowSpacing { get; set; } = StatsLayout.RecordRowSpacing;
 
+    /// <summary>The columns the children were measured in, which arrange keeps when its width allows.</summary>
+    private (int Count, double Width) measured = (1, 0);
+
     protected override Size MeasureOverride(Size availableSize)
     {
         var (count, width) = StatsLayout.Columns(availableSize.Width, MinColumnWidth, Spacing, Children.Count);
+        measured = (count, width);
         foreach (var child in Children)
         {
             child.Measure(new Size(width, double.PositiveInfinity));
         }
-        var height = Rows(count).Sum() + RowSpacing * Math.Max(0, Rows(count).Count - 1);
+        var rows = Rows(count);
+        var height = rows.Sum() + RowSpacing * Math.Max(0, rows.Count - 1);
         var total = double.IsInfinity(availableSize.Width) ? width * count + Spacing * (count - 1) : availableSize.Width;
         return new Size(Math.Max(0, total), height);
     }
 
     protected override Size ArrangeOverride(Size finalSize)
     {
-        var (count, width) = StatsLayout.Columns(finalSize.Width, MinColumnWidth, Spacing, Children.Count);
+        // The columns the children were measured in (their heights are for those widths), unless
+        // the final width cannot hold them (measured without a width): then the final width's.
+        var (count, width) = measured;
+        if (count * width + (count - 1) * Spacing > finalSize.Width + 0.5)
+        {
+            (count, width) = StatsLayout.Columns(finalSize.Width, MinColumnWidth, Spacing, Children.Count);
+        }
         var rows = Rows(count);
         var y = 0.0;
         for (var row = 0; row < rows.Count; row++)

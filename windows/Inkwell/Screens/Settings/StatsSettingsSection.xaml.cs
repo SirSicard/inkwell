@@ -4,6 +4,7 @@
 using Inkwell.Core.Screens;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
+using Microsoft.UI.Xaml.Automation.Peers;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
 
@@ -43,13 +44,22 @@ public sealed partial class StatsSettingsSection : UserControl
         var known = Model.Counted is not null;
         PauseButton.Content = paused is null ? "Pause" : "Resume";
         AutomationProperties.SetName(PauseButton, paused is null ? "Pause the streak" : "Resume the streak");
-        PauseButton.IsEnabled = known && Model.StreakChanging is null;
+        // Enabled while a change is in flight (the model ignores a second), so the keyboard's focus
+        // stays on it.
+        PauseButton.IsEnabled = known;
         PauseCaption.Text = known
             ? StatsModel.PauseCaption(paused, Model.Culture)
             : StatsModel.PauseUnknown(Model.LoadState == StatsModel.Load.Failed);
         AutomationProperties.SetHelpText(PauseButton, PauseCaption.Text);
-        PauseFailure.Text = Model.StreakChangeFailed is { } failed ? StatsModel.StreakFailure(failed) : "";
-        PauseFailure.Visibility = Model.StreakChangeFailed is null ? Visibility.Collapsed : Visibility.Visible;
+        var failure = Model.StreakChangeFailed is { } failed ? StatsModel.StreakFailure(failed) : "";
+        if (PauseFailure.Text != failure)
+        {
+            PauseFailure.Text = failure;
+            if (failure.Length > 0 && FrameworkElementAutomationPeer.FromElement(PauseFailure) is { } peer)
+            {
+                peer.RaiseAutomationEvent(AutomationEvents.LiveRegionChanged);
+            }
+        }
     }
 
     /// <summary>
@@ -71,11 +81,16 @@ public sealed partial class StatsSettingsSection : UserControl
         }
         foreach (var button in RestDays.Children.OfType<ToggleButton>())
         {
-            var day = (StatsFormat.Weekday)button.Tag;
+            if (button.Tag is not StatsFormat.Weekday day)
+            {
+                continue;
+            }
             var rest = Model.RestDays.Contains(day.Iso);
             button.IsChecked = rest;
             button.IsEnabled = rest || Model.RestDays.Count < 6;
-            AutomationProperties.SetName(button, StatsModel.RestDaySpoken(day, rest));
+            // The name is the day; the toggle pattern says whether it is pressed.
+            AutomationProperties.SetName(button, day.Name);
+            AutomationProperties.SetHelpText(button, button.IsEnabled ? StatsModel.RestDaysDetail : StatsModel.LastRestDayHelp);
             ToolTipService.SetToolTip(button, button.IsEnabled ? day.Name : StatsModel.LastRestDayHelp);
         }
     }

@@ -296,11 +296,18 @@ public static class StatsFormat
         return $"Week of {ShortDate(r.Week, culture)}";
     }
 
-    /// <summary>The review's numbers: words, time saved when there was some, meetings when there were some.</summary>
+    /// <summary>
+    /// The review's numbers: words, time saved when there was some, meetings when there were some.
+    /// A week of meetings alone does not lead with "0 words".
+    /// </summary>
     public static IReadOnlyList<(string Value, string Label)> ReviewNumbers(WeekReview r, CultureInfo? culture = null)
     {
         ArgumentNullException.ThrowIfNull(r);
-        var numbers = new List<(string, string)> { (Count(r.Words, culture), r.Words == 1 ? "word" : "words") };
+        var numbers = new List<(string, string)>();
+        if (r.Words > 0 || r.Meetings == 0)
+        {
+            numbers.Add((Count(r.Words, culture), r.Words == 1 ? "word" : "words"));
+        }
         if (r.SavedMs is > 0 and var saved)
         {
             numbers.Add((LibraryFormat.Duration(saved), "saved"));

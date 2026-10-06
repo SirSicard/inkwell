@@ -108,12 +108,6 @@ public sealed class StatsModel : ObservableModel
     public static string StreakFailure(StreakChange change) =>
         change == StreakChange.Pausing ? "Couldn't pause the streak. Try again." : "Couldn't resume the streak. Try again.";
 
-    /// <summary>What a rest-day toggle says to Narrator: <c>Saturday, rest day</c>.</summary>
-    public static string RestDaySpoken(StatsFormat.Weekday day, bool rest)
-    {
-        ArgumentNullException.ThrowIfNull(day);
-        return $"{day.Name}, {(rest ? "rest day" : "counts")}";
-    }
 
     /// <summary>The typing speed as Narrator reads it.</summary>
     public static string TypingSpoken(int wpm) => $"{wpm} words per minute";

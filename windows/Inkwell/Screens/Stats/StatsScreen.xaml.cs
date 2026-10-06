@@ -93,6 +93,10 @@ public sealed partial class StatsScreen : UserControl
         }
     }
 
+    /// <summary>The review's Dismiss button as last built, and whether focus goes to it (or on) after a rebuild.</summary>
+    private Button? reviewDismiss;
+    private bool focusAfterDismiss;
+
     private void Render()
     {
         var counted = stats.Counted;
@@ -103,6 +107,7 @@ public sealed partial class StatsScreen : UserControl
         LoadingRing.IsActive = counted is null && !failed;
         LoadingRing.Visibility = Shown(counted is null && !failed);
         Cards.Children.Clear();
+        reviewDismiss = null;
         if (counted is null)
         {
             return;
@@ -116,6 +121,33 @@ public sealed partial class StatsScreen : UserControl
         Cards.Children.Add(PromisesCard(counted));
         Cards.Children.Add(RecordsCard(StatsFormat.Records(counted.Bests, stats.Culture)));
         Cards.Children.Add(MilestonesCard(counted.Milestones));
+        RestoreFocus();
+    }
+
+    /// <summary>
+    /// After Dismiss: with the card gone, focus goes to the Share card button; with it back because
+    /// the dismissal could not be saved, to its Dismiss again, and the failure is read aloud.
+    /// </summary>
+    private void RestoreFocus()
+    {
+        if (!focusAfterDismiss)
+        {
+            return;
+        }
+        if (reviewDismiss is { } dismiss && stats.ReviewDismissFailed)
+        {
+            focusAfterDismiss = false;
+            dismiss.Focus(FocusState.Programmatic);
+            if ((FrameworkElementAutomationPeer.FromElement(dismiss) ?? FrameworkElementAutomationPeer.CreatePeerForElement(dismiss)) is { } peer)
+            {
+                peer.RaiseNotificationEvent(AutomationNotificationKind.ActionAborted, AutomationNotificationProcessing.ImportantMostRecent, StatsModel.ReviewDismissFailedText, "stats-review");
+            }
+        }
+        else if (reviewDismiss is null)
+        {
+            // Kept for a failure that may still come back, until the next dismissal.
+            ShareButton.Focus(FocusState.Programmatic);
+        }
     }
 
     private static Visibility Shown(bool shown) => shown ? Visibility.Visible : Visibility.Collapsed;
@@ -149,7 +181,13 @@ public sealed partial class StatsScreen : UserControl
         var dismiss = new Button { Content = "Dismiss", VerticalAlignment = VerticalAlignment.Top };
         AutomationProperties.SetName(dismiss, "Dismiss last week's review");
         AutomationProperties.SetHelpText(dismiss, "It doesn't come back for this week");
-        dismiss.Click += (_, _) => stats.DismissReview(review);
+        dismiss.Click += (_, _) =>
+        {
+            // The cards are built again: focus goes where the user can carry on (RestoreFocus).
+            focusAfterDismiss = true;
+            stats.DismissReview(review);
+        };
+        reviewDismiss = dismiss;
         var top = new Grid { ColumnSpacing = 12 };
         top.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         top.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -165,7 +203,9 @@ public sealed partial class StatsScreen : UserControl
         }
         if (stats.ReviewDismissFailed)
         {
-            body.Children.Add(Parts.Text(StatsModel.ReviewDismissFailedText, "InkAlertTextStyle"));
+            var failure = Parts.Text(StatsModel.ReviewDismissFailedText, "InkAlertTextStyle");
+            AutomationProperties.SetLiveSetting(failure, AutomationLiveSetting.Polite);
+            body.Children.Add(failure);
         }
         return new Border { Style = (Style)Application.Current.Resources["InkCardStyle"], Child = body };
     }
