@@ -204,14 +204,14 @@ internal sealed class StatsShareDialog
         heatmapBox.Unchecked += (_, _) => Extra(() => stats.SetShareHeatmap(false));
         ticks.Children.Add(heatmapBox);
         ticks.Children.Add(new TextBlock { Text = HeatmapNote, Style = Parts.TextStyle("InkCaptionStyle"), Margin = new Thickness(28, -6, 0, 0) });
-        var available = ShareSeal.Available(counted);
-        if (available.Count > 0)
+        var reached = ShareSeal.Available(counted);
+        if (reached.Count > 0)
         {
             var heading = new TextBlock { Text = "Seals", Style = Parts.TextStyle("InkCaptionStyle"), Margin = new Thickness(0, 4, 0, 0) };
             AutomationProperties.SetHeadingLevel(heading, AutomationHeadingLevel.Level2);
             ticks.Children.Add(heading);
             var row = new WrapPanel { Spacing = 6, RowSpacing = 6 };
-            foreach (var seal in available)
+            foreach (var seal in reached)
             {
                 var toggle = new ToggleButton
                 {
@@ -223,7 +223,7 @@ internal sealed class StatsShareDialog
                 AutomationProperties.SetName(toggle, $"Seal: {seal.Name}");
                 toggle.Click += (_, _) =>
                 {
-                    var ticked = seals ?? [.. available.Select(s => s.Id)];
+                    var ticked = seals ?? [.. reached.Select(s => s.Id)];
                     if (toggle.IsChecked == true)
                     {
                         ticked.Add(seal.Id);
