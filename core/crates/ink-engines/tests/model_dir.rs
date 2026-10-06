@@ -93,3 +93,32 @@ fn a_link_inside_a_row_is_removed_never_followed() {
     assert!(!dir.root().join(&r.id).exists());
     assert!(outside.join("keep.txt").exists());
 }
+
+/// A junction (which Windows lets any user make, unlike a symbolic link) in place of the row's
+/// directory, pointing outside the root: refused, and nothing it points to is deleted.
+#[cfg(windows)]
+#[test]
+fn removing_a_row_whose_directory_is_a_junction_deletes_nothing() {
+    let s = Scratch::new("remove-junction");
+    let dir = s.model_dir();
+    let r = row("synthetic-asr", &[(Job::DictationFinal, 5.0)]);
+    let outside = s.path().join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(outside.join("keep.txt"), b"keep").unwrap();
+    std::fs::create_dir_all(dir.root()).unwrap();
+    let link = dir.root().join(&r.id);
+    let made = std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(&link)
+        .arg(&outside)
+        .output()
+        .unwrap();
+    assert!(made.status.success(), "mklink /J failed: {made:?}");
+
+    assert!(dir.remove_row(&r).is_err());
+    assert!(
+        outside.join("keep.txt").exists(),
+        "nothing outside the root is deleted"
+    );
+    assert!(link.exists(), "the junction itself is left for the user");
+}
