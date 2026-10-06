@@ -1,16 +1,18 @@
 // The first run's models step as choices by outcome, not by model: what Inkwell can do with each,
 // what it adds in the user's terms, then each model it takes on a line of its own (name, licence,
 // size and host, the Mac's words), and one Download whose title carries the total of what is chosen. The first choice is the recommended set and is
-// always taken; the other two stay off until ticked. Nothing downloads until Download is pressed,
-// and the downloads are the CatalogueModel's (they go on after the sheet). Settings > Models keeps
-// a row and a Download per model.
+// always taken; the others stay off until ticked, this PC's own language model (polish, voice edit
+// and summaries without a key) among them. Nothing downloads until Download is pressed, and the
+// downloads are the CatalogueModel's (they go on after the sheet). The free space on the models'
+// volume shows under Download. Settings > Models keeps a row and a Download per model.
 using System.Collections.Immutable;
 using Inkwell.Core.Events;
 
 namespace Inkwell.Core.Screens;
 
 /// <summary>One outcome the models step offers, and the catalogue's models it takes.</summary>
-public sealed record ModelChoice(string Id, string Title, ImmutableArray<string> ModelIds, bool Required);
+/// <param name="Kind">Takes the catalogue's models of this kind instead of <paramref name="ModelIds"/> (the language model: one, whichever the core lists).</param>
+public sealed record ModelChoice(string Id, string Title, ImmutableArray<string> ModelIds, bool Required, ModelKind? Kind = null);
 
 /// <summary>Which optional choices are ticked. UI thread only, like every screen model.</summary>
 public sealed class ModelChoices : ObservableModel
@@ -27,7 +29,10 @@ public sealed class ModelChoices : ObservableModel
     /// <summary>The diarizer: who said what on the far end.</summary>
     public static ModelChoice Speakers { get; } = new("speakers", "Tell the people on the call apart", [DiarizerId], Required: false);
 
-    public static ImmutableArray<ModelChoice> All { get; } = [Speech, Accuracy, Speakers];
+    /// <summary>This PC's own language model: polish, voice edit and summaries with the words staying here. Unticked until the user ticks it.</summary>
+    public static ModelChoice OnThisPc { get; } = new("on-this-pc", "Polish, edit and summaries on this PC", [], Required: false, Kind: ModelKind.Language);
+
+    public static ImmutableArray<ModelChoice> All { get; } = [Speech, Accuracy, Speakers, OnThisPc];
 
     /// <summary>Under the Download button while it shows.</summary>
     public const string NothingUntilPressed = "Nothing downloads until you press Download.";
@@ -75,7 +80,7 @@ public sealed class ModelChoices : ObservableModel
         ArgumentNullException.ThrowIfNull(choice);
         return Rows(choice, catalogue)
             .OrderBy(r => r.Entry.SizeBytes)
-            .Select(r => $"{r.Name} · {r.Entry.Licence} · {StorageModel.Size(r.Entry.SizeBytes, format)} · from {CatalogueModel.Source(r.Id)}")
+            .Select(r => r.Line(format))
             .ToList();
     }
 
@@ -89,6 +94,10 @@ public sealed class ModelChoices : ObservableModel
         if (choice == Accuracy)
         {
             return "About a third fewer wrong words in dictation and meetings, and it gives meetings their final pass.";
+        }
+        if (choice == OnThisPc)
+        {
+            return "A language model of this PC's own, with no key or account: your words stay on this PC. Each feature asks before it is turned on.";
         }
         return choice == Speakers ? "Speaker 1, Speaker 2 instead of \u201CThem\u201D." : null;
     }
@@ -122,7 +131,7 @@ public sealed class ModelChoices : ObservableModel
             return "Installed";
         }
         var rows = Rows(choice, catalogue);
-        if (rows.FirstOrDefault(r => r.Download is ModelDownload.Failed) is { } failed)
+        if (rows.FirstOrDefault(r => r.CanRetry) is { } failed)
         {
             return failed.Status(format);
         }
@@ -152,11 +161,18 @@ public sealed class ModelChoices : ObservableModel
         return models.Count == 0 ? null : $"Download {StorageModel.Size(models.Sum(m => m.SizeBytes), format)}";
     }
 
+    /// <summary>Under Download: the free space on the volume models go on ("47.2 GB free on C:"); null while it is not known.</summary>
+    public static string? FreeSpaceLine(CatalogueModel catalogue, IFormatProvider? format = null)
+    {
+        ArgumentNullException.ThrowIfNull(catalogue);
+        return catalogue.FreeSpaceText(format);
+    }
+
     /// <summary>The Download button for screen readers: which models, how much in all, from where.</summary>
     public string DownloadName(CatalogueModel catalogue, IFormatProvider? format = null)
     {
         var models = ToDownload(catalogue);
-        return $"Download {And(models.Select(m => CatalogueModel.Name(m.Id)))}: {StorageModel.Size(models.Sum(m => m.SizeBytes), format)} in all, from {And(models.Select(m => CatalogueModel.Source(m.Id)).Distinct())}";
+        return $"Download {And(models.Select(m => CatalogueModel.Name(m)))}: {StorageModel.Size(models.Sum(m => m.SizeBytes), format)} in all, from {And(models.Select(m => CatalogueModel.Source(m.Id)).Distinct())}";
     }
 
     /// <summary>Downloads what is chosen, smallest first (the step's Download).</summary>
@@ -170,13 +186,18 @@ public sealed class ModelChoices : ObservableModel
     private static bool Taken(ModelChoice choice, CatalogueModel catalogue)
     {
         var rows = Rows(choice, catalogue);
-        return rows.Count > 0 && rows.All(r => r.Installed || r.Download is not null and not ModelDownload.Failed);
+        // A failed, refused or cancelled download is not taken: its box can be unticked.
+        return rows.Count > 0 && rows.All(r => r.Installed || r.Download is ModelDownload.Waiting or ModelDownload.Running);
     }
 
     private static List<ModelRow> Rows(ModelChoice choice, CatalogueModel catalogue)
     {
         ArgumentNullException.ThrowIfNull(catalogue);
         var rows = catalogue.Rows;
+        if (choice.Kind is ModelKind kind)
+        {
+            return rows.Where(r => r.Entry.Kind == kind).ToList();
+        }
         return choice.ModelIds.Select(id => rows.FirstOrDefault(r => r.Id == id)).OfType<ModelRow>().ToList();
     }
 

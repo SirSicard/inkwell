@@ -347,8 +347,43 @@ public sealed class OnboardingModel : ObservableModel
 
     public const string PolishToggle = "Polish my words";
 
-    /// <summary>The own-key provider the Polish step offers while this PC has no language model: Groq, for its free tier.</summary>
+    /// <summary>The own-key provider the Polish step offers: Groq, for its free tier (the alternative once this PC's model is offered).</summary>
     public const string OwnKeyProvider = "groq";
+
+    /// <summary>The own key's disclosure while this PC's model is offered above it: the alternative.</summary>
+    public const string OwnKeyAlternativeTitle = "Or use Groq's free model";
+
+    /// <summary>
+    /// The Polish step's line about this PC's own model, once it is ticked in Models, downloading
+    /// or in: what the switch above uses, or when it can. Null when the user did not take it (the
+    /// step then offers Groq's free key alone).
+    /// </summary>
+    public static string? PolishLocalLine(CatalogueModel catalogue, CloudModel cloud, ModelChoices choices, IFormatProvider? format = null)
+    {
+        ArgumentNullException.ThrowIfNull(catalogue);
+        ArgumentNullException.ThrowIfNull(cloud);
+        ArgumentNullException.ThrowIfNull(choices);
+        if (catalogue.LanguageRow is not ModelRow row)
+        {
+            return null;
+        }
+        if (row.Installed)
+        {
+            return cloud.Chosen is string chosen && chosen != CloudModel.OnDeviceId
+                ? $"{row.Name} is on this PC, but {CloudModel.ProviderName(chosen)} is chosen. Settings > AI can switch polish to this PC's model."
+                : $"{row.Name} is on this PC: turn polish on above, and your words stay on this PC.";
+        }
+        return row.Download switch
+        {
+            ModelDownload.Waiting or ModelDownload.Running =>
+                $"{row.Name} is downloading ({row.Status(format)}). Once it is in, polish can use it and your words stay on this PC: turn it on here, or later in Settings > AI.",
+            ModelDownload.Failed or ModelDownload.NoSpace =>
+                $"{row.Name} didn't download: {row.Status(format)}. Settings > Models can try again.",
+            _ when choices.IsTicked(ModelChoices.OnThisPc, catalogue) =>
+                $"{row.Name} is ticked in Models, but nothing downloads until you press Download there.",
+            _ => null,
+        };
+    }
 
     /// <summary>
     /// The Polish step's own key: one choice, Groq's free model, behind this disclosure, with how

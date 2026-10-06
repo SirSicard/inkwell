@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Settings > AI (the Mac's AISection): first the language model (Windows only: an own-key
-     provider, its key, its model, Use and Test), then the three features that send words to a
+<!-- Settings > AI (the Mac's AISection): first the language model (Windows only: this PC's own
+     model, with its download, Use and Try it; or an own-key provider, its key, its model, Use and
+     Test), then the three features that send words to a
      language model, each a switch with its line under it (seal red for a failure or a pause), and
      what each sends. Turning one on shows its consent step; nothing is sent until the user agrees
      there. -->
@@ -34,9 +35,9 @@
                     HorizontalContentAlignment="Stretch" />
             </StackPanel>
         </Grid>
-        <TextBlock
-            Style="{StaticResource InkCaptionStyle}"
-            Text="This PC has no language model of its own, so polish, voice edit, summaries and Ask use one you bring: pick a provider, paste your API key (kept in Windows Credential Manager, never in Inkwell's files), choose a model and press Use. Test sends the provider your key and one short fixed question, never your words. Nothing else is sent until you turn a feature on below and allow it." />
+        <!-- What this PC has of its own (LocalLlmModel.Caption): it says "no language model of its
+             own" only while the core offers none. -->
+        <TextBlock x:Name="LanguageModelCaption" Style="{StaticResource InkCaptionStyle}" />
 
         <!-- Local only (llm.local_only): on, no model off this PC is called, whatever is chosen. -->
         <Grid Margin="0,6,0,0" ColumnSpacing="12">

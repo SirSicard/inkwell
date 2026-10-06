@@ -2,7 +2,10 @@
 // is sent once, on Save key, and cleared at once: it is never kept or shown), the model, Use and
 // Test. The pickers show what the core holds; a change is sent, and the core's answer is what
 // shows. In the first run (firstRun: polish) Use asks polish's consent before it chooses
-// (PolishModel.UseOwnKey), so local-only mode goes off only with the user's agreement.
+// (PolishModel.UseOwnKey), so local-only mode goes off only with the user's agreement, and only the
+// own-key providers are offered (the Polish step offers this PC's model itself). In Settings
+// (local) the picker holds this PC's own model too: its download's rows, then Use, which chooses
+// it and asks polish's one tap (LocalLlmModel), and Try it (llm.test, timed).
 using Inkwell.Core.Screens;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
@@ -14,25 +17,41 @@ public sealed partial class LanguageModelRows : UserControl
 {
     private readonly CloudModel cloud;
     private readonly PolishModel? firstRun;
+    private readonly LocalLlmModel? local;
     /// <summary>The provider ids behind the picker's items, in order (the first is none).</summary>
     private readonly List<string?> providerTokens = [];
     private bool rendering;
 
     /// <param name="firstRun">The first run's polish, whose consent Use asks first; null in Settings.</param>
-    public LanguageModelRows(CloudModel cloud, PolishModel? firstRun = null)
+    /// <param name="local">This PC's own model, offered in the picker (Settings); null: own-key providers only.</param>
+    public LanguageModelRows(CloudModel cloud, PolishModel? firstRun = null, LocalLlmModel? local = null)
     {
         ArgumentNullException.ThrowIfNull(cloud);
         this.cloud = cloud;
         this.firstRun = firstRun;
+        this.local = firstRun is null ? local : null;
         InitializeComponent();
         ModelBox.RegisterPropertyChangedCallback(ComboBox.TextProperty, (_, _) => OnModelTyped());
         Loaded += (_, _) =>
         {
             cloud.PropertyChanged -= OnChanged;
             cloud.PropertyChanged += OnChanged;
+            if (this.local is not null)
+            {
+                // Its download's progress and the catalogue's answers.
+                this.local.PropertyChanged -= OnChanged;
+                this.local.PropertyChanged += OnChanged;
+            }
             Render();
         };
-        Unloaded += (_, _) => cloud.PropertyChanged -= OnChanged;
+        Unloaded += (_, _) =>
+        {
+            cloud.PropertyChanged -= OnChanged;
+            if (this.local is not null)
+            {
+                this.local.PropertyChanged -= OnChanged;
+            }
+        };
         Render();
     }
 
@@ -50,7 +69,11 @@ public sealed partial class LanguageModelRows : UserControl
         try
         {
             var items = new List<(string? Id, string Name)> { (null, "None: nothing leaves this PC") };
-            items.AddRange(cloud.Providers.Select(p => ((string?)p.Id, p.Name)));
+            if (local is { Offered: true })
+            {
+                items.Add((CloudModel.OnDeviceId, $"On this PC: {local.Name}"));
+            }
+            items.AddRange(cloud.OwnKeyProviders.Select(p => ((string?)p.Id, p.Name)));
             if (!providerTokens.SequenceEqual(items.Select(i => i.Id)))
             {
                 providerTokens.Clear();
@@ -65,7 +88,9 @@ public sealed partial class LanguageModelRows : UserControl
             ProviderBox.IsEnabled = cloud.Loaded;
 
             var provider = cloud.SelectedProvider;
-            ProviderDetails.Visibility = Visible(provider is not null);
+            var onDevice = provider?.IsOnDevice == true;
+            RenderLocal(onDevice);
+            ProviderDetails.Visibility = Visible(provider is not null && !onDevice);
             ServerBox.Visibility = Visible(provider?.CustomUrl == true);
             if (ServerBox.Text != cloud.DraftBaseUrl)
             {
@@ -105,6 +130,8 @@ public sealed partial class LanguageModelRows : UserControl
             UseButton.IsEnabled = firstRun is null ? cloud.CanUse : PolishModel.CanUseOwnKey(cloud);
             AutomationProperties.SetHelpText(UseButton, useNote);
             TestButton.IsEnabled = cloud.CanTest;
+            TestButton.Content = cloud.TestLabel;
+            AutomationProperties.SetName(TestButton, cloud.TestName);
             Line(TestStatus, cloud.TestMessage, cloud.TestState == CloudTestState.Failed);
             var status = cloud.Failure ?? cloud.Status;
             Line(CloudStatus, status, cloud.Failure is not null || cloud.ReadError is not null);
@@ -113,6 +140,44 @@ public sealed partial class LanguageModelRows : UserControl
         finally
         {
             rendering = false;
+        }
+    }
+
+    /// <summary>This PC's own model's rows, while it is in the picker: its line, its download and the free space.</summary>
+    private void RenderLocal(bool shown)
+    {
+        LocalPanel.Visibility = Visible(shown && local is not null);
+        if (!shown || local is null || local.Row is not ModelRow row)
+        {
+            return;
+        }
+        var format = System.Globalization.CultureInfo.CurrentCulture;
+        LocalLine.Text = local.Line(format) ?? "";
+        LocalProgress.Visibility = Visible(local.Progress is not null);
+        LocalProgress.Value = local.Progress ?? 0;
+        AutomationProperties.SetName(LocalProgress, row.ProgressName);
+        Line(LocalStatus, local.Status(format), local.IsProblem);
+        Line(LocalFreeSpace, local.FreeSpaceText(format), false);
+        LocalDownload.Visibility = Visible(local.CanDownload);
+        AutomationProperties.SetName(LocalDownload, row.DownloadName(format));
+        LocalRetry.Visibility = Visible(local.CanRetry);
+        AutomationProperties.SetName(LocalRetry, row.RetryName);
+        LocalCancel.Visibility = Visible(local.CanCancel);
+        AutomationProperties.SetName(LocalCancel, row.CancelName);
+        LocalRemove.Visibility = Visible(local.CanRemove);
+        AutomationProperties.SetName(LocalRemove, row.RemoveName);
+    }
+
+    private void OnLocalDownload(object sender, RoutedEventArgs e) => local?.Download();
+
+    private void OnLocalCancel(object sender, RoutedEventArgs e) => local?.Cancel();
+
+    /// <summary>Remove asks first (the same question as Settings > Models'), Cancel focused.</summary>
+    private void OnLocalRemove(object sender, RoutedEventArgs e)
+    {
+        if (local is not null && local.Row is ModelRow row)
+        {
+            RemoveQuestion.Show(LocalRemove, row, local.Remove);
         }
     }
 

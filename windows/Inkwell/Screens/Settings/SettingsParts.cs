@@ -253,6 +253,12 @@ public sealed record ModelRowItem(ModelRow Row)
     public string? Failure => Row.CanRetry ? Row.Status(System.Globalization.CultureInfo.CurrentCulture) : null;
     public bool CanRetry => Row.CanRetry;
     public string RetryName => Row.RetryName;
+    public bool ShowsCancel => Row.CanCancel;
+    public string CancelName => Row.CancelName;
+    public bool ShowsRemove => Row.CanRemove;
+    public string RemoveName => Row.RemoveName;
+    /// <summary>Why its last Cancel or Remove did nothing.</summary>
+    public string? Note => Row.Note;
 }
 
 /// <summary>One job's line in Settings > Models.</summary>

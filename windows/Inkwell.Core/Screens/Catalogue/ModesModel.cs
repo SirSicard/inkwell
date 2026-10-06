@@ -695,6 +695,9 @@ public sealed class ModesModel : ObservableModel
 
     // What the rows and the editor show.
 
+    /// <summary>The pin for this PC's own language model (Windows): whichever one is downloaded.</summary>
+    public const string LocalPin = "engine:local";
+
     /// <summary>A mode's own model when the core does not hold it: named from its id, never shown as it is.</summary>
     public static string PinName(string id, string? modelName)
     {
@@ -705,7 +708,8 @@ public sealed class ModesModel : ObservableModel
             var provider = CloudModel.ProviderName(id["provider:".Length..]);
             return own is null ? provider : $"{provider} · {own}";
         }
-        return "a model that was on this PC";
+        // This PC's own model (the core's alias for whichever is downloaded): removed, or not downloaded yet.
+        return id == LocalPin ? "this PC's language model" : "a model that was on this PC";
     }
 
     /// <summary>

@@ -9,9 +9,11 @@
 // with the focus and is announced, holds the sheet's Skip, Back and Continue while it is up, and
 // gives the focus back to what asked once it is answered. The models step's
 // Download is the only thing in the sheet that downloads (ModelChoices.Download: what is ticked). The
-// import step shows only while Inkwell 0.2's data is offered (OnboardingModel.ShownSteps). While
-// this PC has no language model, the Polish step offers Groq's free key through Settings > AI's
-// flow (CloudModel.UseKey); its box is sent once and cleared, as there.
+// import step shows only while Inkwell 0.2's data is offered (OnboardingModel.ShownSteps). The
+// Polish step offers this PC's own model once it is ticked in Models (its switch then asks the
+// one tap for it: with no provider chosen the core uses that model), and Groq's free key as the
+// alternative through Settings > AI's flow (CloudModel.UseKey); its box is sent once and cleared,
+// as there.
 //
 // Glow's steps: Welcome's orb plays a short demo (dictating, then a call: a one-shot timer per
 // part, only while Welcome shows); Appearance sets the mode and the dots of the mode shown, as
@@ -365,6 +367,9 @@ public sealed partial class OnboardingSheet : ContentDialog
                 AutomationProperties.SetName(DownloadButton, onboarding.Choices.DownloadName(catalogue, CultureInfo.CurrentCulture));
             }
             ModelsTryAgain.Visibility = Visible(catalogue.Failed);
+            var free = ModelChoices.FreeSpaceLine(catalogue, CultureInfo.CurrentCulture);
+            FreeSpaceLine.Text = free ?? "";
+            FreeSpaceLine.Visibility = Visible(free is not null);
             ModelsGoOn.Visibility = Visible(catalogue.Downloading);
 
             PolishSwitch.IsOn = polish.IsOn;
@@ -372,6 +377,15 @@ public sealed partial class OnboardingSheet : ContentDialog
             AutomationProperties.SetHelpText(PolishSwitch, polish.Status);
             PolishStatus.Text = polish.Status;
             PolishStatus.Style = (Style)Application.Current.Resources[polish.IsProblem ? "InkAlertTextStyle" : "InkCaptionStyle"];
+            var localLine = OnboardingModel.PolishLocalLine(catalogue, cloud, onboarding.Choices, CultureInfo.CurrentCulture);
+            PolishLocalLine.Text = localLine ?? "";
+            PolishLocalLine.Visibility = Visible(localLine is not null);
+            // With this PC's model offered, Groq's free key is the other way.
+            var ownKeyTitle = localLine is null ? OnboardingModel.OwnKeyTitle : OnboardingModel.OwnKeyAlternativeTitle;
+            if (!Equals(OwnKeyExpander.Header, ownKeyTitle))
+            {
+                OwnKeyExpander.Header = ownKeyTitle;
+            }
             RenderOwnKey();
             var asking = polish.Consent.IsShowingStep(ConsentHost.Onboarding) ? polish.PendingConsent : null;
             ConsentCard.Visibility = Visible(asking is not null);
