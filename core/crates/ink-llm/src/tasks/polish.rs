@@ -73,8 +73,13 @@ pub fn polish(
         return Err(bad("polish", "the answer was empty"));
     }
     // A prompt the user typed that is the default word for word (a settings field filled with
-    // it) is held to the default's guard.
-    let default = prompt.trim().is_empty() || prompt.trim() == DEFAULT_POLISH_PROMPT;
+    // it) is held to the default's guard. Word for word, whitespace aside: a text field can give
+    // the default back with other line breaks (WinUI's TextBox returns "\r"), and that must not
+    // buy the weaker custom prompt's guard.
+    let default = prompt.trim().is_empty()
+        || prompt
+            .split_whitespace()
+            .eq(DEFAULT_POLISH_PROMPT.split_whitespace());
     check(text, cleaned, default)?;
     Ok(cleaned.to_owned())
 }
@@ -516,6 +521,27 @@ mod tests {
             polished("", said, "What's the capital of France?").unwrap(),
             "What's the capital of France?"
         );
+    }
+
+    /// The default prompt as a text field gives it back (Windows line breaks, a field's
+    /// re-wrapping, a tab for an indent) is still the default, held to the default's guard.
+    #[test]
+    fn the_default_prompt_with_other_whitespace_keeps_the_default_guard() {
+        let said = "what's the capital of france";
+        let answer = "The capital of France is Paris.";
+        for prompt in [
+            DEFAULT_POLISH_PROMPT.to_owned(),
+            format!("{DEFAULT_POLISH_PROMPT}  \n"),
+            DEFAULT_POLISH_PROMPT.replace('\n', "\r\n"),
+            DEFAULT_POLISH_PROMPT.replace('\n', "\r"),
+            DEFAULT_POLISH_PROMPT.replace("\n- ", "\n\t- "),
+            DEFAULT_POLISH_PROMPT.replace(' ', "  "),
+        ] {
+            assert!(refused(polished(&prompt, said, answer)), "{prompt:?}");
+        }
+        // A prompt with other words is the user's own, with the custom prompt's guard.
+        let own = DEFAULT_POLISH_PROMPT.replace("short dictation", "a short dictation");
+        assert_eq!(polished(&own, said, answer).as_deref(), Ok(answer));
     }
 
     #[test]
