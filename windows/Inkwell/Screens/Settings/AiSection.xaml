@@ -75,6 +75,9 @@
         <TextBlock
             Style="{StaticResource InkCaptionStyle}"
             Text="Polish tidies a dictation's wording before it is typed: it keeps what you meant and never adds anything. It sends what you dictate to a language model, so it stays off until you turn it on and agree to where that is." />
+        <!-- Where polish may send: one OK per destination (a mode may polish on a model of its own,
+             Settings > Modes), each with Revoke. Full width, so a narrow card never squeezes it. -->
+        <StackPanel x:Name="PolishConsents" Margin="0,4,0,0" Spacing="6" />
 
         <Grid Margin="0,6,0,0" ColumnSpacing="12">
             <Grid.ColumnDefinitions>

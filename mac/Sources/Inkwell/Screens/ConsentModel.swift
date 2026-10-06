@@ -26,6 +26,7 @@
 // with meeting.warning summary_not_allowed (the state is read again), and Ask answers that it
 // needs the user's OK.
 import AppleEngines
+import Foundation
 import InkBridge
 import Observation
 
@@ -34,9 +35,25 @@ import Observation
 final class ConsentModel {
     /// Where a feature sends the user's words, as the consent step names it.
     struct Destination: Equatable, Sendable {
-        enum Kind: Equatable, Sendable {
+        enum Kind: Hashable, Sendable {
             case onDevice
             case cloud(endpoint: String)
+
+            /// The same destination, as the core compares them (an endpoint without its trailing
+            /// slashes, which the core drops).
+            func sameDestination(_ other: Kind) -> Bool {
+                switch (self, other) {
+                case (.onDevice, .onDevice): true
+                case (.cloud(let a), .cloud(let b)): Self.trimmed(a) == Self.trimmed(b)
+                default: false
+                }
+            }
+
+            private static func trimmed(_ endpoint: String) -> String {
+                var out = Substring(endpoint)
+                while out.hasSuffix("/") { out = out.dropLast() }
+                return String(out)
+            }
         }
 
         let kind: Kind
@@ -66,12 +83,16 @@ final class ConsentModel {
         var destination: Destination?
         /// What the core could not read ("couldn't read …").
         var error: String?
+        /// Every destination the user agreed the feature may send to (polish holds one per
+        /// destination; Settings > AI lists them, each with Revoke).
+        var consents: [Granted]
 
-        init(on: Bool, allowed: Bool, destination: Destination?, error: String?) {
+        init(on: Bool, allowed: Bool, destination: Destination?, error: String?, consents: [Granted] = []) {
             self.on = on
             self.allowed = allowed
             self.destination = destination
             self.error = error
+            self.consents = consents
         }
 
         init(_ state: ConsentState) {
@@ -80,7 +101,48 @@ final class ConsentModel {
             case .cloud: state.endpoint.map { Destination(kind: .cloud(endpoint: $0), name: state.name ?? "") }
             case nil: nil
             }
-            self.init(on: state.on, allowed: state.allowed, destination: destination, error: state.error)
+            // A cloud consent without its endpoint could not be revoked or matched: left out.
+            let consents: [Granted] = (state.consents ?? []).compactMap { entry in
+                switch entry.to {
+                case .onDevice: Granted(kind: .onDevice, name: entry.name)
+                case .cloud: entry.endpoint.map { Granted(kind: .cloud(endpoint: $0), name: entry.name) }
+                }
+            }
+            self.init(on: state.on, allowed: state.allowed, destination: destination, error: state.error, consents: consents)
+        }
+
+        /// Whether one of the consents covers `destination` (one on this Mac covers every model
+        /// on it; a cloud one, its endpoint).
+        func covers(_ destination: Destination) -> Bool {
+            consents.contains { $0.kind.sameDestination(destination.kind) }
+        }
+    }
+
+    /// A destination the user agreed a feature may send to, as consent.state lists it.
+    struct Granted: Hashable, Sendable {
+        let kind: Destination.Kind
+        /// For cloud, the provider's name the user agreed to.
+        let name: String?
+
+        /// The words for it in Settings > AI: "Models on this Mac", or the provider's name.
+        var label: String {
+            switch kind {
+            case .onDevice: "Models on this Mac"
+            case .cloud(let endpoint): name.flatMap { $0.isEmpty ? nil : $0 } ?? Self.host(endpoint)
+            }
+        }
+
+        /// What going there means for the user's words.
+        var detail: String {
+            switch kind {
+            case .onDevice: "Your words stay on this Mac."
+            case .cloud(let endpoint): "Your words leave this Mac for \(Self.host(endpoint))."
+            }
+        }
+
+        /// An endpoint's host ("api.groq.com"), or the endpoint as it is.
+        static func host(_ endpoint: String) -> String {
+            URL(string: endpoint)?.host() ?? endpoint
         }
     }
 
@@ -96,6 +158,8 @@ final class ConsentModel {
         /// The consent could not be recorded (the model changed while the user read, or the store
         /// refused): the feature stays as it was.
         case allow
+        /// A consent could not be revoked: it may still hold.
+        case revoke
     }
 
     let feature: LlmFeature
@@ -131,6 +195,7 @@ final class ConsentModel {
     /// The newest `consent.get`, and the newest `consent.allow`, for their failures.
     @ObservationIgnored private var newestGet: String?
     @ObservationIgnored private var newestAllow: String?
+    @ObservationIgnored private var newestRevoke: String?
 
     init(feature: LlmFeature, switchSettingID: String, send: @escaping SendCommand) {
         self.feature = feature
@@ -169,6 +234,7 @@ final class ConsentModel {
         case .read: return "Couldn't read your \(what) setting. Open Settings again to retry."
         case .write: return "Couldn't save the change, so \(what) \(stays) as \(was)."
         case .allow: return "Couldn't turn \(what) on, so \(feature == .meetings ? "they" : "it") \(stays) off. Try again."
+        case .revoke: return "Couldn't revoke that, so \(what) may still send there. Try again."
         case nil: break
         }
         if let error = state?.error {
@@ -311,6 +377,34 @@ final class ConsentModel {
         }
     }
 
+    /// The user agreed, in a mode's own consent step (Settings > Modes), that polish may send to
+    /// `destination`, a model a mode can pick: the core adds that consent (and turns polish's
+    /// switch on), or fails if that model sends elsewhere now. Returns the command's ref, which
+    /// comes back in its `consent.state` or as the id of a `command.failed`: the asker matches
+    /// them and says what failed, so a failure here is not shown under the toggle too.
+    @discardableResult
+    func allow(forMode destination: Destination) -> String {
+        let ref = nextRef("allow")
+        let command: CoreCommand = switch destination.kind {
+        case .onDevice: .consentAllow(feature: feature, to: .onDevice, endpoint: nil, key: nil, ref: ref)
+        case .cloud(let endpoint): .consentAllow(feature: feature, to: .cloud, endpoint: endpoint, key: nil, ref: ref)
+        }
+        send(command)
+        return ref
+    }
+
+    /// Settings > AI's Revoke: takes the consent for one destination away; the others stay.
+    /// Revoking the last turns the feature off (the core's answer says so).
+    func revoke(_ granted: Granted) {
+        failure = nil
+        let ref = nextRef("revoke")
+        newestRevoke = ref
+        switch granted.kind {
+        case .onDevice: send(.consentRevoke(feature: feature, to: .onDevice, endpoint: nil, ref: ref))
+        case .cloud(let endpoint): send(.consentRevoke(feature: feature, to: .cloud, endpoint: endpoint, ref: ref))
+        }
+    }
+
     /// The consent step's Cancel (or the step dismissed): nothing is sent.
     func cancel() {
         pending = nil
@@ -354,7 +448,7 @@ final class ConsentModel {
             if let ref = value.ref, ref != newestRef { return }
             state = Snapshot(value)
             beforeOff = nil
-            if failure == .read || failure == .write { failure = nil }
+            if failure == .read || failure == .write || failure == .revoke { failure = nil }
             // The step names a destination that is no longer the model's: close it rather than
             // change its words under the user's finger. Turning the feature on asks about the new one.
             // A step that chooses its model names one the core does not know yet: it stays.
@@ -384,6 +478,8 @@ final class ConsentModel {
             failure = .read
         case .commandFailed(let failed) where failed.id != nil && failed.id == newestAllow:
             failure = .allow
+        case .commandFailed(let failed) where failed.id != nil && failed.id == newestRevoke:
+            failure = .revoke
         case .dictationWarningEvent(let warning) where warning.kind == .polishNotAllowed && feature == .polish:
             // The core refused to send: read where the feature goes now, so the screen says why.
             load()

@@ -212,6 +212,10 @@ public sealed class DropModelTests
         Assert.Equal("Couldn't rewrite the selection", Note("""{"type":"dictation.edit_failed","reason":"model"}""", model: true)!.Title);
         Assert.Equal("Not edited", Note("""{"type":"dictation.edit_failed","reason":"not_allowed","message":"Example Cloud"}""")!.Title);
         Assert.Equal("Polish took too long", Note("""{"type":"dictation.warning","kind":"polish_timed_out"}""")!.Title);
+        // The mode names a model of its own the core does not hold, or that sends elsewhere now:
+        // nothing was sent, and Settings > Modes says which (it was quiet before).
+        Assert.Equal(new DropLine("Not polished", "Check this mode's model in Settings > Modes", DropLineTone.Alert),
+            Note("""{"type":"dictation.warning","kind":"polish_model_missing","message":"the mode's model is not held"}"""));
         Assert.Equal("Stopped after 3 minutes", Note("""{"type":"dictation.warning","kind":"release_missed"}""")!.Title);
         Assert.Null(Note("""{"type":"dictation.warning","kind":"focus_unreadable"}"""));
     }

@@ -30,7 +30,11 @@ enum CoreCommand: Equatable, Sendable {
     /// `hotkey.checked` with `ref` (its one spelling, or why not), or `command.failed` with it as
     /// the id. Nothing is stored.
     case hotkeyCheck(binding: String, ref: String)
-    case modesList
+    /// Settings > Modes: each answered by `modes.listed` with `ref` (a save's with `saved`), or a
+    /// `command.failed` with it as the id and, for a refusal the editor shows, a `code`.
+    case modesList(ref: String)
+    case modesSave(ModeSave, ref: String)
+    case modesDelete(mode: String, ref: String)
     /// The library (Today, Library, a record). `ref` comes back as the answer's `ref`, or as the id
     /// of a `command.failed`, so a model matches each answer to its question and can tell "could not
     /// load" from "empty".
@@ -76,6 +80,9 @@ enum CoreCommand: Equatable, Sendable {
     /// turns the feature on, or fails if the model has moved since.
     /// `ref` comes back in its `consent.state`, or as the id of a `command.failed`.
     case consentAllow(feature: LlmFeature, to: LlmDestination, endpoint: String?, key: String?, ref: String)
+    /// Takes polish's consent for one destination away (Settings > AI lists each): `consent.state`
+    /// with `ref`, or `command.failed` with it as the id. Revoking the last turns polish off.
+    case consentRevoke(feature: LlmFeature, to: LlmDestination, endpoint: String?, ref: String)
     /// Settings > Snippets and Voice commands: each answered by its `.listed` with `ref`, or a
     /// `command.failed` with that id. A save sends the whole list; the core refuses it over a
     /// stored list it cannot read unless `replaceUnreadable` (the user chose to start over).
@@ -159,7 +166,12 @@ enum CoreCommand: Equatable, Sendable {
         case .settingSet(let key, let value):
             ["cmd": "setting.set", "key": key.rawValue, "value": value, "id": "setting:\(key.rawValue)"]
         case .hotkeyCheck(let binding, let ref): ["cmd": "hotkey.check", "binding": binding, "id": ref]
-        case .modesList: ["cmd": "modes.list"]
+        case .modesList(let ref): ["cmd": "modes.list", "id": ref]
+        case .modesSave(let save, let ref):
+            ["cmd": "modes.save", "mode": save.modeFields, "id": ref]
+                .merging(save.takeApps ? ["take_apps": true] : [:]) { a, _ in a }
+                .merging(save.replaceUnreadable ? ["replace_unreadable": true] : [:]) { a, _ in a }
+        case .modesDelete(let mode, let ref): ["cmd": "modes.delete", "mode": mode, "id": ref]
         case .recordsList(let kind, let before, let limit, let ref):
             ["cmd": "records.list", "limit": limit, "id": ref]
                 .merging(kind.map { ["kind": $0.rawValue] } ?? [:]) { a, _ in a }
@@ -192,6 +204,9 @@ enum CoreCommand: Equatable, Sendable {
             ["cmd": "consent.allow", "feature": feature.rawValue, "to": to.rawValue, "id": ref]
                 .merging(endpoint.map { ["endpoint": $0] } ?? [:]) { a, _ in a }
                 .merging(key.map { ["key": $0] } ?? [:]) { a, _ in a }
+        case .consentRevoke(let feature, let to, let endpoint, let ref):
+            ["cmd": "consent.revoke", "feature": feature.rawValue, "to": to.rawValue, "id": ref]
+                .merging(endpoint.map { ["endpoint": $0] } ?? [:]) { a, _ in a }
         case .snippetsList(let ref): ["cmd": "snippets.list", "id": ref]
         case .snippetsSave(let snippets, let replace, let ref):
             ["cmd": "snippets.save", "snippets": snippets.map(\.fields), "id": ref]
@@ -248,6 +263,8 @@ enum CoreCommand: Equatable, Sendable {
         case .settingSet: "setting.set"
         case .hotkeyCheck: "hotkey.check"
         case .modesList: "modes.list"
+        case .modesSave: "modes.save"
+        case .modesDelete: "modes.delete"
         case .recordsList: "records.list"
         case .recordsSearch: "records.search"
         case .recordOpen: "record.open"
@@ -267,6 +284,7 @@ enum CoreCommand: Equatable, Sendable {
         case .dictationDisable: "dictation.disable"
         case .consentGet: "consent.get"
         case .consentAllow: "consent.allow"
+        case .consentRevoke: "consent.revoke"
         case .snippetsList: "snippets.list"
         case .snippetsSave: "snippets.save"
         case .voiceCommandsList: "voice_commands.list"

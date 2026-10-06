@@ -367,6 +367,9 @@ public static class DictationDrop
             DictationWarning.PolishTimedOut => new("Polish took too long", "Typed as you said it"),
             // Polish is on, but its model now sends somewhere the user has not agreed to.
             DictationWarning.PolishNotAllowed => new("Not polished", "Polish needs your OK again in Settings", DropLineTone.Alert),
+            // The mode names a model of its own that the core does not hold, or that sends elsewhere
+            // than where the user agreed: nothing was sent, and Settings > Modes says which.
+            DictationWarning.PolishModelMissing => new("Not polished", "Check this mode's model in Settings > Modes", DropLineTone.Alert),
             DictationWarning.ReleaseMissed => new("Stopped after 3 minutes", "The key's release never arrived"),
             // Shown elsewhere (Today's notices, Settings) or nothing the user acts on at once.
             _ => null,

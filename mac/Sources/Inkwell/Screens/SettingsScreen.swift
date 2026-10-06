@@ -637,75 +637,6 @@ private struct Key: View {
     }
 }
 
-// MARK: - Modes
-
-private struct ModesSection: View {
-    let modes: ModesModel
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            SectionTitle(text: "Modes", note: "Picked by the app you're typing in")
-            if modes.failed {
-                Text("Your modes could not be read.").foregroundStyle(Theme.alert)
-            }
-            ForEach(modes.rows) { row in
-                SettingColumns {
-                    Text(row.isDefault && modes.rows.count > 1 ? "Everywhere else" : row.name)
-                        .font(.system(.body, weight: .semibold))
-                } controls: {
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 6) {
-                            ForEach(row.traits, id: \.self) { Paper.Chip(text: $0) }
-                        }
-                        if row.apps.isEmpty {
-                            Text(row.isDefault ? "Every app without a mode of its own" : "No apps")
-                                .font(Typography.caption).foregroundStyle(Theme.secondaryText)
-                        } else {
-                            HStack(spacing: 6) {
-                                ForEach(row.apps) { app in
-                                    AppIcon(app: app)
-                                }
-                                Text(row.apps.map(\.name).joined(separator: ", "))
-                                    .font(Typography.caption).foregroundStyle(Theme.secondaryText)
-                                    .lineLimit(2)
-                            }
-                        }
-                    }
-                }
-                .padding(.vertical, 10)
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel(accessibility(row))
-                Rectangle().fill(PaperPalette.separator).frame(height: 1).accessibilityHidden(true)
-            }
-        }
-    }
-
-    private func accessibility(_ row: ModeRow) -> String {
-        let apps = row.apps.isEmpty ? (row.isDefault ? "the default" : "no apps") : row.apps.map(\.name).joined(separator: ", ")
-        return "\(row.name): \(row.traits.joined(separator: ", ")); used in \(apps)"
-    }
-}
-
-private struct AppIcon: View {
-    let app: AppLabel
-
-    var body: some View {
-        Group {
-            if let icon = app.icon {
-                Image(nsImage: icon).resizable()
-            } else {
-                Text(String(app.name.prefix(1)))
-                    .font(.system(size: 11, weight: .semibold))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(PaperPalette.chip, in: RoundedRectangle(cornerRadius: 6))
-            }
-        }
-        .frame(width: 24, height: 24)
-        .help(app.name)
-        .accessibilityLabel(app.name)
-    }
-}
-
 // MARK: - AI
 
 private struct AISection: View {
@@ -741,6 +672,9 @@ private struct AISection: View {
                 .font(Typography.caption)
                 .foregroundStyle(Theme.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
+            // One OK per destination: a mode may polish on a model of its own (Settings > Modes).
+            PolishConsentsRow(polish: polish)
+                .padding(.top, 4)
             SettingColumns {
                 Text("Summaries and Ask")
             } controls: {
@@ -770,6 +704,54 @@ private struct AISection: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         .polishConsent(polish, host: .settings)
+    }
+}
+
+// MARK: - Settings > AI: where polish may send
+
+/// Each destination the user agreed polish may send to, with Revoke.
+struct PolishConsentsRow: View {
+    let polish: PolishModel
+
+    var body: some View {
+        let consents = polish.state?.consents ?? []
+        SettingColumns {
+            Text("Polish may send to")
+        } controls: {
+            VStack(alignment: .leading, spacing: 8) {
+                if consents.isEmpty {
+                    Text("Nowhere yet. Polish asks before it first sends anywhere.")
+                        .font(Typography.caption)
+                        .foregroundStyle(Theme.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                ForEach(consents, id: \.self) { granted in
+                    LineOrStack(minWidth: 260) {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(granted.label)
+                            Text(granted.detail)
+                                .font(Typography.caption)
+                                .foregroundStyle(Theme.secondaryText)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityElement(children: .combine)
+                        Button("Revoke") { polish.consent.revoke(granted) }
+                            .fixedSize()
+                            .accessibilityLabel("Revoke polish's OK for \(granted.label)")
+                    }
+                    .accessibilityElement(children: .contain)
+                }
+                if !consents.isEmpty {
+                    Text("Revoking the last one turns polish off. Modes on a model there go in as you said them.")
+                        .font(Typography.caption)
+                        .foregroundStyle(Theme.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .font(Typography.body)
+        .accessibilityElement(children: .contain)
     }
 }
 

@@ -72,6 +72,7 @@ public sealed partial class AiSection : UserControl
             Show(EditSwitch, EditStatus, ai.EditOn, ai.CanToggleEdit, ai.EditStatus, ai.EditIsProblem);
             Show(MeetingsSwitch, MeetingsStatus, ai.MeetingsAIOn, ai.CanToggleMeetingsAI, ai.MeetingsAIStatus, ai.MeetingsAIIsProblem);
             RenderCloud();
+            RenderConsents();
         }
         finally
         {
@@ -97,6 +98,60 @@ public sealed partial class AiSection : UserControl
             ? $"{CloudModel.LocalOnlyTitle}: no language model off this PC is called, whichever is chosen."
             : "A language model off this PC may be called, once a feature is on and allowed.";
     }
+
+    /// <summary>The consents shown, so the list is built again only when they change (a Revoke keeps the keyboard otherwise).</summary>
+    private IReadOnlyList<ConsentGrant>? shownConsents;
+
+    /// <summary>Each destination the user agreed polish may send to, with Revoke.</summary>
+    private void RenderConsents()
+    {
+        var consents = polish.State?.Consents ?? [];
+        if (shownConsents is not null && shownConsents.SequenceEqual(consents))
+        {
+            return;
+        }
+        shownConsents = consents;
+        PolishConsents.Children.Clear();
+        PolishConsents.Children.Add(new TextBlock
+        {
+            Text = "Polish may send to",
+            Style = (Style)Application.Current.Resources["InkBodyStyle"],
+        });
+        if (consents.Count == 0)
+        {
+            PolishConsents.Children.Add(Caption("Nowhere yet. Polish asks before it first sends anywhere."));
+            return;
+        }
+        foreach (var grant in consents)
+        {
+            var row = new Grid { ColumnSpacing = 12 };
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            var words = new StackPanel { Spacing = 1 };
+            words.Children.Add(new TextBlock
+            {
+                Text = grant.Label,
+                Style = (Style)Application.Current.Resources["InkBodyStyle"],
+                TextWrapping = TextWrapping.Wrap,
+            });
+            words.Children.Add(Caption(grant.Detail));
+            var revoke = new Button { Content = "Revoke", VerticalAlignment = VerticalAlignment.Center };
+            AutomationProperties.SetName(revoke, $"Revoke polish's OK for {grant.Label}");
+            revoke.Click += (_, _) => polish.Consent.Revoke(grant);
+            Grid.SetColumn(revoke, 1);
+            row.Children.Add(words);
+            row.Children.Add(revoke);
+            PolishConsents.Children.Add(row);
+        }
+        PolishConsents.Children.Add(Caption("Revoking the last one turns polish off. Modes on a model there go in as you said them."));
+    }
+
+    private static TextBlock Caption(string text) => new()
+    {
+        Text = text,
+        Style = (Style)Application.Current.Resources["InkCaptionStyle"],
+        TextWrapping = TextWrapping.Wrap,
+    };
 
     private void OnPolishToggled(object sender, RoutedEventArgs e)
     {

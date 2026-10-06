@@ -33,6 +33,8 @@ enum Paper {
             case neutral
             case due
             case alert
+            /// Wanted, and off now (a mode's "Polish · off"): quieter than the rest.
+            case muted
         }
 
         let text: String
@@ -40,11 +42,12 @@ enum Paper {
 
         var body: some View {
             Text(text)
-                .font(.system(size: Glow.Size.eyebrow, weight: tone == .neutral ? .regular : .medium))
+                .font(.system(size: Glow.Size.eyebrow, weight: tone == .neutral || tone == .muted ? .regular : .medium))
                 .foregroundStyle(foreground)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 3)
                 .background(background, in: Capsule())
+                .overlay(Capsule().strokeBorder(tone == .muted ? PaperPalette.border : Color.clear, lineWidth: 1))
         }
 
         private var foreground: Color {
@@ -52,6 +55,7 @@ enum Paper {
             case .neutral: Theme.text
             case .due: PaperPalette.dueText
             case .alert: PaperPalette.alertText
+            case .muted: Theme.secondaryText
             }
         }
 
@@ -60,6 +64,7 @@ enum Paper {
             case .neutral: PaperPalette.chip
             case .due: PaperPalette.dueChip
             case .alert: PaperPalette.alertChip
+            case .muted: Color.clear
             }
         }
     }
