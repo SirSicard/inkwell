@@ -318,8 +318,7 @@ whitelist of settings the shell owns (`SHELL_SETTINGS` in
 through `consent.allow`), `dictation.key`, `dictation.edit_key`, `dictation.enabled`,
 `meetings.calls.default` (`ask`, `always` or `never`), `meetings.detect` (answered for that default:
 below), `audio.input` and `audio.output` (Sound, below), `llm.local_only`, `retention.days`,
-`import.key_note`, `meetings.headset_mic` (retired: read nowhere, accepted until the shells' Sound
-section replaces its switch),
+`import.key_note`,
 and the appearance settings: `appearance.mode` (`light`, `dark` or `system`),
 `appearance.dots.light` and `appearance.dots.dark` (a preset from
 [`design/tokens.json`](../design/tokens.json)), `appearance.you.light`, `appearance.them.light`,

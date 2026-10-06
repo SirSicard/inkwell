@@ -68,9 +68,6 @@ pub const SHELL_SETTINGS: &[(&str, &[&str])] = &[
     // "Offer to record calls", which the default replaced: answered for the default until the
     // shells move to it (off is never; on over never is ask), never stored again.
     (crate::control::DETECT_KEY, &["on", "off"]),
-    // Retired (crate::control::HEADSET_MIC_KEY): the core reads it nowhere; accepted until the
-    // shells' Meetings switch gives way to Settings > Sound.
-    (crate::control::HEADSET_MIC_KEY, &["on", "off"]),
     // The mic for dictation, meetings and the mic test (crate::devices): Automatic, or a device
     // connected when it is set (by the id audio.devices lists). A change lets go of dictation's
     // idle mic when it is another.

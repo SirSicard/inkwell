@@ -280,13 +280,11 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       dictation.enable), "meetings.calls.default" (ask|always|never: the call policy for apps
  *       not chosen for; ask unless set), "meetings.detect" (on|off: the old "Offer to record
  *       calls", answered for the default: off is never, on over never is ask),
- *       "meetings.headset_mic" (on|off; retired, read nowhere: the headset's mic is picked in
- *       audio.input),
  *       "audio.input" (auto|a device id from audio.devices: the mic for dictation, meetings and
  *       the test; a device must be connected when set), "audio.output" (default|an output's id,
- *       where audio.devices lists outputs: the output a meeting's far end is to record on
- *       Windows; stored and shown now, and until the far end is pinned to it meetings follow
- *       the default output),
+ *       where audio.devices lists outputs: on Windows, the output Record now, and a call
+ *       whose app could not be heard alone, record; the default output when the chosen one is
+ *       not connected, and back on it when it returns),
  *       "meetings.llm" (on|off: a meeting's summary and Ask; as for dictation.polish, setting.set
  *       takes only off, which also withdraws their consent, and consent.allow turns it on),
  *       "llm.local_only" (on|off: on unless turned off, and on when unreadable; while on, a

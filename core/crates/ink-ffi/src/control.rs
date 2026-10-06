@@ -103,13 +103,6 @@ fn start_app(app_id: &str, offered: Option<&AppRef>) -> AppRef {
     }
 }
 
-/// Retired: the setting that recorded the Bluetooth headset's own mic in meetings (`on` or `off`).
-/// The user now picks any mic, the headset's included, for dictation and meetings alike
-/// (`audio.input`, [`crate::devices`]), and the core reads this nowhere. It stays a shell setting
-/// only so the shells' Meetings switch keeps answering until their Sound section replaces it (the
-/// Mac and Windows device branches remove both).
-pub const HEADSET_MIC_KEY: &str = "meetings.headset_mic";
-
 /// A message to the meetings thread.
 pub enum Msg {
     /// `meeting.start`.
