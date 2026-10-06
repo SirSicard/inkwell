@@ -61,6 +61,7 @@ final class ShellInk {
             failure: meetings?.failure(on: .drop) ?? calls?.dropFailure,
             micFallback: store.micFallback,
             deletable: meetings?.canDiscard(record) ?? false,
+            reminds: meetings?.reminds(record) ?? true,
             discarding: record != nil && meetings?.discarding == record,
             offerPolicy: store.offer.flatMap { calls?.policy(of: $0.app) })
     }
@@ -184,6 +185,8 @@ struct DropText: Equatable, Sendable {
     static func autoReminder(_ name: String?) -> String {
         "Always is on for \(name.map(named) ?? "this app"). Tell the others you are recording."
     }
+    /// A meeting's line before its first, with nothing else to say.
+    static let recordingLine = "Recording this meeting"
     static let discardingTitle = "Stop and delete"
     static let discardingLine = "Deleting this recording"
 
@@ -213,13 +216,14 @@ struct DropText: Equatable, Sendable {
     ///
     /// The offer also sets the app's call policy: "Always for" (unless it is Always already:
     /// `offerPolicy`, or a `message` saying why an Always app is asked), and "Never for". A call
-    /// its app's Always recorded says so, keeps the reminder to tell the others, and offers Stop,
-    /// and Stop and delete while `deletable` (its first minute); `discarding` once that was pressed.
+    /// its app's Always recorded says so, and offers Stop, and Stop and delete while `deletable`
+    /// (its first minute); `discarding` once that was pressed. While `reminds` (the first such
+    /// call), that minute says to tell the others, over everything but a failure.
     static func `for`(
         _ state: InkState, dictation: CoreStore.DictationPhase, live: CoreStore.LiveDictation? = nil,
         meeting: CoreStore.LiveMeeting?, offer: CoreStore.Offer?, systemAudioOff: Bool,
         failure: String? = nil, micFallback: CoreStore.MicFallback? = nil, deletable: Bool = false,
-        discarding: Bool = false, offerPolicy: CallPolicy? = nil
+        reminds: Bool = true, discarding: Bool = false, offerPolicy: CallPolicy? = nil
     ) -> DropText {
         if discarding, state == .meeting || state == .blotting || state == .problem {
             return DropText(title: discardingTitle, detail: failure ?? discardingLine, tone: failure == nil ? .plain : .alert)
@@ -247,14 +251,18 @@ struct DropText: Equatable, Sendable {
             guard let meeting else { return DropText.for(state, dictation: dictation, live: live) }
             if meeting.auto {
                 let latest = meeting.finals.last?.text.trimmingCharacters(in: .whitespacesAndNewlines)
-                let reminder = autoReminder(meeting.appName)
-                // A mic that went mid-call is said over everything but a failure, as for any meeting.
+                // The first automatic call's reminder holds its first minute, while Stop and delete
+                // is there, over a mic that went too. Otherwise a mic that went mid-call is said
+                // first, as for any meeting, then the latest line (before one, the stand-in mic if
+                // there is one).
+                let reminder = reminds ? autoReminder(meeting.appName) : nil
                 let switched = meeting.micSwitch.flatMap { $0.atLine == meeting.ledger.seen ? Self.switchLine($0) : nil }
-                // The reminder holds the first minute, while Stop and delete is there; then the
-                // latest line, as any meeting's (before one, the stand-in mic if there is one).
-                let detail = switched ?? (deletable
-                    ? reminder
-                    : latest.flatMap { $0.isEmpty ? nil : $0 } ?? micFallback.map(Self.fallbackLine) ?? reminder)
+                let detail = (deletable ? reminder : nil)
+                    ?? switched
+                    ?? latest.flatMap { $0.isEmpty ? nil : $0 }
+                    ?? micFallback.map(Self.fallbackLine)
+                    ?? reminder
+                    ?? recordingLine
                 return DropText(
                     title: autoTitle(meeting.appName), detail: failure ?? detail,
                     tone: failure == nil ? .recording : .alert,
@@ -269,7 +277,7 @@ struct DropText: Equatable, Sendable {
             } else if let micFallback {
                 Self.fallbackLine(micFallback)
             } else {
-                "Recording this meeting"
+                Self.recordingLine
             }
             // A mic that went mid-call is said over the latest line, until a line comes after it.
             let switched = meeting.micSwitch.flatMap { $0.atLine == meeting.ledger.seen ? Self.switchLine($0) : nil }

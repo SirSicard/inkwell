@@ -337,6 +337,9 @@ enum ShellSetting: String, Sendable {
     /// "ask" (the default), "always" or "never": the call policy for apps not chosen for. It
     /// replaced "meetings.detect" ("Offer to record calls"), which the core migrates.
     case meetingsCallsDefault = "meetings.calls.default"
+    /// "on" once the reminder to tell the others has been shown during a call its app's Always
+    /// recorded: it shows on the first such call only (MeetingModel).
+    case meetingsAutoReminderShown = "meetings.auto_reminder_shown"
     /// "on" or "off": the switch for a meeting's summary and Ask. Only "off" is set this way: they
     /// turn on through the consent step (`consentAllow`).
     case meetingsLLM = "meetings.llm"

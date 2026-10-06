@@ -548,13 +548,53 @@ final class CallPolicyDropTests: XCTestCase {
 
         store.apply([event(#"{"type":"meeting.mic_switched","record":"r1","from_name":"MacBook Pro Microphone","from_transport":"built_in","mic_name":"Studio Mic","mic_transport":"usb","mic_reason":"default_input"}"#)])
         let switched = "MacBook Pro Microphone went. Now recording with Studio Mic."
-        XCTAssertEqual(line(deletable: true), switched)
+        XCTAssertEqual(line(deletable: true), DropText.autoReminder("Zoom"), "the first minute: the reminder over the switch")
         XCTAssertEqual(line(deletable: false), switched)
 
         // A line after the switch: the switch is old news.
         store.apply([event(#"{"type":"meeting.final","record":"r1","channel":"far","start_ms":0,"end_ms":900,"text":"can you hear me now"}"#)])
         XCTAssertEqual(line(deletable: true), DropText.autoReminder("Zoom"))
         XCTAssertEqual(line(deletable: false), "can you hear me now")
+    }
+
+    /// The reminder to tell the others shows on the first call Always records, for its first
+    /// minute, and the library remembers it did: a later one (this launch or the next) has none.
+    func testTheReminderShowsOnTheFirstAutomaticRecordingOnly() throws {
+        let sent = Sent()
+        let start = Date()
+        let (store, ink, _) = models(sent, now: { start })
+        let meetings = try XCTUnwrap(ink.meetings)
+        meetings.load()
+        XCTAssertTrue(sent.commands.contains(.settingGet(.meetingsAutoReminderShown)))
+        let unset = event(#"{"type":"setting.value","key":"meetings.auto_reminder_shown"}"#)
+        meetings.apply(unset)
+
+        let first = started(auto: true, deleteUntil: start.addingTimeInterval(60), record: "r1")
+        store.apply([first])
+        meetings.apply(first)
+        XCTAssertEqual(ink.dropText.detail, DropText.autoReminder("Zoom"), "the first: the reminder")
+        XCTAssertEqual(sent.commands.filter { $0 == .settingSet(.meetingsAutoReminderShown, "on") }.count, 1, "remembered")
+
+        let finished = event(#"{"type":"meeting.finished","record":"r1","revision":2}"#)
+        let second = started(auto: true, deleteUntil: start.addingTimeInterval(60), record: "r2")
+        store.apply([finished, second])
+        [finished, second].forEach(meetings.apply)
+        var text = ink.dropText
+        XCTAssertEqual(text.detail, DropText.recordingLine, "the second: no reminder")
+        XCTAssertEqual(text.actions, [.stop, .stopAndDelete], "its minute's buttons stay")
+        XCTAssertEqual(sent.commands.filter { $0 == .settingSet(.meetingsAutoReminderShown, "on") }.count, 1)
+
+        // The next launch reads it as shown.
+        let relaunched = Sent()
+        let (laterStore, laterInk, _) = models(relaunched, now: { start })
+        let later = try XCTUnwrap(laterInk.meetings)
+        later.apply(event(#"{"type":"setting.value","key":"meetings.auto_reminder_shown","value":"on"}"#))
+        let third = started(auto: true, deleteUntil: start.addingTimeInterval(60), record: "r3")
+        laterStore.apply([third])
+        later.apply(third)
+        text = laterInk.dropText
+        XCTAssertEqual(text.detail, DropText.recordingLine)
+        XCTAssertFalse(relaunched.commands.contains(.settingSet(.meetingsAutoReminderShown, "on")))
     }
 
     /// A choice from the Drop that failed is said there; a new offer clears it.
