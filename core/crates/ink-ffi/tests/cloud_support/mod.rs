@@ -17,7 +17,8 @@ use ink_llm::{
 use serde_json::Value;
 
 use super::common::{
-    Behaviour, Gate, MockInstaller, MockLoader, Recorder, TempDir, clock, install, start_parts,
+    Behaviour, Gate, MockInstaller, MockLoader, MockLocalLoader, Recorder, TempDir, clock, install,
+    start_parts,
 };
 
 /// How long an answer may take.
@@ -35,15 +36,30 @@ pub struct Rig {
     pub net: Arc<FakeTransport>,
     pub db: PathBuf,
     pub dir: TempDir,
+    /// The core's own language model's loader, when the rig has one ([`with_local`](Self::with_local)).
+    pub local: Option<Arc<MockLocalLoader>>,
 }
 
 impl Rig {
     pub fn new(label: &str, rows: &[EngineRow]) -> Self {
+        Self::build(label, rows, None)
+    }
+
+    /// A rig whose `rows` include language rows, installed, loaded by `local`.
+    pub fn with_local(label: &str, rows: &[EngineRow], local: Arc<MockLocalLoader>) -> Self {
+        Self::build(label, rows, Some(local))
+    }
+
+    fn build(label: &str, rows: &[EngineRow], local: Option<Arc<MockLocalLoader>>) -> Self {
         let dir = TempDir::new(label);
         let db = dir.path().join("library.sqlite");
         let keys = Arc::new(MemoryKeys::default());
         let net = FakeTransport::answering(200, &openai_answer("OK"));
-        let (core, events) = Self::start(&dir, &db, rows);
+        let models = ModelDir::new(dir.path().join("models"));
+        for row in rows {
+            install(&models, row);
+        }
+        let (core, events) = Self::start(&dir, &db, rows, local.as_ref());
         core.set_cloud_services(keys.clone(), net.clone());
         Self {
             core,
@@ -52,14 +68,17 @@ impl Rig {
             net,
             db,
             dir,
+            local,
         }
     }
 
-    fn start(dir: &TempDir, db: &PathBuf, rows: &[EngineRow]) -> (Core, Arc<Recorder>) {
+    fn start(
+        dir: &TempDir,
+        db: &PathBuf,
+        rows: &[EngineRow],
+        local: Option<&Arc<MockLocalLoader>>,
+    ) -> (Core, Arc<Recorder>) {
         let models = ModelDir::new(dir.path().join("models"));
-        for row in rows {
-            install(&models, row);
-        }
         let loader = MockLoader::new(Behaviour::Say("synthetic words".into()));
         let parts = Parts {
             store: Arc::new(ink_store::SqliteStore::open(db).unwrap()),
@@ -74,7 +93,7 @@ impl Rig {
             loader,
             data_dir: dir.path().to_owned(),
             permissions: Arc::new(ink_ffi::queries::NoPermissionProbe),
-            local: Default::default(),
+            local: local.map(|l| l.parts(None)).unwrap_or_default(),
             meetings: Default::default(),
         };
         start_parts(parts)
@@ -82,16 +101,23 @@ impl Rig {
 
     /// Stops the core and starts another over the same library, keys and transport.
     pub fn restart(self) -> Self {
+        self.restart_with(&[])
+    }
+
+    /// [`restart`](Self::restart), with `rows` in the new core's registry (installed already, or
+    /// not).
+    pub fn restart_with(self, rows: &[EngineRow]) -> Self {
         let Self {
             core,
             keys,
             net,
             db,
             dir,
+            local,
             ..
         } = self;
         core.shutdown();
-        let (core, events) = Self::start(&dir, &db, &[]);
+        let (core, events) = Self::start(&dir, &db, rows, local.as_ref());
         core.set_cloud_services(keys.clone(), net.clone());
         Self {
             core,
@@ -100,6 +126,7 @@ impl Rig {
             net,
             db,
             dir,
+            local,
         }
     }
 

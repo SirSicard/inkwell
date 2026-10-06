@@ -130,6 +130,9 @@ pub fn context_tokens(shared: &Shared) -> u32 {
     if shared.llms.local().is_some() {
         return LOCAL_CONTEXT_TOKENS;
     }
+    if shared.llms.on_device() {
+        return DEFAULT_CONTEXT_TOKENS;
+    }
     shared
         .llms
         .pick_shell()

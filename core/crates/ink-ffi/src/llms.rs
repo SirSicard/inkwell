@@ -24,6 +24,7 @@
 //! gone, or sends elsewhere than when the mode was saved ([`ModelPin::to`]), gets none.
 
 use std::collections::BTreeMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, PoisonError, RwLock};
 
 use ink_core::{CancelToken, Endpoint, Llm, LlmError, LlmInfo, LlmRequest, LlmResponse};
@@ -93,6 +94,9 @@ pub struct ShellLlms {
     cloud: RwLock<Option<Arc<ByokLlm>>>,
     /// The core's own model installed on this machine, `engine:local`.
     local: RwLock<Option<Arc<LocalLlm>>>,
+    /// The AI setting is this machine's model (`llm.choose` `on_device`): while none is
+    /// installed, nothing stands in for it.
+    on_device: AtomicBool,
 }
 
 impl ShellLlms {
@@ -121,13 +125,17 @@ impl ShellLlms {
     }
 
     /// The model polish goes to now: the chosen own-key provider, else the core's own model on
-    /// this machine, else a model the shell registered, if any. The user's choice wins.
+    /// this machine, else a model the shell registered, if any. The user's choice wins: with this
+    /// machine's model chosen and none installed, there is none.
     pub fn pick(&self) -> Option<Arc<dyn Llm>> {
         if let Some(cloud) = self.cloud() {
             return Some(cloud as Arc<dyn Llm>);
         }
         if let Some(local) = self.local() {
             return Some(local as Arc<dyn Llm>);
+        }
+        if self.on_device() {
+            return None;
         }
         self.pick_shell().map(|shell| shell as Arc<dyn Llm>)
     }
@@ -147,12 +155,25 @@ impl ShellLlms {
         if self.local().is_some() {
             return Some(ModelRef::Engine(LOCAL_ID.into()));
         }
+        if self.on_device() {
+            return None;
+        }
         self.engines
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .keys()
             .next()
             .map(|id| ModelRef::Engine(id.clone()))
+    }
+
+    /// Whether the AI setting is this machine's model (`llm.choose` `on_device`).
+    pub fn on_device(&self) -> bool {
+        self.on_device.load(Ordering::Acquire)
+    }
+
+    /// Sets whether the AI setting is this machine's model.
+    pub fn set_on_device(&self, chosen: bool) {
+        self.on_device.store(chosen, Ordering::Release);
     }
 
     /// The core's own model on this machine, if one is installed.

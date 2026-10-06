@@ -1826,8 +1826,8 @@ public struct KindStats: Codable, Sendable, Equatable {
     }
 }
 
-/// A language model a mode can be polished on: one the shell registered, or the own-key
-/// provider chosen in Settings > AI.
+/// A language model a mode can be polished on: one the shell registered, the core's own on this
+/// machine, or the own-key provider chosen in Settings > AI.
 public struct LanguageModelChoice: Codable, Sendable, Equatable {
     /// Whether polish may use it now: one of the user's polish consents covers it
     /// (consent.state's consents) and local-only mode lets it (blocked_local_only false).
@@ -1843,8 +1843,9 @@ public struct LanguageModelChoice: Codable, Sendable, Equatable {
     /// {"to":"cloud","endpoint":"<this>"}.
     public let endpoint: String?
     /// Its id, as a mode names it (polish_model): engine:<id> for a model the shell registered
-    /// (engine:apple-foundation-models), provider:<id> for the chosen own-key provider. Show
-    /// the name, never the id.
+    /// (engine:apple-foundation-models), engine:local for the core's own model on this machine
+    /// (whichever size is downloaded), provider:<id> for the chosen own-key provider. Show the
+    /// name, never the id.
     public let id: String
     /// The model it asks for: for the own-key provider, the one chosen in Settings > AI, which
     /// a mode's polish_model_name replaces (the editor's placeholder).
@@ -1982,13 +1983,15 @@ public enum LlmFeature: String, Codable, Sendable, Equatable, CaseIterable {
     case meetings
 }
 
-/// An own-key (BYOK) language model provider the user can choose: its id, what it uses unless
-/// told otherwise, and whether its API key is stored. The key itself never leaves the OS key
-/// store.
+/// A language model provider the user can choose: an own-key (BYOK) one, or this machine's
+/// model (on_device, listed only where the OS has language models of the core's own: Windows).
+/// Its id, what it uses unless told otherwise, and whether its API key is stored. The key
+/// itself never leaves the OS key store.
 public struct LlmProviderEntry: Codable, Sendable, Equatable {
     /// Whether llm.choose may name another address (custom only).
     public let customUrl: Bool
-    /// The model used when llm.choose names none.
+    /// The model used when llm.choose names none; for on_device, the registry id of the
+    /// language model downloaded, else of the size the core suggests (models.listed).
     public let defaultModel: String
     /// Its address: fixed for a built-in provider; for custom, the address used when llm.choose
     /// names none.
@@ -1997,8 +2000,12 @@ public struct LlmProviderEntry: Codable, Sendable, Equatable {
     /// when that could not be asked (llm.providers' error says so).
     public let hasKey: Bool
     /// The provider: openai, groq, anthropic, openrouter or custom (any OpenAI-compatible
-    /// server).
+    /// server), or on_device (the core's own model on this machine, which needs no key and
+    /// keeps local-only mode on).
     public let id: String
+    /// For on_device, whether a language model is downloaded: llm.choose on_device needs one.
+    /// Absent for the others.
+    public let installed: Bool?
     /// Whether a call needs its API key (a custom server usually runs without one).
     public let needsKey: Bool
 
@@ -2008,18 +2015,22 @@ public struct LlmProviderEntry: Codable, Sendable, Equatable {
         case endpoint
         case hasKey = "has_key"
         case id
+        case installed
         case needsKey = "needs_key"
     }
 }
 
-/// The own-key language model providers and the one chosen, in answer to llm.providers,
-/// llm.key.save, llm.key.delete and llm.choose. A feature (polish, voice edit, summaries and
-/// Ask) sends to the chosen provider only when no model is registered by the shell, and only
-/// with the user's consent for its endpoint (consent.state).
+/// The own-key language model providers, this machine's model where the OS has one, and the
+/// choice, in answer to llm.providers, llm.key.save, llm.key.delete and llm.choose. The
+/// features (polish, voice edit, summaries and Ask) use the chosen provider; with none chosen,
+/// the core's own model on this machine once one is downloaded (Windows), else the model the
+/// shell registered (Apple's on the Mac). Each only with the user's consent for where it sends
+/// (consent.state).
 public struct LlmProviders: Codable, Sendable, Equatable {
     /// For custom, the server's address as chosen; absent otherwise.
     public let baseUrl: String?
-    /// The chosen provider's id; absent when none is chosen.
+    /// The chosen provider's id, or on_device for this machine's model; absent when none is
+    /// chosen.
     public let chosen: String?
     /// Where the chosen provider sends, as consent.state names it; absent with chosen.
     public let endpoint: String?
@@ -2029,12 +2040,14 @@ public struct LlmProviders: Codable, Sendable, Equatable {
     /// Local-only mode (llm.local_only): while on, a provider that is not on this machine is
     /// never called.
     public let localOnly: Bool
-    /// The model the chosen provider is asked for; absent with chosen.
+    /// The model the chosen provider is asked for; for on_device, the registry id of the
+    /// language model downloaded (models.listed), absent while none is. Absent with chosen.
     public let model: String?
     /// Every provider, in preference order.
     public let providers: [LlmProviderEntry]
     /// Whether the chosen provider can be called: its key is stored (when it needs one), and
-    /// local-only mode lets it through. Each feature still needs its own consent.
+    /// local-only mode lets it through; for on_device, whether a language model is downloaded.
+    /// Each feature still needs its own consent.
     public let ready: Bool
     /// The command's "id", when it had one.
     public let ref: String?
@@ -2060,16 +2073,23 @@ public struct LlmProviders: Codable, Sendable, Equatable {
 }
 
 /// The answer to llm.test: one short fixed request (never the user's words) sent to the chosen
-/// provider with its stored key, and whether it answered.
+/// provider with its stored key, or, with none chosen, to the core's own model on this machine
+/// (loaded first if it is not), and whether it answered, timed.
 public struct LlmTested: Codable, Sendable, Equatable {
+    /// How long the answer took, in milliseconds, the load apart; absent when it did not
+    /// answer. A short request: a dictation's polish reads and writes more.
+    public let answerMs: Int64?
     /// Why it did not answer, as a sentence starting "couldn't"; absent when ok. Names what
     /// failed, never the key.
     public let error: String?
-    /// The model asked.
+    /// For on_device, how long loading the model took, in milliseconds (near 0 when it was
+    /// loaded already). Absent for a provider.
+    public let loadMs: Int64?
+    /// The model asked; for on_device, its registry id (models.listed).
     public let model: String
     /// Whether the provider answered.
     public let ok: Bool
-    /// The provider tested.
+    /// The provider tested; on_device for this machine's model.
     public let provider: String
     /// The command's "id", when it had one.
     public let ref: String?
@@ -2078,6 +2098,18 @@ public struct LlmTested: Codable, Sendable, Equatable {
     public let status: Int64?
     /// Always `llm.tested`.
     public let type: String
+
+    private enum CodingKeys: String, CodingKey {
+        case answerMs = "answer_ms"
+        case error
+        case loadMs = "load_ms"
+        case model
+        case ok
+        case provider
+        case ref
+        case status
+        case type
+    }
 }
 
 /// An answer to meeting.ask about the live meeting: the model's words. Render them as text only
