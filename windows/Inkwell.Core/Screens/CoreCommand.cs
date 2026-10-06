@@ -258,6 +258,16 @@ public abstract record CoreCommand
         private protected override IEnumerable<(string, object)> Fields() => [("cmd", Name), ("app", App), ("id", Name)];
     }
 
+    /// <summary>
+    /// "Stop and delete", in a meeting's first minute (until its delete_until_unix_ms): the
+    /// recording ends and is deleted as if never made (meeting.stopped, then meeting.discarded).
+    /// </summary>
+    public sealed record MeetingDiscard : CoreCommand
+    {
+        public override string Name => "meeting.discard";
+        private protected override IEnumerable<(string, object)> Fields() => [("cmd", Name), ("id", Name)];
+    }
+
     /// <summary>The call policies: meetings.calls with <paramref name="Ref"/>, or a command.failed with it as the id.</summary>
     public sealed record MeetingsCallsList(string Ref) : CoreCommand
     {

@@ -164,7 +164,7 @@ internal sealed unsafe class DropFallback : IDisposable
         _ = SetBkMode(dc, TRANSPARENT);
         var titleFont = Font(S(DropLayout.TitleSize), FW.FW_MEDIUM);
         var detailFont = Font(S(DropLayout.DetailSize), FW.FW_NORMAL);
-        var (titleRect, detailRect, detailFormat) = Lines(text.Buttons is not null, client, scale);
+        var (titleRect, detailRect, detailFormat) = Lines(text.Buttons is not null, client, scale, text.DetailLines);
         var oldFont = SelectObject(dc, (HGDIOBJ)titleFont.Value);
         SetTextColor(dc, Colour(text.Tone == DropTone.Plain ? look.Secondary : look.Alert));
         fixed (char* t = text.Title)
@@ -187,7 +187,7 @@ internal sealed unsafe class DropFallback : IDisposable
             var penBefore = SelectObject(dc, (HGDIOBJ)inkPen.Value);
             for (var i = 0; i < buttons.Count; i++)
             {
-                var (bl, bt, br, bb) = DropLayout.Button(i);
+                var (bl, bt, br, bb) = DropLayout.Button(i, text.DetailLines);
                 var rect = new RECT { left = S(bl), top = S(bt), right = S(br), bottom = S(bb) };
                 var fillBefore = SelectObject(dc, i == 0 ? (HGDIOBJ)inkFill.Value : GetStockObject(NullBrush));
                 RoundRect(dc, rect.left, rect.top, rect.right, rect.bottom, S(DropLayout.ButtonHeight), S(DropLayout.ButtonHeight));
@@ -214,17 +214,18 @@ internal sealed unsafe class DropFallback : IDisposable
     /// <summary>
     /// Where the two lines go in a panel whose client area is <paramref name="client"/>, and how the
     /// detail is drawn. Centred on the panel, one line each. With buttons (the consent offer), over
-    /// them, the detail on up to two lines, as the ink's Drop draws it: the offer's consent
-    /// sentence is the one line the Drop must not cut.
+    /// them, the detail on up to two lines (<paramref name="detailLines"/>: three where an Always
+    /// app asked instead says why), as the ink's Drop draws it: the offer's consent sentence is the
+    /// one line the Drop must not cut.
     /// </summary>
-    internal static (RECT Title, RECT Detail, uint DetailFormat) Lines(bool buttons, RECT client, double scale)
+    internal static (RECT Title, RECT Detail, uint DetailFormat) Lines(bool buttons, RECT client, double scale, int detailLines = 2)
     {
         int S(double dips) => (int)Math.Round(dips * scale);
         var left = S(DropLayout.TextLeft);
         var right = client.right - S(DropLayout.TextRight);
         var mid = buttons ? S(30) : (client.bottom - client.top) / 2;
         var title = new RECT { left = left, top = mid - S(20), right = right, bottom = mid - S(1) };
-        var detail = new RECT { left = left, top = mid + S(1), right = right, bottom = mid + S(buttons ? 52 : 26) };
+        var detail = new RECT { left = left, top = mid + S(1), right = right, bottom = mid + S(buttons ? 26 * Math.Max(2, detailLines) : 26) };
         var format = (uint)(DT.DT_LEFT | DT.DT_TOP | DT.DT_END_ELLIPSIS | DT.DT_NOPREFIX
             | (buttons ? DT.DT_WORDBREAK | DT.DT_EDITCONTROL : DT.DT_SINGLELINE));
         return (title, detail, format);
@@ -245,7 +246,7 @@ internal sealed unsafe class DropFallback : IDisposable
     {
         var x = (short)((nint)lParam & 0xFFFF) / scale;
         var y = (short)(((nint)lParam >> 16) & 0xFFFF) / scale;
-        var button = DropLayout.ButtonAt(text.Buttons, x, y);
+        var button = DropLayout.ButtonAt(text.Buttons, x, y, text.DetailLines);
         if (down)
         {
             pressed = button;

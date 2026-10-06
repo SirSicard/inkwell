@@ -93,7 +93,8 @@ internal sealed class ShellInk : IDisposable
             ? null
             : new DropText(line.Title, line.Detail, Tone(line.Tone), line.LiveWords)
             {
-                Buttons = line.Actions is { } a ? new DropButtons(a.First.Title, a.Second?.Title) : null,
+                Buttons = line.Actions is { } a ? new DropButtons(a.All.Select(action => action.Title).ToList()) : null,
+                DetailLines = line.DetailLines,
             };
         live = InkFor(ink);
         Update();

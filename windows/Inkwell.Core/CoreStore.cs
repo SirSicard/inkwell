@@ -62,6 +62,10 @@ public sealed record LiveMeeting(string Record)
     public FarEnd? FarEnd { get; init; }
     /// <summary>It records everything the PC plays instead of the app alone (meeting.far_end_fallback).</summary>
     public bool FarEndFallback { get; init; }
+    /// <summary>The app's call policy (Always) started it, without a click: the Drop says so and offers Stop, and Stop and delete until DeleteUntilUnixMs.</summary>
+    public bool Auto { get; init; }
+    /// <summary>Until when, Unix ms, Stop and delete (meeting.discard) may delete it as if never made; null when it cannot.</summary>
+    public long? DeleteUntilUnixMs { get; init; }
     /// <summary>meeting.stopped arrived: capture ended and the final pass is running.</summary>
     public bool Stopping { get; init; }
     /// <summary>How far the final pass has come (meeting.transcribed, .diarized, .summarized), while Stopping.</summary>
@@ -92,7 +96,8 @@ public sealed record LiveMeeting(string Record)
     public bool Equals(LiveMeeting? other) =>
         other is not null && Record == other.Record && Title == other.Title && App == other.App && AppName == other.AppName
         && MicName == other.MicName && MicReason == other.MicReason && FarEnd == other.FarEnd
-        && FarEndFallback == other.FarEndFallback && Stopping == other.Stopping && Blotted == other.Blotted
+        && FarEndFallback == other.FarEndFallback && Auto == other.Auto && DeleteUntilUnixMs == other.DeleteUntilUnixMs
+        && Stopping == other.Stopping && Blotted == other.Blotted
         && Sides.Count == other.Sides.Count && !Sides.Except(other.Sides).Any()
         && Partials.Count == other.Partials.Count && !Partials.Except(other.Partials).Any()
         && Finals.SequenceEqual(other.Finals) && Ledger == other.Ledger;
@@ -138,7 +143,8 @@ public readonly record struct BlotProgress(bool Transcribed, bool Diarized, bool
 }
 
 /// <summary>An app the core offers to record.</summary>
-public sealed record MeetingOffer(string App, string AppName);
+/// <param name="Message">Why an app the user chose Always for is offered rather than recorded (its own sound can't be recorded alone, or its start failed); null for an ordinary offer.</param>
+public sealed record MeetingOffer(string App, string AppName, string? Message = null);
 
 /// <summary>What a notice is about.</summary>
 public abstract record NoticeKind
@@ -376,6 +382,8 @@ public sealed class CoreStore : ObservableModel
                     MicName = started.MicName,
                     MicReason = started.MicReason,
                     FarEnd = started.FarEnd,
+                    Auto = started.Auto ?? false,
+                    DeleteUntilUnixMs = started.DeleteUntilUnixMs,
                 };
                 Offer = null;
                 break;
@@ -385,7 +393,7 @@ public sealed class CoreStore : ObservableModel
                 // shows it when the pass ends.
                 if (Meeting is null or { Stopping: true })
                 {
-                    Offer = new MeetingOffer(detected.App, AppName(detected.App, detected.AppName) ?? detected.AppName);
+                    Offer = new MeetingOffer(detected.App, AppName(detected.App, detected.AppName) ?? detected.AppName, detected.Message);
                 }
                 break;
             case MeetingDetectionEnded ended:
@@ -456,6 +464,10 @@ public sealed class CoreStore : ObservableModel
             case MeetingFinished finished:
                 LastRecord = finished.Record;
                 EndMeeting(finished.Record);
+                break;
+            case MeetingDiscarded discarded:
+                // Stop and delete: gone as if never made, so it is never the last record.
+                EndMeeting(discarded.Record);
                 break;
             case Events.MeetingFailed failed:
                 Notice(new NoticeKind.MeetingFailed(), failed.Message);

@@ -24,6 +24,14 @@ public sealed class LiveModel : ObservableModel
     private readonly Func<DateTimeOffset> now;
     private readonly ScreenLog log;
     private LiveNotesDraft? draft;
+    /// <summary>
+    /// The meeting stopped while it was being deleted: its notes wait, unsaved, for the delete's
+    /// outcome (gone with it, or saved if the core refused the delete).
+    /// </summary>
+    private bool flushHeld;
+
+    /// <summary>Whether a record is being stopped and deleted (the meetings model's): its notes are never saved.</summary>
+    public Func<string, bool> Discarding { get; set; } = _ => false;
     private int nextAsk;
     private string askText = "";
 
@@ -205,6 +213,7 @@ public sealed class LiveModel : ObservableModel
                 Stack = new FarEndQuestions();
                 Asked = [];
                 NotesText = "";
+                flushHeld = false;
                 draft = new LiveNotesDraft(started.Record);
                 break;
             case MeetingFinal final when final.Record == Record:
@@ -218,9 +227,27 @@ public sealed class LiveModel : ObservableModel
                 Answered(failed.Id, AskAnswer.Failed(failed.Message));
                 break;
             case MeetingStopped stopped when stopped.Record == Record:
-                // Capture ended: whatever is typed is saved now.
+                // Capture ended: whatever is typed is saved now, unless the meeting is being deleted
+                // (Stop and delete): its words never go into a record that is going.
+                if (Discarding(stopped.Record))
+                {
+                    flushHeld = true;
+                }
+                else
+                {
+                    NotesLeft();
+                }
+                return;
+            case CommandFailed failed when failed.Command == "meeting.discard" && flushHeld:
+                // The delete was refused after the stop: the meeting is kept, and so are its notes.
+                flushHeld = false;
                 NotesLeft();
                 return;
+            case MeetingDiscarded discarded when discarded.Record == Record:
+                // Stop and delete: the meeting and its notes are gone with it; nothing is saved to it.
+                draft = null;
+                End();
+                break;
             case NoteAdded added when added.Record == Record:
                 if (added.Ref is string addedRef && draft is not null)
                 {
@@ -264,7 +291,13 @@ public sealed class LiveModel : ObservableModel
 
     private void End()
     {
+        // A meeting being deleted keeps none of its notes.
+        if (Record is string record && Discarding(record))
+        {
+            draft = null;
+        }
         NotesLeft();
+        flushHeld = false;
         Record = null;
         StartedAt = null;
         draft = null;

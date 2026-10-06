@@ -155,7 +155,7 @@ public partial class App : Application
         };
         core = new CoreController(window.DispatcherQueue);
         // The ink's pipeline compiles off the UI thread from here; the Drop waits, hidden.
-        ink = new ShellInk(window.DispatcherQueue, InkProblem, action => screens?.Meetings.Perform(action));
+        ink = new ShellInk(window.DispatcherQueue, InkProblem, action => screens?.PerformDropAction(action));
         InkPanel.Clock = ink.Clock;
         window.ShowInk(ink);
         screens = AppScreens.Models(core, window.DispatcherQueue, new VelopackUpdater(Quit));
@@ -173,7 +173,10 @@ public partial class App : Application
         // What the Drop says, after the store has taken each batch.
         var drop = new DropModel(
             new DispatcherWake(window.DispatcherQueue), () => models.Polish.HasWorkingEngine,
-            () => models.Meetings.FailureOn(MeetingPlace.Drop), noSpeechModel: () => models.Catalogue.HasSpeechModel == false);
+            () => models.DropFailure, noSpeechModel: () => models.Catalogue.HasSpeechModel == false,
+            deletable: record => models.Meetings.CanDiscard(record),
+            discarding: record => models.Meetings.Discarding == record,
+            policyOf: app => models.Calls.PolicyOf(app));
         dropModel = drop;
         var shellInk = ink;
         drop.Changed += () =>
@@ -183,8 +186,16 @@ public partial class App : Application
         var store = core.Store;
         var applying = false;
         // An answer sent again clears the Drop's failure line at once, not at the next batch (a
-        // change during a batch is the batch's: the Drop takes it whole, after the screens).
+        // change during a batch is the batch's: the Drop takes it whole, after the screens). Stop
+        // and delete's minute ending (one wake) and a choice from the Drop show the same way.
         models.Meetings.PropertyChanged += (_, _) =>
+        {
+            if (!applying)
+            {
+                drop.Refresh(store);
+            }
+        };
+        models.Calls.PropertyChanged += (_, _) =>
         {
             if (!applying)
             {

@@ -59,7 +59,8 @@ public sealed class MeetingDropTests
     private const string Started = """{"type":"meeting.started","record":"r1","app":"ms-teams.exe","app_name":"ms-teams","far_end":"everything"}""";
 
     private static readonly DropActions TeamsButtons =
-        new(new DropAction.Record("ms-teams.exe"), new DropAction.Dismiss("ms-teams.exe"));
+        new(new DropAction.Record("ms-teams.exe"), new DropAction.Dismiss("ms-teams.exe"),
+            new DropAction.Always("ms-teams.exe", "Microsoft Teams"), new DropAction.Never("ms-teams.exe", "Microsoft Teams"));
 
     [Fact]
     public void AnAppThatOpensTheMicIsOfferedByItsNameWithTwoButtonsAndTheInkStill()
@@ -74,7 +75,9 @@ public sealed class MeetingDropTests
         Assert.Equal(DropInk.Idle, rig.Drop.Ink);
         Assert.False(rig.Drop.IsLive);
         Assert.Equal("Record this call", TeamsButtons.First.Title);
-        Assert.Equal("Not this one", TeamsButtons.Second!.Title);
+        Assert.Equal("Not this one", TeamsButtons.At(1)!.Title);
+        Assert.Equal("Always for Microsoft Teams", TeamsButtons.At(2)!.Title);
+        Assert.Equal("Never for Microsoft Teams", TeamsButtons.At(3)!.Title);
 
         // The app lets go of the mic before the user answers: the offer goes.
         rig.Apply("""{"type":"meeting.detection_ended","app":"ms-teams.exe","dismissed":false}""");
@@ -90,7 +93,7 @@ public sealed class MeetingDropTests
         Assert.Equal(new CoreCommand.MeetingStart("ms-teams.exe", null), rig.Sent.Commands[^1]);
         rig.Meetings.Perform(rig.Drop.Line!.Actions!.At(1)!);
         Assert.Equal(new CoreCommand.MeetingDismiss("ms-teams.exe"), rig.Sent.Commands[^1]);
-        Assert.Null(rig.Drop.Line!.Actions!.At(2));
+        Assert.Null(rig.Drop.Line!.Actions!.At(4));
 
         rig.Apply("""{"type":"meeting.detection_ended","app":"ms-teams.exe","dismissed":true}""");
         Assert.Null(rig.Drop.Line);
@@ -146,7 +149,9 @@ public sealed class MeetingDropTests
         rig.Apply(ZoomOffered);
         Assert.Equal(
             new DropLine("Zoom opened the microphone", Consent,
-                Actions: new DropActions(new DropAction.Record("Zoom.exe"), new DropAction.Dismiss("Zoom.exe"))),
+                Actions: new DropActions(
+                    new DropAction.Record("Zoom.exe"), new DropAction.Dismiss("Zoom.exe"),
+                    new DropAction.Always("Zoom.exe", "Zoom"), new DropAction.Never("Zoom.exe", "Zoom"))),
             rig.Drop.Line);
     }
 

@@ -89,7 +89,7 @@ public class ScreenModelsTests
             ("note.add", "r:line:0"), ("note.update", "r:line:0:update"), ("note.delete", "r:line:0:delete"),
             ("setting.get", "setting:dictation.polish"), ("setting.set", "setting:dictation.key"),
             ("setting.set", "setting:meetings.llm"), ("setting.get", "setting:meetings.calls.default"),
-            ("meetings.calls.set", "calls:1"),
+            ("meetings.calls.set", "calls:1"), ("meeting.discard", "meeting.discard"),
             ("consent.allow", "consent.allow:edit:3"), ("snippets.save", "snippets:2"), ("meeting.start", "meeting.start"),
             ("model.update", "model.update:qwen3-asr-1.7b-q8"),
         })

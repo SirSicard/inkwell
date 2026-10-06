@@ -20,9 +20,10 @@
 // the shared clock; with Animation effects off or Always still, one still frame per change;
 // hidden, none.
 //
-// The consent offer's buttons ("Record this call", "Not this one") widen and deepen the pill, as
-// on the Mac. A click on one (down and up on the same button) raises ButtonClicked; the click
-// still never activates the Drop or Inkwell (MA_NOACTIVATE).
+// The consent offer's buttons ("Record this call", "Not this one", "Always for Zoom", "Never for
+// Zoom") and an Always call's ("Stop", "Stop and delete") widen and deepen the pill, as on the Mac:
+// two to a row under the lines, each row deepening it. A click on one (down and up on the same
+// button) raises ButtonClicked; the click still never activates the Drop or Inkwell (MA_NOACTIVATE).
 //
 // The Drop is the recording indicator, so it never goes blank. A lost device (TDR, driver update),
 // a lost composition device (DWM restarted) or a failed present releases every Direct3D,
@@ -59,34 +60,55 @@ internal static class DropLayout
     /// <summary>The line's face: the display serif.</summary>
     public const string DetailFace = "Sitka Text";
 
-    /// <summary>With buttons (the consent offer): wider and taller, as the Mac's sizeWithActions.</summary>
+    /// <summary>With buttons (the consent offer): wider and taller, as the Mac's sizeWithActions (one row, two lines).</summary>
     public const double WidthWithButtons = 480;
     public const double HeightWithButtons = 132;
-    public const double ButtonWidth = 150;
-    public const double ButtonHeight = 30;
+    /// <summary>Two buttons to a row, filling the lines' width.</summary>
+    public const int ButtonsPerRow = 2;
     public const double ButtonGap = 8;
+    public const double ButtonWidth = (WidthWithButtons - TextLeft - TextRight - ButtonGap) / ButtonsPerRow;
+    public const double ButtonHeight = 30;
     /// <summary>From the panel's bottom edge to the buttons'.</summary>
     public const double ButtonBottom = 14;
     public const float ButtonTextSize = 12.5f;
+    /// <summary>A line of the detail (Sitka at 17), for a third line over the buttons.</summary>
+    public const double DetailLineHeight = 23;
 
-    /// <summary>The panel's size for <paramref name="text"/>, in DIPs.</summary>
-    public static (double W, double H) Size(DropText text) =>
-        text.Buttons is null ? (Width, Height) : (WidthWithButtons, HeightWithButtons);
-
-    /// <summary>Button <paramref name="index"/>'s rectangle, in DIPs from the panel's top left: a row under the lines.</summary>
-    public static (double Left, double Top, double Right, double Bottom) Button(int index)
+    /// <summary>The panel's size for <paramref name="text"/>, in DIPs: its rows of buttons, and a third line where it has one.</summary>
+    public static (double W, double H) Size(DropText text)
     {
-        var left = TextLeft + index * (ButtonWidth + ButtonGap);
-        var top = HeightWithButtons - ButtonBottom - ButtonHeight;
+        ArgumentNullException.ThrowIfNull(text);
+        if (text.Buttons is not { } buttons)
+        {
+            return (Width, Height);
+        }
+        var rows = Rows(buttons.Count);
+        return (WidthWithButtons, ButtonsTop(text.DetailLines) + rows * ButtonHeight + (rows - 1) * ButtonGap + ButtonBottom);
+    }
+
+    private static int Rows(int count) => Math.Max(1, (count + ButtonsPerRow - 1) / ButtonsPerRow);
+
+    /// <summary>Where the first row of buttons starts, under a detail of <paramref name="detailLines"/> lines.</summary>
+    private static double ButtonsTop(int detailLines) =>
+        HeightWithButtons - ButtonBottom - ButtonHeight + Math.Max(0, detailLines - 2) * DetailLineHeight;
+
+    /// <summary>
+    /// Button <paramref name="index"/>'s rectangle, in DIPs from the panel's top left: two to a row
+    /// under the lines (a detail of <paramref name="detailLines"/> lines).
+    /// </summary>
+    public static (double Left, double Top, double Right, double Bottom) Button(int index, int detailLines = 2)
+    {
+        var left = TextLeft + (index % ButtonsPerRow) * (ButtonWidth + ButtonGap);
+        var top = ButtonsTop(detailLines) + (index / ButtonsPerRow) * (ButtonHeight + ButtonGap);
         return (left, top, left + ButtonWidth, top + ButtonHeight);
     }
 
     /// <summary>The index of the button of <paramref name="buttons"/> at (<paramref name="x"/>, <paramref name="y"/>) in DIPs, or null.</summary>
-    public static int? ButtonAt(DropButtons? buttons, double x, double y)
+    public static int? ButtonAt(DropButtons? buttons, double x, double y, int detailLines = 2)
     {
         for (var i = 0; i < (buttons?.Count ?? 0); i++)
         {
-            var (left, top, right, bottom) = Button(i);
+            var (left, top, right, bottom) = Button(i, detailLines);
             if (x >= left && x < right && y >= top && y < bottom)
             {
                 return i;
@@ -565,8 +587,10 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
             }
             else
             {
-                // Two lines at most, the tail cut with an ellipsis.
-                detailLayout = Layout(pipeline, text.Detail, detailFormat, width, line.height * 2 + 0.5f);
+                // Two lines at most (three where the offer says why an Always app is asked), the
+                // tail cut with an ellipsis.
+                var lines = text.Buttons is null ? 2 : Math.Max(2, text.DetailLines);
+                detailLayout = Layout(pipeline, text.Detail, detailFormat, width, line.height * lines + 0.5f);
                 wetWords = default;
             }
         }
@@ -721,7 +745,7 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
             detailLayout->GetMetrics(&dm);
             var total = tm.height + DropLayout.LineSpacing + dm.height;
             // Above the buttons when there are some, else centred on the pill.
-            var linesHeight = text.Buttons is null ? panelH : DropLayout.Button(0).Top - 4;
+            var linesHeight = text.Buttons is null ? panelH : DropLayout.Button(0, text.DetailLines).Top - 4;
             var top = (linesHeight - total) / 2;
             d2d->DrawTextLayout(new D2D_POINT_2F((float)DropLayout.TextLeft, (float)top), titleLayout, (ID2D1Brush*)title,
                 D2D1_DRAW_TEXT_OPTIONS.D2D1_DRAW_TEXT_OPTIONS_NONE);
@@ -735,7 +759,7 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
                 label = Brush(d2d, look.ButtonLabel, 1);
                 for (var i = 0; i < buttons.Count; i++)
                 {
-                    var (left, btop, right, bottom) = DropLayout.Button(i);
+                    var (left, btop, right, bottom) = DropLayout.Button(i, text.DetailLines);
                     var radius = (float)DropLayout.ButtonHeight / 2;
                     var shape = new D2D1_ROUNDED_RECT
                     {
@@ -863,7 +887,7 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
     /// <summary>A press at <paramref name="at"/> (DIPs): a click is down and up on the same button.</summary>
     internal void Press(bool down, (double X, double Y) at)
     {
-        var button = DropLayout.ButtonAt(text.Buttons, at.X, at.Y);
+        var button = DropLayout.ButtonAt(text.Buttons, at.X, at.Y, text.DetailLines);
         if (down)
         {
             pressed = button;

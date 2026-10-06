@@ -9,7 +9,12 @@
 //   a take held or transcribed   its line, the ink dictating (the app in front, its mode, the live words)
 //   a take ended not as it should  a note for 2.5 s, the ink still (too short, no mic, not typed...)
 //   a note while something is live  kept, and shown when it ends
-//   an app took the mic (the core offers)  "Teams opened the microphone", Record this call / Not this one, the ink still
+//   an app took the mic (the core offers)  "Teams opened the microphone", Record this call / Not this one /
+//                                Always for Teams / Never for Teams, the ink still (an app that is Always
+//                                already is not offered Always; an Always app asked instead says why)
+//   a call Always recorded       "● Recording Teams automatically", the reminder, Stop, and Stop and delete
+//                                for its first minute (one wake ends it)
+//   Stop and delete pressed      "Stop and delete" / "Deleting this recording" until the core says it is gone
 //   nothing                      the Drop hides
 //
 // The app's ShellInk draws what this says; nothing here draws, and nothing ticks: a note's end is
@@ -31,8 +36,10 @@ public enum DropLineTone
 
 /// <summary>The Drop's two lines, and its buttons when it offers something.</summary>
 /// <param name="LiveWords">The detail is a held take's live words: its end matters, the newest words are wet.</param>
+/// <param name="DetailLines">The most lines the detail takes: three where an Always app asked instead says why.</param>
 public sealed record DropLine(
-    string Title, string Detail, DropLineTone Tone = DropLineTone.Plain, bool LiveWords = false, DropActions? Actions = null);
+    string Title, string Detail, DropLineTone Tone = DropLineTone.Plain, bool LiveWords = false, DropActions? Actions = null,
+    int DetailLines = 2);
 
 /// <summary>A button on the Drop.</summary>
 public abstract record DropAction
@@ -45,25 +52,59 @@ public abstract record DropAction
     /// <summary>"Not this one" (meeting.dismiss).</summary>
     public sealed record Dismiss(string App) : DropAction;
 
+    /// <summary>"Always for Zoom": this call now and every later one without asking (meetings.calls.set, then meeting.start).</summary>
+    public sealed record Always(string App, string Name) : DropAction;
+
+    /// <summary>"Never for Zoom": the app's calls are never offered or recorded (meetings.calls.set; the core withdraws the offer).</summary>
+    public sealed record Never(string App, string Name) : DropAction;
+
+    /// <summary>Stop a call its app's Always recorded (meeting.stop).</summary>
+    public sealed record StopRecording : DropAction;
+
+    /// <summary>"Stop and delete", in that call's first minute (meeting.discard).</summary>
+    public sealed record StopAndDelete : DropAction;
+
     /// <summary>The button's words.</summary>
     public string Title => this switch
     {
         Record => "Record this call",
         Dismiss => "Not this one",
+        Always always => $"Always for {MeetingDrop.Named(always.Name)}",
+        Never never => $"Never for {MeetingDrop.Named(never.Name)}",
+        StopRecording => "Stop",
+        StopAndDelete => "Stop and delete",
         _ => throw new InvalidOperationException("a Drop action without words"),
+    };
+
+    /// <summary>What Narrator says the button does, beyond its words; null for none.</summary>
+    public string? Help => this switch
+    {
+        Always always => $"Records this call, and from now on records {MeetingDrop.Named(always.Name)}'s calls without asking",
+        Never never => $"Inkwell won't offer to record {MeetingDrop.Named(never.Name)}'s calls again",
+        StopRecording => "Stops recording; the final pass runs",
+        StopAndDelete => "Stops recording and deletes this recording, as if it had never been made",
+        _ => null,
     };
 }
 
 /// <summary>The Drop's buttons, in order: the first is the answer, drawn in ink.</summary>
-public sealed record DropActions(DropAction First, DropAction? Second = null)
+public sealed record DropActions(IReadOnlyList<DropAction> All)
 {
-    /// <summary>The button at <paramref name="index"/> (0 or 1), or null.</summary>
-    public DropAction? At(int index) => index switch
+    public DropActions(params DropAction[] actions)
+        : this((IReadOnlyList<DropAction>)actions)
     {
-        0 => First,
-        1 => Second,
-        _ => null,
-    };
+    }
+
+    public DropAction First => All[0];
+
+    public int Count => All.Count;
+
+    /// <summary>The button at <paramref name="index"/>, or null.</summary>
+    public DropAction? At(int index) => index >= 0 && index < All.Count ? All[index] : null;
+
+    public bool Equals(DropActions? other) => other is not null && All.SequenceEqual(other.All);
+
+    public override int GetHashCode() => All.Count;
 }
 
 /// <summary>What the Drop's ink shows (the app maps it to the renderer's state).</summary>
@@ -100,20 +141,67 @@ public static class MeetingDrop
         return dictation == DictationPhase.Idle ? DropInk.Idle : DropInk.Dictating;
     }
 
-    /// <summary>A live meeting's lines for <paramref name="ink"/> (meeting, problem or blotting).</summary>
-    public static DropLine Live(LiveMeeting meeting, DropInk ink)
+    /// <summary>What the core calls an app whose name and identity show nothing.</summary>
+    public const string Nameless = CallPolicyModel.Nameless;
+
+    /// <summary>The offer's line when an Always app's own sound can't be recorded alone (meeting.detected's message is then the core's NOT_ALONE, word for word).</summary>
+    public const string NotAloneMessage = "Inkwell can only record everything this computer plays for this app, so it asks first";
+
+    public const string ConsentLine = "Recording keeps both sides on this PC. Tell the others you are recording.";
+
+    /// <summary>The title names the app, so this line does not: a long name would push the reminder past the last line.</summary>
+    public const string NotAloneLine = "Inkwell can't hear it alone: recording takes in everything this PC plays. Tell the others you are recording.";
+
+    /// <summary>An Always app's start that failed (any other meeting.detected message): the platform's words are the core's log's.</summary>
+    public const string StartFailedLine = "Inkwell couldn't start recording it by itself. Tell the others you are recording.";
+
+    public const string DiscardingTitle = "Stop and delete";
+    public const string DiscardingLine = "Deleting this recording";
+
+    /// <summary>An app's name in a button or a line: "this app" for the core's stand-in for none.</summary>
+    public static string Named(string name) => name == Nameless ? "this app" : name;
+
+    public static string AutoTitle(string? name) => $"● Recording {(name is null ? "the call" : Named(name))} automatically";
+
+    public static string AutoReminder(string? name) => $"Always is on for {(name is null ? "this app" : Named(name))}. Tell the others you are recording.";
+
+    private static string Sentence(string text) => text.Length == 0 ? text : string.Concat(text[..1].ToUpperInvariant(), text[1..]);
+
+    /// <summary>
+    /// A live meeting's lines for <paramref name="ink"/> (meeting, problem or blotting). A call its
+    /// app's Always recorded says so, keeps the reminder to tell the others, and offers Stop, and
+    /// Stop and delete while <paramref name="deletable"/> (its first minute); <paramref name="discarding"/>
+    /// once that was pressed. <paramref name="failure"/>: a Drop button that failed, in words.
+    /// </summary>
+    public static DropLine Live(LiveMeeting meeting, DropInk ink, bool deletable = false, bool discarding = false, string? failure = null)
     {
         ArgumentNullException.ThrowIfNull(meeting);
+        if (discarding)
+        {
+            return new(DiscardingTitle, failure ?? DiscardingLine, failure is null ? DropLineTone.Plain : DropLineTone.Alert);
+        }
+        var stops = meeting.Auto ? AutoStops(deletable) : null;
         switch (ink)
         {
             case DropInk.Blotting:
                 return new("Blotting · final pass", meeting.Title ?? meeting.AppName ?? "The final pass");
             case DropInk.Problem:
                 // The plain fact, not a guess at why (muted, a quiet call, another device): Windows
-                // has no system-audio permission to ask for, and nothing here is known to fix it.
+                // has no system-audio permission to ask for, and nothing here is known to fix it. A
+                // call its app's Always recorded keeps its Stop (and Stop and delete) here too.
                 return meeting.Sides.GetValueOrDefault(Channel.Far, SideState.Ok) == SideState.Zeros
-                    ? new("The other side is silent", "Only silence is arriving from the call.", DropLineTone.Alert)
-                    : new("The other side stopped", "Nothing is arriving from the call. Only your voice may be recorded.", DropLineTone.Alert);
+                    ? new("The other side is silent", failure ?? "Only silence is arriving from the call.", DropLineTone.Alert, Actions: stops)
+                    : new("The other side stopped", failure ?? "Nothing is arriving from the call. Only your voice may be recorded.", DropLineTone.Alert, Actions: stops);
+            case DropInk.Meeting when meeting.Auto:
+            {
+                var newest = meeting.Finals.Count > 0 ? meeting.Finals[^1].Text.Trim() : "";
+                var reminder = AutoReminder(meeting.AppName);
+                // The reminder holds the first minute, while Stop and delete is there; then the
+                // latest line, as any meeting's.
+                var detail = deletable || newest.Length == 0 ? reminder : newest;
+                return new(AutoTitle(meeting.AppName), failure ?? detail, failure is null ? DropLineTone.Recording : DropLineTone.Alert,
+                    Actions: stops);
+            }
             default:
                 var source = meeting.AppName ?? meeting.Title;
                 var latest = meeting.Finals.Count > 0 ? meeting.Finals[^1].Text.Trim() : "";
@@ -126,20 +214,38 @@ public static class MeetingDrop
         }
     }
 
+    private static DropActions AutoStops(bool deletable) =>
+        deletable ? new DropActions(new DropAction.StopRecording(), new DropAction.StopAndDelete()) : new DropActions(new DropAction.StopRecording());
+
     /// <summary>
     /// The consent Drop: an app opened the microphone and nothing is live. Honest about what
     /// recording does: both sides are kept on this PC, and the others should be told. A failed
     /// answer (<paramref name="failure"/>) is said in its place; the offer stays, to be answered
-    /// again.
+    /// again. It also sets the app's policy: "Always for" (unless it is Always already:
+    /// <paramref name="policy"/>, or a message saying why an Always app is asked), and "Never for".
     /// </summary>
-    public static DropLine Offer(MeetingOffer offer, string? failure)
+    public static DropLine Offer(MeetingOffer offer, string? failure, CallPolicy? policy = null)
     {
         ArgumentNullException.ThrowIfNull(offer);
+        // An Always app asked instead: why, in the shell's words.
+        var line = offer.Message switch
+        {
+            null => ConsentLine,
+            NotAloneMessage => NotAloneLine,
+            _ => StartFailedLine,
+        };
+        var actions = new List<DropAction> { new DropAction.Record(offer.App), new DropAction.Dismiss(offer.App) };
+        if (offer.Message is null && policy != CallPolicy.Always)
+        {
+            actions.Add(new DropAction.Always(offer.App, offer.AppName));
+        }
+        actions.Add(new DropAction.Never(offer.App, offer.AppName));
         return new(
-            $"{offer.AppName} opened the microphone",
-            failure ?? "Recording keeps both sides on this PC. Tell the others you are recording.",
+            Sentence($"{offer.AppName} opened the microphone"),
+            failure ?? line,
             failure is null ? DropLineTone.Plain : DropLineTone.Alert,
-            Actions: new DropActions(new DropAction.Record(offer.App), new DropAction.Dismiss(offer.App)));
+            Actions: new DropActions(actions),
+            DetailLines: offer.Message is null && failure is null ? 2 : 3);
     }
 }
 
@@ -268,6 +374,9 @@ public sealed class DropModel
     private readonly Func<bool> hasLanguageModel;
     private readonly Func<bool> noSpeechModel;
     private readonly Func<string?> offerFailure;
+    private readonly Func<string, bool> deletable;
+    private readonly Func<string, bool> discarding;
+    private readonly Func<string, CallPolicy?> policyOf;
     private DropLine? live;
     private DropLine? noteShowing;
     private DropLine? noteWaiting;
@@ -278,13 +387,21 @@ public sealed class DropModel
     /// <param name="hasLanguageModel">Whether a language model could rewrite a selection (Polish's engine).</param>
     /// <param name="offerFailure">A Drop answer that failed, in words (the meetings model's), or null.</param>
     /// <param name="noSpeechModel">Whether no speech model is installed (the catalogue's answer).</param>
-    public DropModel(IWakeScheduler wake, Func<bool>? hasLanguageModel = null, Func<string?>? offerFailure = null, Func<bool>? noSpeechModel = null)
+    /// <param name="deletable">Whether Stop and delete is offered for a record now (the meetings model's).</param>
+    /// <param name="discarding">Whether a record is being stopped and deleted (the meetings model's).</param>
+    /// <param name="policyOf">An app's call policy, when known (the call policies' model).</param>
+    public DropModel(
+        IWakeScheduler wake, Func<bool>? hasLanguageModel = null, Func<string?>? offerFailure = null, Func<bool>? noSpeechModel = null,
+        Func<string, bool>? deletable = null, Func<string, bool>? discarding = null, Func<string, CallPolicy?>? policyOf = null)
     {
         ArgumentNullException.ThrowIfNull(wake);
         this.wake = wake;
         this.hasLanguageModel = hasLanguageModel ?? (() => false);
         this.noSpeechModel = noSpeechModel ?? (() => false);
         this.offerFailure = offerFailure ?? (() => null);
+        this.deletable = deletable ?? (_ => false);
+        this.discarding = discarding ?? (_ => false);
+        this.policyOf = policyOf ?? (_ => null);
     }
 
     /// <summary>What the Drop says now; null: it hides. What is live first, then a note, then an offer.</summary>
@@ -307,15 +424,10 @@ public sealed class DropModel
         var (line, ink) = (Line, Ink);
         var wasLive = live is not null;
         Ink = MeetingDrop.Ink(store.Meeting, store.Dictation);
-        live = Ink switch
-        {
-            DropInk.Idle => null,
-            DropInk.Dictating => DictationDrop.Live(store.Dictation, store.LiveDictation),
-            _ => MeetingDrop.Live(store.Meeting!, Ink),
-        };
+        live = LiveLine(store);
         // The core offers only while nothing is being captured; what is live (a take, or the last
         // meeting's final pass) hides the offer until it ends.
-        offer = live is null && store.Offer is { } offered ? MeetingDrop.Offer(offered, offerFailure()) : null;
+        offer = OfferLine(store);
         foreach (var e in batch)
         {
             if (DictationDrop.Note(e, hasLanguageModel(), noSpeechModel()) is not { } note)
@@ -356,12 +468,29 @@ public sealed class DropModel
     {
         ArgumentNullException.ThrowIfNull(store);
         var line = Line;
-        offer = live is null && store.Offer is { } offered ? MeetingDrop.Offer(offered, offerFailure()) : null;
+        if (live is not null && store.Meeting is not null)
+        {
+            // A meeting's buttons and failure (Stop and delete's minute ending, a press, a refusal).
+            live = LiveLine(store);
+        }
+        offer = OfferLine(store);
         if (Line != line)
         {
             Changed?.Invoke();
         }
     }
+
+    private DropLine? LiveLine(CoreStore store) => Ink switch
+    {
+        DropInk.Idle => null,
+        DropInk.Dictating => DictationDrop.Live(store.Dictation, store.LiveDictation),
+        _ => MeetingDrop.Live(
+            store.Meeting!, Ink, deletable(store.Meeting!.Record), discarding(store.Meeting!.Record),
+            store.Meeting!.Auto || discarding(store.Meeting!.Record) ? offerFailure() : null),
+    };
+
+    private DropLine? OfferLine(CoreStore store) =>
+        live is null && store.Offer is { } offered ? MeetingDrop.Offer(offered, offerFailure(), policyOf(offered.App)) : null;
 
     private void ShowNote(DropLine note)
     {

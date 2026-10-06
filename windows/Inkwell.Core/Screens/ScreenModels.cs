@@ -50,8 +50,9 @@ public sealed class ScreenModels
         Modes = new ModesModel(send, apps);
         Owed = new OwedModel(send);
         Live = new LiveModel(send, log: this.log);
-        Meetings = new MeetingModel(send, cal, log: this.log);
+        Meetings = new MeetingModel(send, cal, log: this.log, wake: wake);
         Calls = new CallPolicyModel(send, apps);
+        Live.Discarding = record => Meetings.Discarding == record;
         Import02 = new Import02Model(send, this.log);
         Onboarding = new OnboardingModel(send, this.log, Import02);
         Storage = new StorageModel(dataDirectory, modelsDirectory, reveal, this.log);
@@ -206,6 +207,33 @@ public sealed class ScreenModels
         Cloud.Load();
         Appearance.Load();
     }
+
+    /// <summary>
+    /// A button on the Drop. Always for and Never for set the app's call policy; the rest are the
+    /// meeting commands'. "Always for" records the call once Always is saved, while it is still
+    /// offered (an app offered and made Always stays offered until it is started: inkwell.h,
+    /// meetings.calls.set); a save that failed records nothing and says so on the offer.
+    /// </summary>
+    public void PerformDropAction(DropAction action)
+    {
+        ArgumentNullException.ThrowIfNull(action);
+        switch (action)
+        {
+            case DropAction.Always always:
+                Calls.Choose(CallChoice.Always, always.App, CallPolicyOrigin.Drop, () => Meetings.Record(always.App));
+                break;
+            case DropAction.Never never:
+                // The core withdraws the offer (meeting.detection_ended, dismissed).
+                Calls.Choose(CallChoice.Never, never.App, CallPolicyOrigin.Drop);
+                break;
+            default:
+                Meetings.Perform(action);
+                break;
+        }
+    }
+
+    /// <summary>What a failed Drop button says on the Drop: the meeting command's, else the call policy's.</summary>
+    public string? DropFailure => Meetings.FailureOn(MeetingPlace.Drop) ?? Calls.DropFailure;
 
     /// <summary>The app came to the front again.</summary>
     public void AppBecameActive()
