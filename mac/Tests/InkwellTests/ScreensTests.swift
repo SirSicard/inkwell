@@ -2336,10 +2336,21 @@ final class SettingsCardsLayoutTests: XCTestCase {
     }
 
     /// The widest rows: a recorded dictation key, the edit key with the longest name, a provider
-    /// with its server, key and model fields, a snippet and a voice command, and models
-    /// downloading, waiting and failed with the core's words.
+    /// with its server, key and model fields, a snippet and a voice command, models downloading,
+    /// waiting and failed with the core's words, and a paused streak with rest days whose resume
+    /// failed.
     private func screens() -> ScreenModels {
-        let screens = ScreenModels(send: { _ in }, calendar: FakeCalendar(), apps: WorkspaceApps())
+        var sent: [CoreCommand] = []
+        let screens = ScreenModels(send: { sent.append($0) }, calendar: FakeCalendar(), apps: WorkspaceApps())
+        screens.stats.apply(event(#"{"type":"setting.value","key":"stats.rest_days","value":"6,7"}"#))
+        screens.stats.settingsAppeared()
+        if let ref = sent.last?.commandID {
+            screens.stats.apply(event(statsCounted(ref: ref, dictations: 3, dictationExtra: #","streak_paused_since":"2026-10-02""#)))
+        }
+        screens.stats.resumeStreak()
+        if let ref = sent.last?.commandID {
+            screens.stats.apply(event(#"{"type":"command.failed","command":"streak.resume","id":"\#(ref)","message":"x"}"#))
+        }
         screens.dictation.apply(event(#"{"type":"setting.value","key":"dictation.enabled","value":"on"}"#))
         screens.dictation.apply(event(#"{"type":"setting.value","key":"dictation.key","value":"ctrl+shift+space"}"#))
         screens.dictation.apply(event(#"{"type":"setting.value","key":"dictation.edit_key","value":"right_command"}"#))

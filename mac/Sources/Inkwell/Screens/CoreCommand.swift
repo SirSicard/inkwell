@@ -98,6 +98,11 @@ enum CoreCommand: Equatable, Sendable {
     /// The milestones reached since the last check, each reported once ever: `milestones.reached`
     /// with `ref`. Takes stats.get's calendar.
     case milestonesCheck(utcOffsets: [UTCOffset], weekStart: Int, ref: String)
+    /// Pauses the streak from today (days without a dictation then don't count against it, for up
+    /// to 90 days), or ends the running pause: `stats.counted` with `ref`, or a `command.failed`
+    /// with it as the id. Take stats.get's calendar.
+    case streakPause(utcOffsets: [UTCOffset], weekStart: Int, ref: String)
+    case streakResume(utcOffsets: [UTCOffset], weekStart: Int, ref: String)
 
     /// A UTC offset from the moment it took effect.
     struct UTCOffset: Equatable, Sendable {
@@ -187,6 +192,10 @@ enum CoreCommand: Equatable, Sendable {
             ["cmd": "stats.get", "utc_offsets": offsets.map(\.fields), "week_start": weekStart, "id": ref]
         case .milestonesCheck(let offsets, let weekStart, let ref):
             ["cmd": "milestones.check", "utc_offsets": offsets.map(\.fields), "week_start": weekStart, "id": ref]
+        case .streakPause(let offsets, let weekStart, let ref):
+            ["cmd": "streak.pause", "utc_offsets": offsets.map(\.fields), "week_start": weekStart, "id": ref]
+        case .streakResume(let offsets, let weekStart, let ref):
+            ["cmd": "streak.resume", "utc_offsets": offsets.map(\.fields), "week_start": weekStart, "id": ref]
         }
         // Strings, numbers, booleans and objects of them: serialisation cannot fail.
         let data = (try? JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys])) ?? Data("{}".utf8)
@@ -241,6 +250,8 @@ enum CoreCommand: Equatable, Sendable {
         case .llmTest: "llm.test"
         case .statsGet: "stats.get"
         case .milestonesCheck: "milestones.check"
+        case .streakPause: "streak.pause"
+        case .streakResume: "streak.resume"
         }
     }
 
@@ -309,8 +320,17 @@ enum ShellSetting: String, Sendable {
     /// The typing speed the Stats screen measures time saved against: a whole number of words a
     /// minute, 10 to 200 (40 unless set).
     case statsTypingWpm = "stats.typing_wpm"
-    /// "on" (the default) or "off": a milestone reached is celebrated.
+    /// "on" (the default) or "off": a milestone reached, or a best set, is celebrated.
     case statsCelebrate = "stats.celebrate"
+    /// The weekdays the streak rests on: "none" (the default), or ISO weekdays ascending and
+    /// comma-separated ("6,7"), never all seven. A rest day neither counts nor breaks a streak.
+    case statsRestDays = "stats.rest_days"
+    /// "shown" (the default) or "hidden": a hidden streak shows nowhere and celebrates nothing.
+    case statsStreak = "stats.streak"
+    /// "on" or "off" (the default): the share card may carry the heatmap.
+    case statsShareHeatmap = "stats.share_heatmap"
+    /// The first day (YYYY-MM-DD) of the week whose review the user dismissed.
+    case statsReviewDismissed = "stats.review_dismissed"
 }
 
 /// Where the screens' commands go.
