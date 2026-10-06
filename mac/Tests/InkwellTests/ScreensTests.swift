@@ -2000,6 +2000,13 @@ final class ScreensCoreContractTests: XCTestCase {
         }
         XCTAssertEqual(refused?.id, "note-line-7", "a refused note is matched to its line")
         XCTAssertFalse(refused?.message.contains("private") ?? true, "the error never quotes the note")
+        // Settings > Sound: the devices are listed (no permission needed; never the test, which
+        // would open the mic), and a stop with no test running is refused by its id.
+        let sound = try answer(.audioDevices(ref: SoundModel.devicesID)) { if case .audioDevices(let d) = $0 { d } else { nil } }
+        XCTAssertEqual(sound?.ref, SoundModel.devicesID)
+        XCTAssertEqual(sound?.input, "auto", "Automatic until a mic is chosen")
+        let stop = try answer(.audioTestStop(ref: SoundModel.stopID)) { if case .commandFailed(let f) = $0 { f } else { nil } }
+        XCTAssertEqual(stop?.id, SoundModel.stopID)
         let undecodable = events.withLock { $0 }.filter { if case .undecodable = $0 { true } else { false } }
         XCTAssertEqual(undecodable, [])
     }
@@ -2362,6 +2369,12 @@ final class SettingsCardsLayoutTests: XCTestCase {
         screens.catalogue.download(["silero-vad-v6-16k", "parakeet-tdt-0.6b-v3-coreml", "qwen3-asr-1.7b-q8"])
         screens.catalogue.apply(event(#"{"type":"model.update_finished","id":"silero-vad-v6-16k","next":"silero-vad-v6-16k","ok":false,"no_model_warm":false,"message":"the new files could not be installed: downloading silero_vad_16k_op15.onnx: the connection was reset by the server before the file was complete"}"#))
         screens.catalogue.apply(event(#"{"type":"model.update_progress","id":"parakeet-tdt-0.6b-v3-coreml","next":"parakeet-tdt-0.6b-v3-coreml","done_bytes":120000000,"total_bytes":483105645}"#))
+        // Sound: long device names, a chosen mic that isn't connected (the longest caption), and
+        // a test running.
+        screens.sound.apply(event(#"{"type":"audio.devices","input":"gone","wanted":{"id":"gone","name":"Elgato Wave:3 Studio Condenser Microphone","transport":"usb"},"inputs":[{"id":"mbp","name":"MacBook Pro Microphone","transport":"built_in","is_default":true},{"id":"pods","name":"Alex's AirPods Pro (2nd generation)","transport":"bluetooth","is_default":false}],"automatic":{"id":"mbp","name":"MacBook Pro Microphone","transport":"built_in","reason":"built_in_for_bluetooth_output"},"using":{"id":"mbp","name":"MacBook Pro Microphone","transport":"built_in","reason":"chosen_missing"}}"#))
+        screens.sound.toggleTest()
+        screens.sound.apply(event(#"{"type":"audio.test_started","ref":"sound.test","mic_name":"MacBook Pro Microphone","mic_transport":"built_in","mic_reason":"chosen_missing","seconds":15}"#))
+        screens.sound.apply(event(#"{"type":"audio.test_level","ref":"sound.test","level":0.6}"#))
         return screens
     }
 
@@ -2812,6 +2825,20 @@ final class OnboardingLayoutTests: XCTestCase {
     /// longest status under it). Polish's own line is its longest kind, Apple Intelligence still
     /// being checked; every one of them is a single line at this width. The guide is there: the
     /// open step is taller than the closed one by the guide's height and more.
+    /// The Ready step with its "Not hearing you?" hint, and a permission still off, fits the
+    /// step (the orb's stand-in is its height).
+    func testTheReadyStepWithItsHintFitsTheSheet() {
+        let screens = ScreenModels(send: { _ in }, calendar: FakeCalendar(), apps: WorkspaceApps())
+        screens.onboarding.notHearing = true
+        let store = CoreStore()
+        let step = FirstRunReadyStep(orb: Color.clear.frame(height: readyOrbHeight))
+            .environment(ShellInk(store: store))
+        let room = OnboardingView.stepRoom
+        let size = needed(step, screens: screens)
+        XCTAssertLessThanOrEqual(size.height, room.height, "the step's height")
+        XCTAssertLessThanOrEqual(size.width, room.width + 0.5, "the step's width")
+    }
+
     func testThePolishStepFitsTheSheetWithGroqsGuideOpen() {
         let guide = NSHostingController(rootView: GroqKeyGuide(place: .firstRun))
             .sizeThatFits(in: CGSize(width: OnboardingView.stepRoom.width, height: 10_000))

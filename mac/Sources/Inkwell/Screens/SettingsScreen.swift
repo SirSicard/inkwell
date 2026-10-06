@@ -1,5 +1,5 @@
 // Settings: General (open at login, updates, Inkwell 0.2's history), Appearance, permissions with
-// their live state, dictation's keys, modes, snippets and voice commands (PhrasesSections), AI (the
+// their live state, sound (the microphone and its test: SoundSection), dictation's keys, modes, snippets and voice commands (PhrasesSections), AI (the
 // language model you bring, local-only mode, polish, summaries and Ask), meetings, stats
 // (milestones and the typing speed), models (with measured accuracy, and Download for those not on
 // this Mac), storage, and About with every notice the app ships. Each section is a card, as
@@ -12,6 +12,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     case general
     case appearance
     case permissions
+    case sound
     case dictation
     case modes
     case snippets
@@ -30,6 +31,7 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .general: "General"
         case .appearance: "Appearance"
         case .permissions: "Permissions"
+        case .sound: "Sound"
         case .dictation: "Dictation"
         case .modes: "Modes"
         case .snippets: "Snippets"
@@ -74,6 +76,7 @@ struct SettingsScreen: View {
                         GeneralSection(screens: screens).settingsCard(.general)
                         AppearanceSection(theme: screens.theme).settingsCard(.appearance)
                         PermissionsSection(permissions: screens.permissions).settingsCard(.permissions)
+                        SoundSection(sound: screens.sound).settingsCard(.sound)
                         DictationSection(screens: screens, dictation: screens.dictation, permissions: screens.permissions)
                             .settingsCard(.dictation)
                         ModesSection(modes: screens.modes).settingsCard(.modes)
@@ -131,8 +134,12 @@ struct SettingsScreen: View {
             screens.cloud.load()
             screens.catalogue.requery()
             screens.storage.measure()
+            screens.sound.load()
         }
-        .onDisappear { screens.permissions.screenDisappeared() }
+        .onDisappear {
+            screens.permissions.screenDisappeared()
+            screens.sound.disappeared()
+        }
     }
 
     /// The cards' widest: 760 pt of section inside their padding, as wide as the page was before.
@@ -778,10 +785,6 @@ private struct MeetingsSection: View {
                 "Offer to record calls",
                 detail: "When an app opens the microphone for a call, Inkwell asks whether to record it. It never records without you saying so.",
                 isOn: meetings.detect, set: { meetings.setDetect($0) })
-            toggle(
-                "Use the headset's microphone",
-                detail: "With Bluetooth headphones, record their own microphone instead of the Mac's. It carries only call-quality sound.",
-                isOn: meetings.headsetMic, set: { meetings.setHeadsetMic($0) })
             if meetings.settingsFailed {
                 Text("Couldn't read or save a meeting setting. It may not be what it shows.")
                     .font(Typography.caption)
@@ -791,7 +794,7 @@ private struct MeetingsSection: View {
                 fact("Consent", "Tell the others in the call that you are recording. Inkwell shows while it records, and never hides that it does.")
                 fact("You", "Your microphone, as \u{201C}Hear you\u{201D} allows.")
                 fact("Them", "For a call you record when Inkwell offers, the call app's own sound. With Record now, or when Inkwell can't hear the call app alone, everything this Mac plays, and Inkwell says so. As \u{201C}Hear the others\u{201D} allows.")
-                fact("Headphones", "With Bluetooth headphones, Inkwell records the Mac's own microphone: a headset microphone carries only call-quality sound.")
+                fact("Headphones", "With Bluetooth headphones, Automatic records the Mac's own microphone: a headset microphone carries only call-quality sound. Settings > Sound picks another.")
                 fact("Where", "Recordings and transcripts stay on this Mac. Nothing is sent anywhere unless you add your own key for a model online.")
             }
             if permissions.state(.hearTheOthers).isAlert {

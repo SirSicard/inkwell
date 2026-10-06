@@ -3192,7 +3192,7 @@
         },
         "output_using": {
           "$ref": "#/$defs/AudioOutput",
-          "description": "The output a meeting's far end is to record, and why; absent when there is no output. Stored and shown now; meetings record it once the Windows far end is pinned to it, and until then follow the default output."
+          "description": "The output a meeting's far end is to record, and why; absent when there is no output. Record now, and a call whose app could not be heard alone, record it; an app heard from its own output keeps that output."
         },
         "ref": {
           "type": "string",
@@ -3255,7 +3255,7 @@
         },
         "output_using": {
           "$ref": "#/$defs/AudioOutput",
-          "description": "The output a meeting's far end is to record, and why; absent when there is no output. Stored and shown now; meetings record it once the Windows far end is pinned to it, and until then follow the default output."
+          "description": "The output a meeting's far end is to record, and why; absent when there is no output. Record now, and a call whose app could not be heard alone, record it; an app heard from its own output keeps that output."
         }
       },
       "required": [
@@ -3470,7 +3470,7 @@
     },
     "AudioOutput": {
       "type": "object",
-      "description": "The output a meeting's far end is to record (Windows), and why. Stored and shown now; meetings record it once the Windows far end is pinned to it, and until then follow the default output.",
+      "description": "The output a meeting's far end is to record (Windows), and why. Record now, and a call whose app could not be heard alone, record it; an app heard from its own output keeps that output.",
       "properties": {
         "id": {
           "type": "string",

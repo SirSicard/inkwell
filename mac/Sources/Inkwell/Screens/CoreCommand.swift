@@ -103,6 +103,17 @@ enum CoreCommand: Equatable, Sendable {
     /// with it as the id. Take stats.get's calendar.
     case streakPause(utcOffsets: [UTCOffset], weekStart: Int, ref: String)
     case streakResume(utcOffsets: [UTCOffset], weekStart: Int, ref: String)
+    /// Settings > Sound: the microphones, the choice (`audio.input`) and the mic in use, answered
+    /// by `audio.devices` with `ref` (then `audio.devices_changed` unasked as devices come and go),
+    /// or a `command.failed` with it as the id.
+    case audioDevices(ref: String)
+    /// The mic test: `audio.test_started`, `audio.test_level` about ten times a second, then
+    /// `audio.tested`, all with `ref`; or a `command.failed` with it as the id (`meeting_recording`
+    /// while a meeting records). Nothing it hears is kept.
+    case audioTest(ref: String)
+    /// Ends the running test: its own `audio.tested` (`stopped`), or a `command.failed` with `ref`
+    /// when none runs.
+    case audioTestStop(ref: String)
 
     /// A UTC offset from the moment it took effect.
     struct UTCOffset: Equatable, Sendable {
@@ -196,6 +207,9 @@ enum CoreCommand: Equatable, Sendable {
             ["cmd": "streak.pause", "utc_offsets": offsets.map(\.fields), "week_start": weekStart, "id": ref]
         case .streakResume(let offsets, let weekStart, let ref):
             ["cmd": "streak.resume", "utc_offsets": offsets.map(\.fields), "week_start": weekStart, "id": ref]
+        case .audioDevices(let ref): ["cmd": "audio.devices", "id": ref]
+        case .audioTest(let ref): ["cmd": "audio.test", "id": ref]
+        case .audioTestStop(let ref): ["cmd": "audio.test_stop", "id": ref]
         }
         // Strings, numbers, booleans and objects of them: serialisation cannot fail.
         let data = (try? JSONSerialization.data(withJSONObject: fields, options: [.sortedKeys])) ?? Data("{}".utf8)
@@ -252,6 +266,9 @@ enum CoreCommand: Equatable, Sendable {
         case .milestonesCheck: "milestones.check"
         case .streakPause: "streak.pause"
         case .streakResume: "streak.resume"
+        case .audioDevices: "audio.devices"
+        case .audioTest: "audio.test"
+        case .audioTestStop: "audio.test_stop"
         }
     }
 
@@ -287,8 +304,9 @@ enum ShellSetting: String, Sendable {
     /// "on" or "off": the switch for a meeting's summary and Ask. Only "off" is set this way: they
     /// turn on through the consent step (`consentAllow`).
     case meetingsLLM = "meetings.llm"
-    /// "on" or "off" (the default): with Bluetooth output, record the headset's own mic.
-    case meetingsHeadsetMic = "meetings.headset_mic"
+    /// The microphone for dictation, meetings and the test: "auto" (the default) or a device's
+    /// id from `audio.devices`, which must be connected when it is set (Settings > Sound).
+    case audioInput = "audio.input"
     /// "forever" (the default), or days: how long the library keeps records.
     case retentionDays = "retention.days"
     /// The dictation key (a token: fn, right_option, ...).

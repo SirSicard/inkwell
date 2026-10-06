@@ -76,6 +76,9 @@ public final class CoreStore {
         /// The microphone it records, and why that one.
         public var micName: String?
         public var micReason: MicReason?
+        /// Its mic went mid-meeting and another records now (`meeting.mic_switched`). Live says it
+        /// for the rest of the meeting; the Drop until the next line arrives (`MicSwitch.atLine`).
+        public var micSwitch: MicSwitch?
         /// What it records as the other side: the app alone, or everything this Mac plays.
         public var farEnd: FarEnd?
         /// It was started for an app whose sound could not be recorded alone, so it records
@@ -131,6 +134,37 @@ public final class CoreStore {
         public var bytes = 0
         /// The most bytes held at once.
         public var peakBytes = 0
+    }
+
+    /// A meeting's mic that went, and the one recording in its place.
+    public struct MicSwitch: Equatable, Sendable {
+        /// The mic that went, as the OS named it, when known.
+        public let from: String?
+        /// The mic recording now.
+        public let to: String
+        /// How many lines the meeting had heard when it switched (its ledger's `seen`): the switch
+        /// is news until a line comes after it.
+        public let atLine: Int
+
+        public init(from: String?, to: String, atLine: Int = 0) {
+            self.from = from
+            self.to = to
+            self.atLine = atLine
+        }
+    }
+
+    /// The mic the user chose isn't connected, and another opened in its place
+    /// (`audio.input_fallback`, said once by the core per spell).
+    public struct MicFallback: Equatable, Sendable {
+        /// The chosen mic's name, when the core remembers one.
+        public let wanted: String?
+        /// The mic recording instead.
+        public let using: String
+
+        public init(wanted: String?, using: String) {
+            self.wanted = wanted
+            self.using = using
+        }
     }
 
     /// An app the core offers to record (the consent Drop).
@@ -202,6 +236,11 @@ public final class CoreStore {
     /// The take in progress, while there is one.
     public private(set) var liveDictation: LiveDictation?
     public private(set) var lastDictation: DictationOutcome?
+    /// A chosen mic that isn't connected, with the one recording instead: the Drop says so for the
+    /// take or meeting it opened for, then it is let go of. Gone too when the devices say the
+    /// chosen mic is back (or the choice changed). The core says it once per spell, also for a
+    /// mic test; one said for a test is shown at the next take, which is on the same stand-in.
+    public private(set) var micFallback: MicFallback?
     public private(set) var notices: [Notice] = []
 
     /// Events applied so far (tests and diagnostics; not observed).
@@ -250,6 +289,7 @@ public final class CoreStore {
                 : .failed("This app was built against core ABI \(INK_ABI_VERSION), and the core reports \(ready.abi).")
         case .coreStopped:
             status = .stopped
+            micFallback = nil
             meeting = nil
             offer = nil
             listening = nil
@@ -360,6 +400,18 @@ public final class CoreStore {
                     notice(.detectionUnavailable, message)
                 }
             }
+        case .meetingMicSwitched(let switched):
+            updateMeeting(switched.record) {
+                $0.micName = switched.micName
+                $0.micReason = switched.micReason
+                $0.micSwitch = MicSwitch(from: switched.fromName, to: switched.micName, atLine: $0.ledger.seen)
+            }
+        case .audioInputFallback(let fallback):
+            micFallback = MicFallback(wanted: fallback.wanted.name, using: fallback.micName)
+        case .audioDevices(let devices) where devices.using?.reason != .chosenMissing:
+            micFallback = nil
+        case .audioDevicesChanged(let devices) where devices.using?.reason != .chosenMissing:
+            micFallback = nil
         case .meetingFarEndFallback(let fallback):
             updateMeeting(fallback.record) { $0.farEndFallback = true }
         case .meetingRecovered:
@@ -425,6 +477,8 @@ public final class CoreStore {
     private func endDictation() {
         dictation = .idle
         liveDictation = nil
+        // Said for the take whose mic it was; a meeting recording says it on its own.
+        if meeting == nil { micFallback = nil }
     }
 
     /// Changes the live meeting when `record` is the one live. An event for another record (one
@@ -439,6 +493,7 @@ public final class CoreStore {
         if let live = meeting, live.record == record {
             lastLedger = (record, live.ledger)
             meeting = nil
+            micFallback = nil
         }
     }
 }

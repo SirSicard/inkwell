@@ -191,14 +191,21 @@ pub fn input_choice(store: &dyn Store) -> InputChoice {
 
 /// **Worker.** The output choice as stored; one that cannot be read is the default, logged.
 pub fn output_choice(store: &dyn Store) -> OutputChoice {
-    match read_choice(store, OUTPUT_KEY, OUTPUT_DEVICE_KEY, DEFAULT) {
-        Ok(Some(w)) => OutputChoice::Device(w),
-        Ok(None) => OutputChoice::Default,
-        Err(e) => {
-            log::error!("the output choice could not be read ({e}); using the default output");
-            OutputChoice::Default
-        }
-    }
+    try_output_choice(store).unwrap_or_else(|e| {
+        log::error!("the output choice could not be read ({e}); using the default output");
+        OutputChoice::Default
+    })
+}
+
+/// **Worker.** The output choice as stored, or why it could not be read: for a far end that
+/// already follows one and keeps it through a store that fails for a moment.
+pub fn try_output_choice(store: &dyn Store) -> Result<OutputChoice, String> {
+    Ok(
+        match read_choice(store, OUTPUT_KEY, OUTPUT_DEVICE_KEY, DEFAULT)? {
+            Some(w) => OutputChoice::Device(w),
+            None => OutputChoice::Default,
+        },
+    )
 }
 
 /// Where a meeting reads the user's device choices: at its start, and again when its mic goes
@@ -222,6 +229,11 @@ impl Choices {
     /// **Worker.** [`output_choice`] now.
     pub fn output(&self) -> OutputChoice {
         output_choice(self.store.as_ref())
+    }
+
+    /// **Worker.** [`try_output_choice`] now.
+    pub fn try_output(&self) -> Result<OutputChoice, String> {
+        try_output_choice(self.store.as_ref())
     }
 }
 
@@ -393,8 +405,8 @@ impl PickedOutput {
 }
 
 /// The output for `choice` among `outputs` (default marked): the chosen one, by id or by name and
-/// transport, else the default. `None`: no output at all. For the Windows far end, which pins its
-/// loopback to it (feat/audio-devices-win).
+/// transport, else the default. `None`: no output at all. The Windows far end pins all output to
+/// the chosen one ([`pinned_output`]).
 pub fn resolve_output(outputs: &[DeviceInfo], choice: &OutputChoice) -> Option<PickedOutput> {
     let default = || outputs.iter().find(|d| d.is_default).or(outputs.first());
     match choice {
@@ -408,6 +420,15 @@ pub fn resolve_output(outputs: &[DeviceInfo], choice: &OutputChoice) -> Option<P
         device: device.clone(),
         reason,
     })
+}
+
+/// The output a far end of all output is pinned to for `choice`: the chosen output's id while it
+/// is connected (by id, or by name and transport); `None` for the default, or while the chosen one
+/// is not connected (the far end then records the default until it is back).
+pub fn pinned_output(outputs: &[DeviceInfo], choice: &OutputChoice) -> Option<DeviceId> {
+    resolve_output(outputs, choice)
+        .filter(|picked| picked.reason == OutputReason::Chosen)
+        .map(|picked| picked.device.id)
 }
 
 /// A device's JSON in the events (`AudioDevice`).
@@ -635,6 +656,30 @@ mod tests {
             Some(("speakers".into(), OutputReason::ChosenMissing))
         );
         assert_eq!(resolve_output(&[], &OutputChoice::Default), None);
+    }
+
+    #[test]
+    fn all_output_is_pinned_only_to_a_chosen_output_that_is_connected() {
+        let speakers = device("speakers", "Speakers", Transport::BuiltIn, true);
+        let dock = device("dock", "Dock", Transport::Usb, false);
+        let outputs = vec![speakers, dock.clone()];
+        assert_eq!(pinned_output(&outputs, &OutputChoice::Default), None);
+        assert_eq!(
+            pinned_output(&outputs, &OutputChoice::Device(Wanted::of(&dock))),
+            Some(DeviceId("dock".into()))
+        );
+        // The same dock on another port, under a new id: still pinned, to its new id.
+        let moved = device("dock-2", "Dock", Transport::Usb, false);
+        assert_eq!(
+            pinned_output(&[moved], &OutputChoice::Device(Wanted::of(&dock))),
+            Some(DeviceId("dock-2".into()))
+        );
+        let speakers_only = vec![device("speakers", "Speakers", Transport::BuiltIn, true)];
+        assert_eq!(
+            pinned_output(&speakers_only, &OutputChoice::Device(Wanted::of(&dock))),
+            None,
+            "unplugged: the default, not a pin"
+        );
     }
 
     #[test]

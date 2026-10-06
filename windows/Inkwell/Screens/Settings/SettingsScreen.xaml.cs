@@ -1,5 +1,5 @@
 // The Settings container. The coordinator passes the sections in the plan's order (General,
-// Appearance, Permissions, Dictation, Modes, Snippets, Voice commands, AI, Meetings, Stats, Models,
+// Appearance, Permissions, Sound, Dictation, Modes, Snippets, Voice commands, AI, Meetings, Stats, Models,
 // Storage, About: Screens.SettingsSections); this lays them out, each on its own card, and keeps
 // the list and the page in step. Nothing here runs while nobody scrolls or clicks.
 using Microsoft.UI.Xaml;

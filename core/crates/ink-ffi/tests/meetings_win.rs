@@ -28,7 +28,7 @@ use ink_core::{
 };
 use ink_engines::{ModelDir, Registry};
 use ink_ffi::capture::{FarHears, WinDevices, WinMeetingCapture};
-use ink_ffi::devices::{InputChoice, MicReason, Picked};
+use ink_ffi::devices::{InputChoice, MicReason, OutputChoice, Picked};
 use ink_ffi::runtime::{Core, MeetingPlatform, Parts};
 
 const WAIT: Duration = Duration::from_secs(30);
@@ -98,9 +98,15 @@ impl WinDevices for Devices {
         self.0.replay(&self.0.mic, Channel::Mic)
     }
 
+    /// No output is chosen in these tests: the default.
+    fn pinned_output(&self, _: &OutputChoice) -> Result<Option<String>, PlatformError> {
+        Ok(None)
+    }
+
     fn open_far(
         &self,
         target: &FarEndTarget,
+        _pinned: Option<&str>,
     ) -> Result<(Box<dyn AudioSource>, FarHears), PlatformError> {
         let far = || self.0.replay(&self.0.far, Channel::Far);
         match target {
@@ -126,7 +132,12 @@ impl WinDevices for Devices {
         }
     }
 
-    fn far_moved(&self, _: &FarEndTarget, endpoint: &str) -> Result<bool, PlatformError> {
+    fn far_moved(
+        &self,
+        _: &FarEndTarget,
+        endpoint: &str,
+        _pinned: Option<&str>,
+    ) -> Result<bool, PlatformError> {
         self.0.moves_asked.lock().unwrap().push(endpoint.to_owned());
         Ok(self.0.moved.swap(false, Ordering::Relaxed))
     }

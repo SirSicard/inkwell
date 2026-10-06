@@ -404,8 +404,8 @@ public sealed record AudioDevices : InkEvent
 
     /// <summary>
     /// The output a meeting's far end is to record, and why; absent when there is no output.
-    /// Stored and shown now; meetings record it once the Windows far end is pinned to it, and
-    /// until then follow the default output.
+    /// Record now, and a call whose app could not be heard alone, record it; an app heard from
+    /// its own output keeps that output.
     /// </summary>
     [JsonPropertyName("output_using")]
     public AudioOutput? OutputUsing { get; init; }
@@ -481,8 +481,8 @@ public sealed record AudioDevicesChanged : InkEvent
 
     /// <summary>
     /// The output a meeting's far end is to record, and why; absent when there is no output.
-    /// Stored and shown now; meetings record it once the Windows far end is pinned to it, and
-    /// until then follow the default output.
+    /// Record now, and a call whose app could not be heard alone, record it; an app heard from
+    /// its own output keeps that output.
     /// </summary>
     [JsonPropertyName("output_using")]
     public AudioOutput? OutputUsing { get; init; }
@@ -607,9 +607,8 @@ public sealed record AudioInputFallback : InkEvent
 }
 
 /// <summary>
-/// The output a meeting's far end is to record (Windows), and why. Stored and shown now;
-/// meetings record it once the Windows far end is pinned to it, and until then follow the
-/// default output.
+/// The output a meeting's far end is to record (Windows), and why. Record now, and a call whose
+/// app could not be heard alone, record it; an app heard from its own output keeps that output.
 /// </summary>
 public sealed record AudioOutput
 {
