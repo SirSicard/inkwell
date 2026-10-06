@@ -290,7 +290,7 @@ public sealed class SoundModel(Action<CoreCommand> send) : ObservableModel
             {
                 return [];
             }
-            var current = outputs.FirstOrDefault(o => o.IsDefault) ?? outputs.FirstOrDefault();
+            var current = outputs.FirstOrDefault(o => o.IsDefault) ?? (outputs.Count > 0 ? outputs[0] : null);
             var lines = new List<Choice> { new("default", current is null ? "Default output" : $"Default output ({current.Name})") };
             lines.AddRange(outputs.Select(o => new Choice(o.Id, Title(o.Name, o.Transport))));
             if (d.Output != "default" && outputs.All(o => o.Id != d.Output))
