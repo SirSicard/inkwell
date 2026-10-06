@@ -23,7 +23,7 @@ use ink_core::{
     Channel, Commitment, CommitmentId, NoteId, Permission, PermissionProbe, PermissionState,
     PlatformError, RecordId, SpeakerId, Store,
 };
-use ink_engines::{ModelDir, Os, Route};
+use ink_engines::{ModelDir, Os, Route, RowKind};
 use serde_json::{Map, Value, json};
 
 use crate::events::{self, event};
@@ -242,6 +242,16 @@ pub enum Query {
     },
     /// `models.list`: the catalogue's models for this OS.
     ModelsList,
+    /// `model.cancel`: stops a model's download, running or queued ([`crate::models::cancel`]).
+    ModelCancel {
+        /// The model being downloaded (`model.update`'s `next`).
+        model: String,
+    },
+    /// `model.remove`: deletes a model's files ([`crate::models::remove`]).
+    ModelRemove {
+        /// The model.
+        model: String,
+    },
     /// `engine.route`: what serves a job now. A router read, so it is here, where a model
     /// download on the command thread never delays it.
     EngineRoute(ink_core::Job),
@@ -315,6 +325,7 @@ fn fields(name: &str) -> Option<&'static [&'static str]> {
         "note.delete" => &["note"],
         "speaker.name" => &["record", "speaker", "name"],
         "record.delete" => &["record"],
+        "model.cancel" | "model.remove" => &["model"],
         "setting.get" => &["key"],
         "setting.set" => &["key", "value"],
         "hotkey.check" => &["binding"],
@@ -450,6 +461,12 @@ fn parse_known(name: &str, allowed: &[&str], v: &Value) -> Result<Query, String>
             record: text("record")?,
         },
         "models.list" => Query::ModelsList,
+        "model.cancel" => Query::ModelCancel {
+            model: text("model")?,
+        },
+        "model.remove" => Query::ModelRemove {
+            model: text("model")?,
+        },
         "engine.route" => Query::EngineRoute(
             events::parse_job(&text("job")?).ok_or_else(|| format!("{name}: unknown job"))?,
         ),
@@ -899,7 +916,18 @@ impl Ctx<'_> {
                     Err(e) => fail(e),
                 }
             }
-            Query::ModelsList => emit(self.catalogue()),
+            Query::ModelsList => emit(self.catalogue(id.as_deref())),
+            Query::ModelCancel { model } => {
+                if let Err((message, code)) = crate::models::cancel(self.shared, &model) {
+                    fail_coded(message, Some(code));
+                }
+            }
+            Query::ModelRemove { model } => {
+                match crate::models::remove(self.shared, &model, id.as_deref()) {
+                    Ok(listed) => emit(listed),
+                    Err((message, code)) => fail_coded(message, code),
+                }
+            }
             Query::EngineRoute(job) => emit(routed(self.shared, job)),
             Query::SettingGet { key } => match if crate::calls::is_calls_setting(&key) {
                 crate::calls::setting_value(store, &key)
@@ -1089,31 +1117,53 @@ impl Ctx<'_> {
         )
     }
 
-    /// `models.listed`: every registry model this OS runs, with whether it is installed.
-    fn catalogue(&self) -> Value {
-        let os = Os::current();
-        let models: Vec<Value> = self
-            .shared
-            .registry
-            .rows()
-            .iter()
-            .filter(|row| os.is_some_and(|os| row.runs_on(os)))
-            .map(|row| {
-                json!({
-                    "id": row.id,
-                    "licence": row.licence,
-                    "size_bytes": row.total_size(),
-                    "installed": self.models.is_installed(row),
-                    "jobs": row
-                        .scores
-                        .iter()
-                        .map(|s| json!({"job": events::job(s.job), "wer": s.wer}))
-                        .collect::<Vec<_>>(),
-                })
-            })
-            .collect();
-        event("models.listed", &[("models", Some(Value::Array(models)))])
+    /// `models.listed`: every registry model this OS runs, with whether it is installed, and the
+    /// free space where models go.
+    fn catalogue(&self, reference: Option<&str>) -> Value {
+        catalogue(self.shared, self.models, reference)
     }
+}
+
+/// **Worker.** `models.listed`: every registry model this OS runs, with whether it is installed
+/// in `models`, what it is for (a language model with its name), and the free space where models
+/// go.
+pub(crate) fn catalogue(shared: &Shared, models: &ModelDir, reference: Option<&str>) -> Value {
+    let os = Os::current();
+    let list: Vec<Value> = shared
+        .registry
+        .rows()
+        .iter()
+        .filter(|row| os.is_some_and(|os| row.runs_on(os)))
+        .map(|row| {
+            let mut entry = json!({
+                "id": row.id,
+                "kind": if crate::models::is_language(row) { "language" } else { "speech" },
+                "licence": row.licence,
+                "size_bytes": row.total_size(),
+                "installed": models.is_installed(row),
+                "jobs": row
+                    .scores
+                    .iter()
+                    .map(|s| json!({"job": events::job(s.job), "wer": s.wer}))
+                    .collect::<Vec<_>>(),
+            });
+            if let RowKind::Language(language) = &row.kind {
+                entry["name"] = language.name.as_str().into();
+            }
+            entry
+        })
+        .collect();
+    event(
+        "models.listed",
+        &[
+            ("models", Some(Value::Array(list))),
+            (
+                "free_bytes",
+                crate::models::free_bytes(shared).map(Into::into),
+            ),
+            ("ref", reference.map(Into::into)),
+        ],
+    )
 }
 
 /// `setting.value`.

@@ -573,3 +573,27 @@ fn unload_drops_the_model_outside_the_lock() {
     assert_eq!(warm, None, "warm was cleared before the drop");
     assert!(res.resident().is_empty());
 }
+
+#[test]
+fn the_next_unload_is_when_the_earliest_idle_model_reaches_the_limit() {
+    let s = setup();
+    assert_eq!(s.res.next_unload_ns(), None, "nothing loaded");
+    s.res.set_warm(Some(&dictation())).unwrap();
+    assert_eq!(s.res.next_unload_ns(), None, "a warm model never unloads");
+
+    let lease = s.res.acquire(&meeting()).unwrap();
+    assert_eq!(s.res.next_unload_ns(), None, "a held model is not counted");
+    s.advance_min(3);
+    let dropped_at = s.clock.now_ns();
+    drop(lease);
+    let due = s.res.next_unload_ns().expect("idle from now");
+    assert_eq!(due, dropped_at + IDLE_NS);
+
+    // Due then, and not a nanosecond sooner.
+    s.clock.advance_ns(IDLE_NS - 1);
+    assert!(s.res.tick().is_empty());
+    s.clock.advance_ns(1);
+    assert_eq!(s.clock.now_ns(), due);
+    assert_eq!(s.res.tick(), vec!["synthetic-meeting".to_string()]);
+    assert_eq!(s.res.next_unload_ns(), None);
+}

@@ -94,6 +94,75 @@ impl ModelDir {
             })
     }
 
+    /// **Worker.** How many of `row`'s bytes are on disk already: each finished file at its
+    /// registry size, else its part file, up to that size. What a download still needs is the
+    /// row's total less this. (A finished file another revision left is counted, though the
+    /// download may find its hash wrong and fetch it again.)
+    pub fn bytes_on_disk(&self, row: &EngineRow) -> u64 {
+        row.files
+            .iter()
+            .map(|f| {
+                let len = |path: PathBuf| {
+                    fs::metadata(path)
+                        .ok()
+                        .filter(fs::Metadata::is_file)
+                        .map(|m| m.len())
+                };
+                match len(self.file_path(row, f)) {
+                    Some(n) if n == f.size => f.size,
+                    _ => len(self.part_path(row, f)).map_or(0, |n| n.min(f.size)),
+                }
+            })
+            .sum()
+    }
+
+    /// **Worker.** Deletes everything installed for row `row.id`: its directory under the root,
+    /// with every revision's files, part files and markers. Nothing there is fine.
+    ///
+    /// The row is validated first, so its id is one safe name below the root. The directory must
+    /// be a real directory directly inside the root: a link (or a Windows junction) in its place,
+    /// or a path that resolves anywhere else, is refused and nothing is deleted. The markers go
+    /// first, so a delete that fails half way leaves the row not installed rather than installed
+    /// with files missing. A loaded model must be unloaded first: Windows refuses to delete an
+    /// open file.
+    pub fn remove_row(&self, row: &EngineRow) -> io::Result<()> {
+        row.validate()
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))?;
+        let dir = self.root.join(&row.id);
+        let meta = match fs::symlink_metadata(&dir) {
+            Ok(meta) => meta,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(e) => return Err(e),
+        };
+        if meta.file_type().is_symlink() || !meta.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("{}'s model directory is not a plain directory", row.id),
+            ));
+        }
+        let (root, resolved) = (fs::canonicalize(&self.root)?, fs::canonicalize(&dir)?);
+        if resolved.parent() != Some(root.as_path()) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "{}'s model directory resolves outside the models root",
+                    row.id
+                ),
+            ));
+        }
+        for revision in fs::read_dir(&resolved)? {
+            let revision = revision?;
+            if revision.file_type()?.is_dir() {
+                match fs::remove_file(revision.path().join(REVISION_MARKER)) {
+                    Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
+                    _ => {}
+                }
+            }
+        }
+        // Does not follow links inside it: a link is removed, never what it points to.
+        fs::remove_dir_all(&resolved)
+    }
+
     /// Whether the row's marker holds exactly its revision. A missing, unreadable or different
     /// marker (including one with trailing whitespace) does not.
     pub(crate) fn marker_matches(&self, row: &EngineRow) -> bool {

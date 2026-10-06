@@ -977,16 +977,31 @@ public sealed record CatalogueEntry
 
     /// <summary>
     /// The jobs it fills, each with its measured error rate. None for a model the core only
-    /// downloads because the shell runs it (the Mac's Parakeet, parakeet-tdt-0.6b-v3-coreml).
+    /// downloads because the shell runs it (the Mac's Parakeet, parakeet-tdt-0.6b-v3-coreml),
+    /// and none for a language model.
     /// </summary>
     [JsonPropertyName("jobs")]
     public required global::System.Collections.Generic.IReadOnlyList<JobScore> Jobs { get; init; }
+
+    /// <summary>
+    /// What it is for. Always sent; a shell built before language models reads its absence as
+    /// speech.
+    /// </summary>
+    [JsonPropertyName("kind")]
+    public ModelKind? Kind { get; init; }
 
     /// <summary>
     /// Its weights' licence.
     /// </summary>
     [JsonPropertyName("licence")]
     public required string Licence { get; init; }
+
+    /// <summary>
+    /// For a language model, its name for the user (Qwen3 4B Instruct); absent for a speech
+    /// model, which the shell names itself.
+    /// </summary>
+    [JsonPropertyName("name")]
+    public string? Name { get; init; }
 
     /// <summary>
     /// Its download size.
@@ -1138,6 +1153,12 @@ public sealed record CommandFailed : InkEvent
     public required string Command { get; init; }
 
     /// <summary>
+    /// For not_enough_space: the bytes free to this user on the volume models go on.
+    /// </summary>
+    [JsonPropertyName("free_bytes")]
+    public long? FreeBytes { get; init; }
+
+    /// <summary>
     /// The command's "id", when it had one.
     /// </summary>
     [JsonPropertyName("id")]
@@ -1148,6 +1169,13 @@ public sealed record CommandFailed : InkEvent
     /// </summary>
     [JsonPropertyName("message")]
     public required string Message { get; init; }
+
+    /// <summary>
+    /// For not_enough_space: the bytes that must be free, the download's remaining bytes plus
+    /// the 1 GiB margin.
+    /// </summary>
+    [JsonPropertyName("needed_bytes")]
+    public long? NeededBytes { get; init; }
 }
 
 /// <summary>
@@ -2263,7 +2291,12 @@ public enum FailedStage
 /// polish_model_confirm_to, the destination the user agreed to: list the modes again and ask
 /// again; nothing was saved) and app_invalid (an app identity with a control character, of one
 /// character, or with no letter: as a substring of the frontmost app's identity it would match
-/// nearly every app).
+/// nearly every app). For the models: not_enough_space (a model.update refused before anything
+/// is fetched: the volume models go on has less free than the download still needs plus a 1 GiB
+/// margin; needed_bytes and free_bytes say how much, and nothing on disk changed), model_in_use
+/// (a model.remove refused while a job, a call or an update holds the model: nothing was
+/// deleted; try again once it ends) and not_downloading (a model.cancel naming a model no
+/// download is running or queued for).
 /// </summary>
 [JsonConverter(typeof(StrictEnumConverter<FailureCode>))]
 public enum FailureCode
@@ -2296,6 +2329,12 @@ public enum FailureCode
     DestinationChanged,
     [JsonStringEnumMemberName("app_invalid")]
     AppInvalid,
+    [JsonStringEnumMemberName("not_enough_space")]
+    NotEnoughSpace,
+    [JsonStringEnumMemberName("model_in_use")]
+    ModelInUse,
+    [JsonStringEnumMemberName("not_downloading")]
+    NotDownloading,
 }
 
 /// <summary>
@@ -2657,8 +2696,8 @@ public sealed record KindStats
 }
 
 /// <summary>
-/// A language model a mode can be polished on: one the shell registered, or the own-key
-/// provider chosen in Settings &gt; AI.
+/// A language model a mode can be polished on: one the shell registered, the core's own on this
+/// machine, or the own-key provider chosen in Settings &gt; AI.
 /// </summary>
 public sealed record LanguageModelChoice
 {
@@ -2689,7 +2728,8 @@ public sealed record LanguageModelChoice
 
     /// <summary>
     /// Its id, as a mode names it (polish_model): engine:&lt;id&gt; for a model the shell
-    /// registered (engine:apple-foundation-models), provider:&lt;id&gt; for the chosen own-key
+    /// registered (engine:apple-foundation-models), engine:local for the core's own model on
+    /// this machine (whichever size is downloaded), provider:&lt;id&gt; for the chosen own-key
     /// provider. Show the name, never the id.
     /// </summary>
     [JsonPropertyName("id")]
@@ -2922,9 +2962,10 @@ public enum LlmFeature
 }
 
 /// <summary>
-/// An own-key (BYOK) language model provider the user can choose: its id, what it uses unless
-/// told otherwise, and whether its API key is stored. The key itself never leaves the OS key
-/// store.
+/// A language model provider the user can choose: an own-key (BYOK) one, or this machine's
+/// model (on_device, listed only where the OS has language models of the core's own: Windows).
+/// Its id, what it uses unless told otherwise, and whether its API key is stored. The key
+/// itself never leaves the OS key store.
 /// </summary>
 public sealed record LlmProviderEntry
 {
@@ -2935,7 +2976,8 @@ public sealed record LlmProviderEntry
     public required bool CustomUrl { get; init; }
 
     /// <summary>
-    /// The model used when llm.choose names none.
+    /// The model used when llm.choose names none; for on_device, the registry id of the
+    /// language model downloaded, else of the one this OS offers (models.listed).
     /// </summary>
     [JsonPropertyName("default_model")]
     public required string DefaultModel { get; init; }
@@ -2956,10 +2998,18 @@ public sealed record LlmProviderEntry
 
     /// <summary>
     /// The provider: openai, groq, anthropic, openrouter or custom (any OpenAI-compatible
-    /// server).
+    /// server), or on_device (the core's own model on this machine, which needs no key and
+    /// keeps local-only mode on).
     /// </summary>
     [JsonPropertyName("id")]
     public required string Id { get; init; }
+
+    /// <summary>
+    /// For on_device, whether a language model is downloaded: llm.choose on_device needs one.
+    /// Absent for the others.
+    /// </summary>
+    [JsonPropertyName("installed")]
+    public bool? Installed { get; init; }
 
     /// <summary>
     /// Whether a call needs its API key (a custom server usually runs without one).
@@ -2969,10 +3019,12 @@ public sealed record LlmProviderEntry
 }
 
 /// <summary>
-/// The own-key language model providers and the one chosen, in answer to llm.providers,
-/// llm.key.save, llm.key.delete and llm.choose. A feature (polish, voice edit, summaries and
-/// Ask) sends to the chosen provider only when no model is registered by the shell, and only
-/// with the user's consent for its endpoint (consent.state).
+/// The own-key language model providers, this machine's model where the OS has one, and the
+/// choice, in answer to llm.providers, llm.key.save, llm.key.delete and llm.choose. The
+/// features (polish, voice edit, summaries and Ask) use the chosen provider; with none chosen,
+/// the core's own model on this machine once one is downloaded (Windows), else the model the
+/// shell registered (Apple's on the Mac). Each only with the user's consent for where it sends
+/// (consent.state).
 /// </summary>
 public sealed record LlmProviders : InkEvent
 {
@@ -2983,7 +3035,8 @@ public sealed record LlmProviders : InkEvent
     public string? BaseUrl { get; init; }
 
     /// <summary>
-    /// The chosen provider's id; absent when none is chosen.
+    /// The chosen provider's id, or on_device for this machine's model; absent when none is
+    /// chosen.
     /// </summary>
     [JsonPropertyName("chosen")]
     public string? Chosen { get; init; }
@@ -3009,7 +3062,8 @@ public sealed record LlmProviders : InkEvent
     public required bool LocalOnly { get; init; }
 
     /// <summary>
-    /// The model the chosen provider is asked for; absent with chosen.
+    /// The model the chosen provider is asked for; for on_device, the registry id of the
+    /// language model downloaded (models.listed), absent while none is. Absent with chosen.
     /// </summary>
     [JsonPropertyName("model")]
     public string? Model { get; init; }
@@ -3022,7 +3076,8 @@ public sealed record LlmProviders : InkEvent
 
     /// <summary>
     /// Whether the chosen provider can be called: its key is stored (when it needs one), and
-    /// local-only mode lets it through. Each feature still needs its own consent.
+    /// local-only mode lets it through; for on_device, whether a language model is downloaded.
+    /// Each feature still needs its own consent.
     /// </summary>
     [JsonPropertyName("ready")]
     public required bool Ready { get; init; }
@@ -3043,10 +3098,18 @@ public sealed record LlmProviders : InkEvent
 
 /// <summary>
 /// The answer to llm.test: one short fixed request (never the user's words) sent to the chosen
-/// provider with its stored key, and whether it answered.
+/// provider with its stored key, or, with none chosen, to the core's own model on this machine
+/// (loaded first if it is not), and whether it answered, timed.
 /// </summary>
 public sealed record LlmTested : InkEvent
 {
+    /// <summary>
+    /// How long the answer took, in milliseconds, the load apart; absent when it did not
+    /// answer. A short request: a dictation's polish reads and writes more.
+    /// </summary>
+    [JsonPropertyName("answer_ms")]
+    public long? AnswerMs { get; init; }
+
     /// <summary>
     /// Why it did not answer, as a sentence starting "couldn't"; absent when ok. Names what
     /// failed, never the key.
@@ -3055,7 +3118,14 @@ public sealed record LlmTested : InkEvent
     public string? Error { get; init; }
 
     /// <summary>
-    /// The model asked.
+    /// For on_device, how long loading the model took, in milliseconds (near 0 when it was
+    /// loaded already). Absent for a provider.
+    /// </summary>
+    [JsonPropertyName("load_ms")]
+    public long? LoadMs { get; init; }
+
+    /// <summary>
+    /// The model asked; for on_device, its registry id (models.listed).
     /// </summary>
     [JsonPropertyName("model")]
     public required string Model { get; init; }
@@ -3067,7 +3137,7 @@ public sealed record LlmTested : InkEvent
     public required bool Ok { get; init; }
 
     /// <summary>
-    /// The provider tested.
+    /// The provider tested; on_device for this machine's model.
     /// </summary>
     [JsonPropertyName("provider")]
     public required string Provider { get; init; }
@@ -4466,6 +4536,20 @@ public enum ModeStyle
 }
 
 /// <summary>
+/// What a model in the catalogue is for: speech (transcription, live words, voice detection,
+/// the diarizer) or language (polish, voice edit, a meeting's summary and Ask, run by the core
+/// on this computer; Windows only).
+/// </summary>
+[JsonConverter(typeof(StrictEnumConverter<ModelKind>))]
+public enum ModelKind
+{
+    [JsonStringEnumMemberName("speech")]
+    Speech,
+    [JsonStringEnumMemberName("language")]
+    Language,
+}
+
+/// <summary>
 /// A job asked for a model that is held exclusively (being updated), and was refused. The job
 /// fails; nothing was loaded from files being replaced.
 /// </summary>
@@ -4491,10 +4575,18 @@ public sealed record ModelRefused : InkEvent
 }
 
 /// <summary>
-/// A model update ended, and its hold is released.
+/// A model update ended, and its hold is released. A model.cancel of an update still queued
+/// answers with this at once, without a model.update_started before it.
 /// </summary>
 public sealed record ModelUpdateFinished : InkEvent
 {
+    /// <summary>
+    /// Whether model.cancel stopped it. A cancelled download keeps its part files, so the next
+    /// model.update resumes it. Always sent.
+    /// </summary>
+    [JsonPropertyName("cancelled")]
+    public bool? Cancelled { get; init; }
+
     /// <summary>
     /// The model that was to be replaced.
     /// </summary>
@@ -4621,16 +4713,29 @@ public sealed record ModelWarmed : InkEvent
 }
 
 /// <summary>
-/// The catalogue's models for this OS, in answer to models.list. What serves each job now is
-/// engine.route's answer.
+/// The catalogue's models for this OS, in answer to models.list and model.remove. What serves
+/// each job now is engine.route's answer.
 /// </summary>
 public sealed record ModelsListed : InkEvent
 {
+    /// <summary>
+    /// The bytes free to this user on the volume models are installed on; absent when the OS
+    /// could not say.
+    /// </summary>
+    [JsonPropertyName("free_bytes")]
+    public long? FreeBytes { get; init; }
+
     /// <summary>
     /// The models, in the catalogue's order.
     /// </summary>
     [JsonPropertyName("models")]
     public required global::System.Collections.Generic.IReadOnlyList<CatalogueEntry> Models { get; init; }
+
+    /// <summary>
+    /// The command's "id", when it had one.
+    /// </summary>
+    [JsonPropertyName("ref")]
+    public string? Ref { get; init; }
 }
 
 /// <summary>

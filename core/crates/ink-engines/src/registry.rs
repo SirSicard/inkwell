@@ -124,6 +124,41 @@ pub struct EngineRow {
     pub oses: Vec<Os>,
     /// The adapter that loads it.
     pub runtime: Runtime,
+    /// What the model is for: speech jobs, or language (polish, voice edit, summaries, Ask).
+    pub kind: RowKind,
+}
+
+/// What a row's model is for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum RowKind {
+    /// A speech model (or the VAD, or the diarizer): it fills the jobs its scores name, and the
+    /// router picks among such rows.
+    Speech,
+    /// A language model the core runs itself (llama.cpp, `engine-llama`): polish, voice edit, a
+    /// meeting's summary and Ask, on this machine. It fills no speech job, so the router never
+    /// picks it; the core keeps it apart from the speech models and loads it on demand.
+    Language(LanguageRow),
+}
+
+/// What a language row adds to a row.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LanguageRow {
+    /// Its name for the user, as `models.listed` gives it (for example `Qwen3 4B Instruct`).
+    pub name: String,
+    /// What its chat format needs beyond llama.cpp's built-in template.
+    pub chat: ChatQuirks,
+}
+
+/// What a language model's chat format needs beyond llama.cpp's built-in template, which the
+/// adapter applies (it has no Jinja, so a template's own switches cannot be passed).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct ChatQuirks {
+    /// A hybrid thinking model (Qwen3's 1.7B and 8B): its thinking is turned off the way its own
+    /// template does with `enable_thinking=false`, by starting the answer with an empty think
+    /// block ([`chat::NO_THINK_PREFILL`](crate::chat::NO_THINK_PREFILL)). No row in 1.0 needs it:
+    /// Qwen3-4B-Instruct-2507 never thinks.
+    pub no_think: bool,
 }
 
 impl EngineRow {
@@ -179,15 +214,51 @@ impl EngineRow {
                 licence: self.licence.clone(),
             });
         }
-        match (self.runtime, self.scores.is_empty()) {
-            (Runtime::CoreMl, false) => {
+        match (&self.kind, self.runtime, self.scores.is_empty()) {
+            (RowKind::Language(_), _, false) => {
+                return Err(invalid(
+                    "is a language model, so it fills no speech job (the router never picks it)"
+                        .into(),
+                ));
+            }
+            (RowKind::Language(_), Runtime::LlamaCpp, true) => {}
+            (RowKind::Language(_), _, true) => {
+                return Err(invalid(
+                    "is a language model, which only the llama.cpp adapter runs".into(),
+                ));
+            }
+            (RowKind::Speech, Runtime::CoreMl, false) => {
                 return Err(invalid(
                     "is only downloaded (the shell runs Core ML), so it may fill no job".into(),
                 ));
             }
-            (Runtime::CoreMl, true) => {}
-            (_, true) => return Err(invalid("fills no job".into())),
-            (_, false) => {}
+            (RowKind::Speech, Runtime::CoreMl, true) => {}
+            (RowKind::Speech, _, true) => return Err(invalid("fills no job".into())),
+            (RowKind::Speech, _, false) => {}
+        }
+        if let RowKind::Language(language) = &self.kind {
+            let name = language.name.trim();
+            if name.is_empty() || name != language.name {
+                return Err(invalid(format!(
+                    "language model name {:?} is blank or has spaces at an end",
+                    language.name
+                )));
+            }
+            if language.name.chars().count() > MAX_NAME_LEN
+                || language.name.chars().any(char::is_control)
+            {
+                return Err(invalid(format!(
+                    "language model name {:?} is over {MAX_NAME_LEN} characters or holds a \
+                     control character",
+                    language.name
+                )));
+            }
+            // The adapter loads one GGUF file.
+            if !(self.files.len() == 1 && self.files[0].name.ends_with(".gguf")) {
+                return Err(invalid(
+                    "is a language model, which is exactly one .gguf file".into(),
+                ));
+            }
         }
         for (i, score) in self.scores.iter().enumerate() {
             // NaN would make the router's ordering meaningless; a negative rate is a typo.
@@ -369,7 +440,7 @@ pub enum RegistryError {
         id: String,
     },
     /// Anything else malformed: an empty or unsafe id or file name, a bad hash, a zero size, no
-    /// jobs, a non-finite error rate, no OS.
+    /// jobs (or, for a language model, any), a non-finite error rate, no OS.
     Invalid {
         /// The row.
         id: String,
@@ -437,9 +508,9 @@ impl Registry {
 /// only added then. Error rates are measured per job on the same sets for every row, so the router
 /// compares like with like: the meeting final and live partials on AMI IHM (three public meeting
 /// excerpts, 709 reference words), the dictation final on FLEURS English dev as published (394
-/// utterances). The diarizer, the VAD and Windows' Parakeet are listed only in builds that include
-/// their adapter, so such a build never offers a download it cannot run. The Mac's Parakeet is in
-/// every build: the shell runs it.
+/// utterances). The diarizer, the VAD, Windows' Parakeet and the language model are listed only in
+/// builds that include their adapter, so such a build never offers a download it cannot run. The
+/// Mac's Parakeet is in every build: the shell runs it.
 pub fn builtin_rows() -> Vec<EngineRow> {
     [
         qwen3_asr_1_7b_q8(),
@@ -450,6 +521,8 @@ pub fn builtin_rows() -> Vec<EngineRow> {
         crate::rows::silero_vad(),
         #[cfg(feature = "engine-sherpa")]
         crate::rows::parakeet_tdt_v3_int8(),
+        #[cfg(feature = "engine-llama")]
+        crate::rows::qwen3_4b_instruct_2507_q4km(),
     ]
     .into_iter()
     .collect()
@@ -503,5 +576,6 @@ fn qwen3_asr_1_7b_q8() -> EngineRow {
         licence: "Apache-2.0".into(),
         oses: vec![Os::MacOs, Os::Windows],
         runtime: Runtime::LlamaCpp,
+        kind: RowKind::Speech,
     }
 }

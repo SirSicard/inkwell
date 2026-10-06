@@ -262,6 +262,7 @@ fn an_update_to_itself_installs_a_model_that_is_not_installed_and_changes_nothin
         installer: Arc::new(Downloader::new(Arc::new(fetch), models.clone())),
         data_dir: dir.path().to_owned(),
         permissions: Arc::new(ink_ffi::queries::NoPermissionProbe),
+        local: Default::default(),
         meetings: Default::default(),
     });
     core.command(r#"{"cmd":"model.warm","job":"dictation_final"}"#)
@@ -436,6 +437,7 @@ fn an_update_to_itself_installs_a_model_the_shell_runs_without_loading_it() {
         installer: Arc::new(Downloader::new(Arc::new(fetch), models.clone())),
         data_dir: dir.path().to_owned(),
         permissions: Arc::new(ink_ffi::queries::NoPermissionProbe),
+        local: Default::default(),
         meetings: Default::default(),
     });
     core.command(r#"{"cmd":"model.warm","job":"dictation_final"}"#)

@@ -92,13 +92,59 @@ impl VoiceRig {
         store: Arc<dyn ink_core::Store>,
         rows: Vec<EngineRow>,
     ) -> Self {
+        Self::build_full(
+            label,
+            with_platform,
+            store,
+            rows,
+            Vec::new(),
+            Default::default(),
+            "hello world",
+        )
+    }
+
+    /// A rig whose registry also lists `installed`, installed, with `local` for the core's own
+    /// language model, and whose speech engine hears `heard` in every take.
+    fn with_local(
+        label: &str,
+        installed: Vec<EngineRow>,
+        local: ink_ffi::runtime::LocalParts,
+        heard: &str,
+    ) -> Self {
+        let sqlite = Arc::new(ink_store::SqliteStore::open_in_memory().unwrap());
+        let mut rig = Self::build_full(
+            label,
+            true,
+            sqlite.clone(),
+            Vec::new(),
+            installed,
+            local,
+            heard,
+        );
+        rig.sqlite = Some(sqlite);
+        rig
+    }
+
+    fn build_full(
+        label: &str,
+        with_platform: bool,
+        store: Arc<dyn ink_core::Store>,
+        rows: Vec<EngineRow>,
+        installed: Vec<EngineRow>,
+        local: ink_ffi::runtime::LocalParts,
+        heard: &str,
+    ) -> Self {
         let dir = TempDir::new(label);
         let platform = Arc::new(MockPlatform::new());
         let edit = Arc::new(MockPlatform::new());
         let row = test_row("test-asr");
         let models = ModelDir::new(dir.path().join("models"));
         install(&models, &row);
-        let loader = MockLoader::new(Behaviour::Say("hello world".into()));
+        for r in &installed {
+            install(&models, r);
+        }
+        let rows = [rows, installed].concat();
+        let loader = MockLoader::new(Behaviour::Say(heard.into()));
         let parts = Parts {
             store,
             clock: platform.clock(),
@@ -112,6 +158,7 @@ impl VoiceRig {
             }),
             data_dir: dir.path().to_owned(),
             permissions: Arc::new(ink_ffi::queries::NoPermissionProbe),
+            local,
             meetings: Default::default(),
         };
         let events = Recorder::new();
@@ -2211,5 +2258,124 @@ fn a_snippet_saved_in_settings_reaches_a_running_dictation_at_once() {
     assert!(refused.is_err());
     let listed = rig.ask(r#"{"cmd":"snippets.list","id":"l2"}"#, "l2");
     assert_eq!(listed["snippets"][0]["expansion"], "Hi there");
+    rig.events.assert_valid();
+}
+
+// --- The core's own language model (Windows' Qwen3; feat/core-local-llm) -----------------------
+//
+// Once one is downloaded it is the AI setting's model while no provider is chosen, under the
+// on-device consent like Apple's model on the Mac: one tap, and the core fails closed without it.
+
+fn chat_row() -> EngineRow {
+    language_row("test-chat", "Test Chat")
+}
+
+impl VoiceRig {
+    /// Press, speak, release, and room for the tail; waits for the take to end however it ends.
+    fn take(&self, seconds: f64, seed: u64) {
+        let ended = |r: &Self| {
+            [
+                "dictation.inserted",
+                "dictation.discarded",
+                "dictation.failed",
+            ]
+            .iter()
+            .map(|t| r.events.count(t))
+            .sum::<usize>()
+        };
+        let before = ended(self);
+        let started = self.events.count("dictation.started");
+        assert!(self.platform.press());
+        self.feed(&Self::speech(seconds, seed));
+        self.release_take(&self.platform, started);
+        let until = Instant::now() + WAIT;
+        while ended(self) == before {
+            assert!(
+                Instant::now() < until,
+                "the take never ended: {}",
+                self.said()
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+}
+
+#[test]
+fn the_downloaded_model_polishes_only_under_the_on_device_consent() {
+    let local = MockLocalLoader::new("Hello, world!");
+    let rig = VoiceRig::with_local(
+        "local-polish",
+        vec![chat_row()],
+        local.parts(None),
+        "hello world",
+    );
+    let state = rig.polish_state("p1");
+    assert_eq!(state["to"], "on_device", "{state}");
+    assert_eq!(state["name"], "Test Chat", "{state}");
+    assert_eq!(state["allowed"], false);
+    rig.enable();
+    // Without the consent, polish is off: nothing is loaded or sent.
+    assert_eq!(rig.dictate(1.0, 81)["text"], "Hello world.");
+    assert_eq!((local.loads(), local.calls()), (0, 0));
+
+    // One tap: the on-device consent, which turns polish on.
+    let allowed = rig.allow_on_device("a1");
+    assert_eq!(allowed["allowed_to"], "on_device", "{allowed}");
+    assert_eq!(rig.dictate(1.0, 82)["text"], "Hello, world!");
+    assert_eq!(local.calls(), 1);
+
+    // A consent for somewhere else only (an earlier cloud provider's) does not cover it: the
+    // take goes in as said, and nothing is sent.
+    store_polish_consents(
+        rig.core(),
+        &[ink_pipeline::consent::LlmConsent::Cloud {
+            endpoint: "https://api.example.com/v1".into(),
+            name: "Example".into(),
+        }],
+    );
+    assert_eq!(rig.dictate(1.0, 83)["text"], "Hello world.");
+    assert_eq!(local.calls(), 1, "nothing sent");
+    assert_eq!(rig.warnings("polish_not_allowed").len(), 1);
+    rig.events.assert_valid();
+}
+
+#[test]
+fn a_take_that_will_polish_on_the_downloaded_model_warms_it_at_its_start() {
+    let local = MockLocalLoader::new("Hello, world!");
+    // The speech engine hears nothing, so no take has text to polish: only a warm-up loads it.
+    let rig = VoiceRig::with_local("local-warm", vec![chat_row()], local.parts(None), "");
+    rig.enable();
+    rig.take(1.0, 91);
+    assert_eq!(local.loads(), 0, "polish off: not warmed");
+
+    rig.allow_on_device("a1");
+    rig.take(1.0, 92);
+    let until = Instant::now() + WAIT;
+    while local.loads() == 0 {
+        assert!(Instant::now() < until, "never warmed");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(
+        (local.loads(), local.calls()),
+        (1, 0),
+        "loaded, never called"
+    );
+    assert_eq!(
+        rig.core().shared().local.resident(),
+        ["test-chat".to_owned()],
+        "it stays loaded for the next take"
+    );
+
+    // Unloaded, then a take in a mode that does not polish: nothing loads it again.
+    rig.core().shared().local.unload("test-chat").unwrap();
+    rig.change_modes(
+        r#"{"cmd":"modes.save","mode":{"id":"default","polish":false},"id":"m1"}"#,
+        "m1",
+    );
+    rig.take(1.0, 93);
+    // The warm-up is decided on its own thread: give it the time the first one took.
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(local.loads(), 1, "not warmed for a take it will not polish");
+    assert!(rig.core().shared().local.resident().is_empty());
     rig.events.assert_valid();
 }

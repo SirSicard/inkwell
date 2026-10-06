@@ -231,6 +231,10 @@ impl QwenAsr {
             ))),
             Err(GenerateError::Cancelled) => Err(EngineError::Cancelled),
             Err(GenerateError::Failed(e)) => Err(self.failed(e)),
+            // No grammar is applied to a transcript.
+            Err(GenerateError::NoAllowedToken) => {
+                Err(self.failed("no token was allowed".to_owned()))
+            }
         }
     }
 

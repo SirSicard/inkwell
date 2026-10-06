@@ -245,6 +245,7 @@ fn rig_with(label: &str, seconds: f64, clock: Arc<dyn Clock>, store: Arc<dyn Sto
         }),
         data_dir: dir.path().to_owned(),
         permissions: Arc::new(ink_ffi::queries::NoPermissionProbe),
+        local: Default::default(),
         meetings: MeetingPlatform {
             capture: capture.clone(),
             detector: Some(detector.clone()),
@@ -980,6 +981,7 @@ fn retention_deletes_old_records_whole_and_leaves_no_trace_of_their_words() {
         }),
         data_dir: dir.path().to_owned(),
         permissions: Arc::new(ink_ffi::queries::NoPermissionProbe),
+        local: Default::default(),
         meetings: MeetingPlatform::default(),
     };
     let (core, events) = start_parts(parts);
@@ -1036,6 +1038,7 @@ fn retention_deletes_old_records_whole_and_leaves_no_trace_of_their_words() {
         }),
         data_dir: dir.path().to_owned(),
         permissions: Arc::new(ink_ffi::queries::NoPermissionProbe),
+        local: Default::default(),
         meetings: MeetingPlatform::default(),
     });
     assert!(
@@ -1120,6 +1123,7 @@ fn a_sweep_keeps_what_an_import_brought_in() {
         }),
         data_dir: dir.path().to_owned(),
         permissions: Arc::new(ink_ffi::queries::NoPermissionProbe),
+        local: Default::default(),
         meetings: MeetingPlatform::default(),
     };
     // Forever until now: the launch's sweep deletes nothing, so the change's sweep is the one.
@@ -1383,6 +1387,7 @@ fn recovery_core(
         }),
         data_dir: dir.to_owned(),
         permissions: Arc::new(ink_ffi::queries::NoPermissionProbe),
+        local: Default::default(),
         meetings: MeetingPlatform::default(),
     })
 }

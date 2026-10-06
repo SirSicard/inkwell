@@ -351,7 +351,7 @@
     },
     "FailureCode": {
       "type": "string",
-      "description": "A command.failed a shell acts on. list_unreadable: a snippets.save, voice_commands.save, meetings.calls.set, modes.save or modes.delete refused because the stored list cannot be read (send a save again with replace_unreadable to start over). meeting_recording: an audio.test refused because a meeting records: the mic test waits until it ends. delete_window_over: a meeting.discard after the meeting's first minute: only Stop is left, and the record can be deleted from the library once it is finished. For modes.save and modes.delete: name_blank (a mode needs a name), name_taken (another mode's name sounds the same: case and spacing aside), name_is_style (formal, casual and relaxed are the styles' names in voice commands), too_long (a name over 64 characters, polish instructions over 2,000, more than 64 apps in a mode or an app identity over 256 characters, or more than 50 modes; a mode the 0.2 import brought with more than 64 apps saves a change to its apps only once they are 64 or fewer, so the editor says \"Shorten to 64 apps or fewer.\"), default_mode (the default mode can't be deleted or given apps), app_taken (an app the mode is given is another mode's: send the save again with take_apps to move it), mode_not_found (no mode has that id) model_unknown (no language model the core holds has that id: modes.listed lists them), model_name_invalid (a polish_model_name that is over 128 characters or holds a control character, or one given for a model that is not a provider's, or without a model), destination_changed (a polish_model_confirm whose model sends somewhere else now than its polish_model_confirm_to, the destination the user agreed to: list the modes again and ask again; nothing was saved) and app_invalid (an app identity with a control character, of one character, or with no letter: as a substring of the frontmost app's identity it would match nearly every app).",
+      "description": "A command.failed a shell acts on. list_unreadable: a snippets.save, voice_commands.save, meetings.calls.set, modes.save or modes.delete refused because the stored list cannot be read (send a save again with replace_unreadable to start over). meeting_recording: an audio.test refused because a meeting records: the mic test waits until it ends. delete_window_over: a meeting.discard after the meeting's first minute: only Stop is left, and the record can be deleted from the library once it is finished. For modes.save and modes.delete: name_blank (a mode needs a name), name_taken (another mode's name sounds the same: case and spacing aside), name_is_style (formal, casual and relaxed are the styles' names in voice commands), too_long (a name over 64 characters, polish instructions over 2,000, more than 64 apps in a mode or an app identity over 256 characters, or more than 50 modes; a mode the 0.2 import brought with more than 64 apps saves a change to its apps only once they are 64 or fewer, so the editor says \"Shorten to 64 apps or fewer.\"), default_mode (the default mode can't be deleted or given apps), app_taken (an app the mode is given is another mode's: send the save again with take_apps to move it), mode_not_found (no mode has that id) model_unknown (no language model the core holds has that id: modes.listed lists them), model_name_invalid (a polish_model_name that is over 128 characters or holds a control character, or one given for a model that is not a provider's, or without a model), destination_changed (a polish_model_confirm whose model sends somewhere else now than its polish_model_confirm_to, the destination the user agreed to: list the modes again and ask again; nothing was saved) and app_invalid (an app identity with a control character, of one character, or with no letter: as a substring of the frontmost app's identity it would match nearly every app). For the models: not_enough_space (a model.update refused before anything is fetched: the volume models go on has less free than the download still needs plus a 1 GiB margin; needed_bytes and free_bytes say how much, and nothing on disk changed), model_in_use (a model.remove refused while a job, a call or an update holds the model: nothing was deleted; try again once it ends) and not_downloading (a model.cancel naming a model no download is running or queued for).",
       "enum": [
         "list_unreadable",
         "meeting_recording",
@@ -366,7 +366,10 @@
         "model_unknown",
         "model_name_invalid",
         "destination_changed",
-        "app_invalid"
+        "app_invalid",
+        "not_enough_space",
+        "model_in_use",
+        "not_downloading"
       ]
     },
     "Refusal": {
@@ -672,6 +675,16 @@
         "code": {
           "$ref": "#/$defs/FailureCode",
           "description": "Which failure, for the few a shell acts on; absent for the rest. Match on this, never on the message."
+        },
+        "needed_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "For not_enough_space: the bytes that must be free, the download's remaining bytes plus the 1 GiB margin."
+        },
+        "free_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "For not_enough_space: the bytes free to this user on the volume models go on."
         }
       },
       "required": [
@@ -895,7 +908,7 @@
     },
     "ModelUpdateFinished": {
       "type": "object",
-      "description": "A model update ended, and its hold is released.",
+      "description": "A model update ended, and its hold is released. A model.cancel of an update still queued answers with this at once, without a model.update_started before it.",
       "properties": {
         "type": {
           "const": "model.update_finished"
@@ -919,6 +932,10 @@
         "message": {
           "type": "string",
           "description": "Why it failed, when it did."
+        },
+        "cancelled": {
+          "type": "boolean",
+          "description": "Whether model.cancel stopped it. A cancelled download keeps its part files, so the next model.update resumes it. Always sent."
         }
       },
       "required": [
@@ -2818,11 +2835,11 @@
     },
     "LanguageModelChoice": {
       "type": "object",
-      "description": "A language model a mode can be polished on: one the shell registered, or the own-key provider chosen in Settings > AI.",
+      "description": "A language model a mode can be polished on: one the shell registered, the core's own on this machine, or the own-key provider chosen in Settings > AI.",
       "properties": {
         "id": {
           "type": "string",
-          "description": "Its id, as a mode names it (polish_model): engine:<id> for a model the shell registered (engine:apple-foundation-models), provider:<id> for the chosen own-key provider. Show the name, never the id."
+          "description": "Its id, as a mode names it (polish_model): engine:<id> for a model the shell registered (engine:apple-foundation-models), engine:local for the core's own model on this machine (whichever size is downloaded), provider:<id> for the chosen own-key provider. Show the name, never the id."
         },
         "name": {
           "type": "string",
@@ -3101,7 +3118,7 @@
     },
     "ModelsListed": {
       "type": "object",
-      "description": "The catalogue's models for this OS, in answer to models.list. What serves each job now is engine.route's answer.",
+      "description": "The catalogue's models for this OS, in answer to models.list and model.remove. What serves each job now is engine.route's answer.",
       "properties": {
         "type": {
           "const": "models.listed"
@@ -3113,6 +3130,15 @@
             "$ref": "#/$defs/CatalogueEntry",
             "description": "A model."
           }
+        },
+        "free_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The bytes free to this user on the volume models are installed on; absent when the OS could not say."
+        },
+        "ref": {
+          "type": "string",
+          "description": "The command's \"id\", when it had one."
         }
       },
       "required": [
@@ -3634,15 +3660,15 @@
     },
     "LlmProviderEntry": {
       "type": "object",
-      "description": "An own-key (BYOK) language model provider the user can choose: its id, what it uses unless told otherwise, and whether its API key is stored. The key itself never leaves the OS key store.",
+      "description": "A language model provider the user can choose: an own-key (BYOK) one, or this machine's model (on_device, listed only where the OS has language models of the core's own: Windows). Its id, what it uses unless told otherwise, and whether its API key is stored. The key itself never leaves the OS key store.",
       "properties": {
         "id": {
           "type": "string",
-          "description": "The provider: openai, groq, anthropic, openrouter or custom (any OpenAI-compatible server)."
+          "description": "The provider: openai, groq, anthropic, openrouter or custom (any OpenAI-compatible server), or on_device (the core's own model on this machine, which needs no key and keeps local-only mode on)."
         },
         "default_model": {
           "type": "string",
-          "description": "The model used when llm.choose names none."
+          "description": "The model used when llm.choose names none; for on_device, the registry id of the language model downloaded, else of the one this OS offers (models.listed)."
         },
         "endpoint": {
           "type": "string",
@@ -3659,6 +3685,10 @@
         "has_key": {
           "type": "boolean",
           "description": "Whether a key is stored for it in the OS key store, asked without reading the key. False when that could not be asked (llm.providers' error says so)."
+        },
+        "installed": {
+          "type": "boolean",
+          "description": "For on_device, whether a language model is downloaded: llm.choose on_device needs one. Absent for the others."
         }
       },
       "required": [
@@ -3673,7 +3703,7 @@
     },
     "LlmProviders": {
       "type": "object",
-      "description": "The own-key language model providers and the one chosen, in answer to llm.providers, llm.key.save, llm.key.delete and llm.choose. A feature (polish, voice edit, summaries and Ask) sends to the chosen provider only when no model is registered by the shell, and only with the user's consent for its endpoint (consent.state).",
+      "description": "The own-key language model providers, this machine's model where the OS has one, and the choice, in answer to llm.providers, llm.key.save, llm.key.delete and llm.choose. The features (polish, voice edit, summaries and Ask) use the chosen provider; with none chosen, the core's own model on this machine once one is downloaded (Windows), else the model the shell registered (Apple's on the Mac). Each only with the user's consent for where it sends (consent.state).",
       "properties": {
         "type": {
           "const": "llm.providers"
@@ -3688,11 +3718,11 @@
         },
         "chosen": {
           "type": "string",
-          "description": "The chosen provider's id; absent when none is chosen."
+          "description": "The chosen provider's id, or on_device for this machine's model; absent when none is chosen."
         },
         "model": {
           "type": "string",
-          "description": "The model the chosen provider is asked for; absent with chosen."
+          "description": "The model the chosen provider is asked for; for on_device, the registry id of the language model downloaded (models.listed), absent while none is. Absent with chosen."
         },
         "base_url": {
           "type": "string",
@@ -3712,7 +3742,7 @@
         },
         "ready": {
           "type": "boolean",
-          "description": "Whether the chosen provider can be called: its key is stored (when it needs one), and local-only mode lets it through. Each feature still needs its own consent."
+          "description": "Whether the chosen provider can be called: its key is stored (when it needs one), and local-only mode lets it through; for on_device, whether a language model is downloaded. Each feature still needs its own consent."
         },
         "error": {
           "type": "string",
@@ -3733,18 +3763,18 @@
     },
     "LlmTested": {
       "type": "object",
-      "description": "The answer to llm.test: one short fixed request (never the user's words) sent to the chosen provider with its stored key, and whether it answered.",
+      "description": "The answer to llm.test: one short fixed request (never the user's words) sent to the chosen provider with its stored key, or, with none chosen, to the core's own model on this machine (loaded first if it is not), and whether it answered, timed.",
       "properties": {
         "type": {
           "const": "llm.tested"
         },
         "provider": {
           "type": "string",
-          "description": "The provider tested."
+          "description": "The provider tested; on_device for this machine's model."
         },
         "model": {
           "type": "string",
-          "description": "The model asked."
+          "description": "The model asked; for on_device, its registry id (models.listed)."
         },
         "ok": {
           "type": "boolean",
@@ -3757,6 +3787,16 @@
         "error": {
           "type": "string",
           "description": "Why it did not answer, as a sentence starting \"couldn't\"; absent when ok. Names what failed, never the key."
+        },
+        "load_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "For on_device, how long loading the model took, in milliseconds (near 0 when it was loaded already). Absent for a provider."
+        },
+        "answer_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How long the answer took, in milliseconds, the load apart; absent when it did not answer. A short request: a dictation's polish reads and writes more."
         },
         "ref": {
           "type": "string",
@@ -4155,6 +4195,14 @@
       ],
       "additionalProperties": false
     },
+    "ModelKind": {
+      "type": "string",
+      "description": "What a model in the catalogue is for: speech (transcription, live words, voice detection, the diarizer) or language (polish, voice edit, a meeting's summary and Ask, run by the core on this computer; Windows only).",
+      "enum": [
+        "speech",
+        "language"
+      ]
+    },
     "CatalogueEntry": {
       "type": "object",
       "description": "A model in the catalogue that runs on this OS.",
@@ -4162,6 +4210,14 @@
         "id": {
           "type": "string",
           "description": "Its id."
+        },
+        "kind": {
+          "$ref": "#/$defs/ModelKind",
+          "description": "What it is for. Always sent; a shell built before language models reads its absence as speech."
+        },
+        "name": {
+          "type": "string",
+          "description": "For a language model, its name for the user (Qwen3 4B Instruct); absent for a speech model, which the shell names itself."
         },
         "licence": {
           "type": "string",
@@ -4178,7 +4234,7 @@
         },
         "jobs": {
           "type": "array",
-          "description": "The jobs it fills, each with its measured error rate. None for a model the core only downloads because the shell runs it (the Mac's Parakeet, parakeet-tdt-0.6b-v3-coreml).",
+          "description": "The jobs it fills, each with its measured error rate. None for a model the core only downloads because the shell runs it (the Mac's Parakeet, parakeet-tdt-0.6b-v3-coreml), and none for a language model.",
           "items": {
             "$ref": "#/$defs/JobScore",
             "description": "A job and its error rate."

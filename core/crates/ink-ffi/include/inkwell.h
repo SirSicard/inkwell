@@ -141,6 +141,14 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       loaded it is unloaded (and loaded again if it was warm), and while a job uses it the
  *       update is refused, as above. A voice detector installed while dictation runs is taken by
  *       it at once ("dictation.voice_detection" says so).
+ *       Before anything is held or fetched, the download's remaining bytes plus 1 GiB are checked
+ *       against the free space where models go: too little is "command.failed" with code
+ *       not_enough_space, "needed_bytes" and "free_bytes", and nothing changes (free space the OS
+ *       cannot give never blocks it). "model.update_finished" says "cancelled":true when a
+ *       model.cancel stopped it.
+ *       A language model (models.listed's kind "language", Windows): send "model" and "next"
+ *       as its id. Once it verifies it is the one in use (engine:local); should another
+ *       language model be installed, it is deleted then (one at a time).
  *   {"cmd":"engine.unregister","engine":"<engine id>"}
  *       Lets go of an engine the shell registered; its release function runs once no call is in
  *       flight. "engine.unregistered".
@@ -244,13 +252,33 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       process keeps the words in the database's log), or "command.failed": a record that is
  *       not there, or one still live (a meeting being recorded, or whose final pass has not
  *       finished). Only when the user asks, after a confirmation that it cannot be undone.
- *   {"cmd":"models.list"}
+ *   {"cmd":"models.list","id":"<ref>"}
  *       "models.listed": the catalogue's models for this OS, their measured error rates and
- *       whether each is installed. Send engine.route for what serves a job now. A model the
+ *       whether each is installed, each one's "kind" (speech or language; a language model also
+ *       has its "name"), the bytes free where models go ("free_bytes", absent when the OS cannot
+ *       say) and the "id" as "ref". Send engine.route for what serves a job now. A model the
  *       shell runs fills no job there: the core only downloads it (model.update) into
  *       <models_dir>/<id>/<first 12 digits of its revision>/, and the shell loads it from there
  *       and registers its engine. The Mac's Parakeet, parakeet-tdt-0.6b-v3-coreml: its files are
  *       in that directory's parakeet-tdt-0.6b-v3/, the folder FluidAudio loads v3 from.
+ *   {"cmd":"model.cancel","model":"<id being downloaded>","id":"<ref>"}
+ *       Stops a model.update's download of that model, from the screens' thread, so it never
+ *       waits behind the download. A running one stops at its next chunk and keeps its part
+ *       files (the next model.update resumes them); one still queued never starts. Either ends
+ *       with "model.update_finished" with "cancelled":true, the queued one at once (with no
+ *       "model.update_started" before it); nothing else answers. One cancelled just as it
+ *       starts, before it fetches, may end with that update's own "command.failed" instead (no
+ *       room, or the model held). No download of it, or one already ended: "command.failed"
+ *       with code not_downloading.
+ *   {"cmd":"model.remove","model":"<registry id>","id":"<ref>"}
+ *       Deletes a model's files (every revision's, and part files), from the screens' thread:
+ *       "models.listed" with the "id" as "ref". While a job, a language model call or an update
+ *       holds the model (a meeting holds its voice detector for its length, and its diarizer for
+ *       the final pass), "command.failed" with code model_in_use, and nothing is deleted: try
+ *       again once it ends. A model loaded and idle is unloaded first. Removing the language
+ *       model in use leaves a mode pinned to engine:local missing; while on_device is chosen the
+ *       features then have none, and nothing falls through to another model. Only when the
+ *       user asks.
  *   {"cmd":"engine.route","job":"dictation_final"}
  *       Which engine serves a job now: "engine.routed" with the job, and the engine's id and
  *       source ("registry" for a downloaded model, "shell" for an engine the shell registered),
@@ -374,24 +402,32 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *   {"cmd":"llm.providers","id":"<ref>"}
  *   {"cmd":"llm.key.save","provider":"openai|groq|anthropic|openrouter|custom","key":"...","id":"<ref>"}
  *   {"cmd":"llm.key.delete","provider":"<provider>","id":"<ref>"}
- *   {"cmd":"llm.choose","provider":"<provider>|none","model":"<optional>","base_url":"<custom only>",
- *    "local_only":"off","id":"<ref>"}
- *       Own-key language models, for a shell with no model of its own (Windows): "llm.providers"
- *       lists every provider, whether its key is stored (asked without reading it) and the one
- *       chosen. A key goes only into the OS key store (macOS keychain, Windows Credential
+ *   {"cmd":"llm.choose","provider":"<provider>|on_device|none","model":"<optional>",
+ *    "base_url":"<custom only>","local_only":"off","id":"<ref>"}
+ *       Own-key language models, and this machine's (Windows): "llm.providers" lists every
+ *       provider, whether its key is stored (asked without reading it) and the one chosen, and,
+ *       where the OS has a language model of the core's own, "on_device" with its model and
+ *       whether it is downloaded ("installed"). A key goes only into the OS key store (macOS keychain, Windows Credential
  *       Manager): never into settings, an event, an error or a log; send it once and forget it.
  *       llm.choose picks the provider and its model: one that is not on this machine is chosen
  *       only with "local_only":"off", which turns local-only mode off with it; one on this
  *       machine, or none, turns it back on. It answers "setting.value" (llm.local_only) and a
  *       "consent.state" per feature first: choosing sends nothing, and each feature still needs
- *       its consent for the provider's endpoint. A model the shell registered is used before the
- *       chosen provider. Each answers "llm.providers" with the "id".
+ *       its consent for the provider's endpoint. "on_device" chooses the downloaded language
+ *       model (a "model" given must be its id; no base_url, no local_only): local-only mode on,
+ *       no key, and while it is chosen nothing stands in for it. The features use the chosen
+ *       provider; with none chosen, the core's own model once one is downloaded, else the model
+ *       the shell registered (Apple's on the Mac). Each answers "llm.providers" with the "id".
  *   {"cmd":"llm.test","id":"<ref>"}
  *       One short fixed request (never the user's words) to the chosen provider with its stored
  *       key, through local-only mode: "llm.tested" with the "id", saying whether it answered
- *       (and the HTTP status of a refusal). One at a time; another sent meanwhile fails as busy.
- *       A provider that has not answered within 60 s fails it, and ink_shutdown never waits for
- *       its answer.
+ *       (and the HTTP status of a refusal) and how long the answer took ("answer_ms"). With no
+ *       provider chosen and a language model downloaded, it goes to that model (provider
+ *       "on_device", loaded first if it is not): "load_ms" times the load. One at a time;
+ *       another sent meanwhile fails as busy. A provider that has not answered within 60 s fails
+ *       it, and ink_shutdown never waits for a provider's answer. A load of the on-device model
+ *       cannot be stopped: one already under way when ink_shutdown begins finishes first (none
+ *       starts after), so ink_shutdown can wait seconds for it.
  *   {"cmd":"modes.list","id":"<ref>"}
  *       "modes.listed": the user's modes, in the order they are matched, with the app identities
  *       each is picked for (on macOS, bundle ids: name them, never show them as they are), each
@@ -402,7 +438,8 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       last two, show where its model sends, ask the user, then save with
  *       "polish_model_confirm":true and that destination as "polish_model_confirm_to").
  *       "polish_models" lists every model a mode can pick now (engine:<id> for one the shell
- *       registered, provider:<id> for the chosen own-key provider), each with where it sends
+ *       registered, engine:local for the core's own language model, whichever is downloaded,
+ *       provider:<id> for the chosen own-key provider), each with where it sends
  *       ("to", and for a cloud model its "endpoint"), the model it asks for ("model"), whether
  *       polish may use it now ("allowed": a polish consent covers it and local-only mode lets
  *       it) and "blocked_local_only";

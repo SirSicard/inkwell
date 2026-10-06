@@ -50,7 +50,7 @@ pub use platform::{
     AppRef, AutoInput, AutoReason, CaptureControl, DeviceChange, DeviceId, DeviceInfo,
     FarEndTarget, FocusInfo, FocusReader, HotkeyBinding, HotkeyEvent, HotkeySource, InsertOutcome,
     MeetingDetector, MeetingSignal, Permission, PermissionProbe, PermissionState, Platform,
-    TextInserter, Transport,
+    SystemInfo, TextInserter, Transport,
 };
 pub use store::{
     Commitment, CommitmentId, DoneEvidence, Explained, NewCommitment, NewRecord, Note, NoteId,

@@ -5,8 +5,9 @@ mod common;
 use common::{REV, row, sha256_hex};
 use ink_core::Job;
 use ink_engines::{
-    ALLOWED_WEIGHT_LICENCES, EngineRow, JobScore, MAX_RELATIVE_PATH_LEN, ModelDir, ModelFile, Os,
-    REVISION_MARKER, Registry, RegistryError, Runtime, builtin_rows,
+    ALLOWED_WEIGHT_LICENCES, ChatQuirks, EngineRow, JobScore, LanguageRow, MAX_RELATIVE_PATH_LEN,
+    ModelDir, ModelFile, Os, REVISION_MARKER, Registry, RegistryError, RowKind, Runtime,
+    builtin_rows,
 };
 
 fn valid() -> EngineRow {
@@ -388,5 +389,54 @@ fn paths_at_the_name_limits_fit_the_windows_path_budget() {
             }
             false => assert!(matches!(refused(deep), RegistryError::Invalid { .. })),
         }
+    }
+}
+
+fn language() -> RowKind {
+    RowKind::Language(LanguageRow {
+        name: "Synthetic Chat".into(),
+        chat: ChatQuirks::default(),
+    })
+}
+
+#[test]
+fn a_language_row_fills_no_speech_job_and_is_one_gguf_for_llama_cpp() {
+    let mut chat = valid();
+    chat.scores.clear();
+    chat.files[0].name = "chat.gguf".into();
+    chat.files[0].url = chat.files[0].url.replace("weights.bin", "chat.gguf");
+    chat.kind = language();
+    Registry::new(vec![chat.clone()]).expect("a language row");
+    assert!(chat.info().jobs.is_empty());
+
+    let mut scored = chat.clone();
+    scored.scores = valid().scores;
+    assert!(matches!(refused(scored), RegistryError::Invalid { .. }));
+    let mut other_runtime = chat.clone();
+    other_runtime.runtime = Runtime::SherpaOnnx;
+    assert!(matches!(
+        refused(other_runtime),
+        RegistryError::Invalid { .. }
+    ));
+    let mut two_files = chat.clone();
+    let mut second = two_files.files[0].clone();
+    second.name = "more.gguf".into();
+    second.url = second.url.replace("chat.gguf", "more.gguf");
+    two_files.files.push(second);
+    assert!(matches!(refused(two_files), RegistryError::Invalid { .. }));
+    let mut not_gguf = valid();
+    not_gguf.scores.clear();
+    not_gguf.kind = language();
+    assert!(matches!(refused(not_gguf), RegistryError::Invalid { .. }));
+    for name in ["", " Synthetic", "Synthetic\n", &"x".repeat(65)] {
+        let mut named = chat.clone();
+        named.kind = RowKind::Language(LanguageRow {
+            name: name.into(),
+            chat: ChatQuirks::default(),
+        });
+        assert!(
+            matches!(refused(named), RegistryError::Invalid { .. }),
+            "{name:?}"
+        );
     }
 }

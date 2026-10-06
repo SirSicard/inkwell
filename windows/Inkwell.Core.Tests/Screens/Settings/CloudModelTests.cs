@@ -52,6 +52,22 @@ public class CloudModelTests
         return Ev.Of(JsonSerializer.Serialize(fields));
     }
 
+    /// <summary>
+    /// This PC's model (on_device, listed where the core has one) is chosen from its own row,
+    /// which comes with the local language model UI: the own-key picker never offers it.
+    /// </summary>
+    [Fact]
+    public void ThisPcsModelIsNotAnOwnKeyProvider()
+    {
+        var withOnDevice = Ev.Of("""{"type":"llm.providers","providers":[{"id":"openai","default_model":"gpt-4o-mini","endpoint":"https://api.openai.com/v1","custom_url":false,"needs_key":true,"has_key":false},{"id":"on_device","default_model":"qwen3-4b-instruct-2507-q4km","endpoint":"this process","custom_url":false,"needs_key":false,"has_key":false,"installed":true}],"local_only":true,"ready":false}""");
+        var (cloud, _) = Loaded(withOnDevice);
+        Assert.Equal(["openai"], cloud.Providers.Select(p => p.Id));
+        // Chosen, it is no own-key provider chosen here.
+        cloud.Apply(Ev.Of("""{"type":"llm.providers","providers":[{"id":"openai","default_model":"gpt-4o-mini","endpoint":"https://api.openai.com/v1","custom_url":false,"needs_key":true,"has_key":false}],"chosen":"on_device","model":"qwen3-4b-instruct-2507-q4km","endpoint":"this process","to":"on_device","local_only":true,"ready":true}"""));
+        Assert.Null(cloud.Chosen);
+        Assert.Null(cloud.ChosenProvider);
+    }
+
     private static (CloudModel Cloud, Sent Sent) Loaded(InkEvent? state = null)
     {
         var sent = new Sent();
