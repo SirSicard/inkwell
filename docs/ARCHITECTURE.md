@@ -39,6 +39,7 @@ on the `legacy/0.2` branch, and its architecture is in [legacy/ARCHITECTURE-0.2.
 6. **Local-only is structural.** A switch refuses any non-loopback language-model endpoint in code.
    The core holds it (`llm.local_only`, on unless turned off, on when unreadable) and every
    language-model call goes through it: dictation polish, meeting summaries and commitments, Ask.
+   The core's own language model (Windows, below) runs in this process, so it passes.
 7. **One replay harness.** `FileReplaySource` drives the whole pipeline from WAV fixtures,
    identically on macOS and Windows.
 8. **One event schema.** Events are defined once in `schema/`, and the Swift and C# types are
@@ -284,9 +285,11 @@ Each table is one kind:
   rate per job wins, at every call. So Parakeet, registered for the finals with rates worse than
   Qwen3-ASR's, serves them only while Qwen3-ASR is not installed. `engine.route` tells the shell
   what serves a job now.
-- Language models are kept by the core apart from the router (whose jobs are speech jobs); dictation
-  polish goes to the one registered. Foundation Models is registered only while Apple Intelligence
-  is available.
+- Language models are kept by the core apart from the router (whose jobs are speech jobs). The
+  features use the own-key provider chosen in Settings > AI; with none chosen, the core's own
+  language model once one is downloaded (Windows, below), else the one the shell registered.
+  Foundation Models is registered only while Apple Intelligence is available; the Mac has no
+  language model of the core's own, so its order is as it was.
 - Polish sends a dictation, voice edit the selection and the instruction, and a meeting's summary
   (with its commitments) and Ask the meeting's transcript, to that model, so each runs only with
   the user's consent for where it goes: this machine, or one named cloud provider
@@ -305,6 +308,42 @@ Each table is one kind:
   summary or commitments (`summary_not_allowed`), and Ask answers that it needs the user's OK. The
   meeting's consent is read when the summary is written, not when the meeting starts.
 - A table the size of ABI 1's still registers an offline engine; newer kinds need the full table.
+
+## The core's own language model (Windows)
+
+Windows has no on-device model the OS provides, so the core runs one itself: a registry row of
+kind language (`RowKind::Language`), Qwen3-4B-Instruct-2507 Q4_K_M on llama.cpp (the same static
+llama.cpp and the same device choice as Qwen3-ASR), downloaded only when the user asks. It fills
+no speech job, so the router never picks it. The Mac lists none: Apple's model does this there.
+
+- **Which model the features use.** The chosen own-key provider first; with none chosen, this
+  model once it is downloaded; else one the shell registered. `llm.choose` `on_device` chooses it
+  outright (local-only mode stays on, no key), and while it is chosen nothing stands in for it.
+  A mode names it `engine:local`, whichever row is installed.
+- **Consent.** Its endpoint is this process, so the on-device consent covers it, the record
+  Apple's model uses; a feature moved to it from a cloud provider sends nothing until the user
+  gives that one tap. The core fails closed without it.
+- **Residency** of its own (`ink_ffi::local`), apart from the speech models', so it never evicts
+  Qwen3-ASR, and behind the model gate, so an update or a removal never touches files under a
+  call. It loads on first use, or at the start of a take that will polish or edit on it under a
+  consent that covers it, and unloads after five idle minutes: one thread, `ink-llm-local`,
+  sleeps until the next unload is due or a take or a call wakes it. Shutdown unloads it.
+- **Context** 4,096 tokens, as Apple's model, so summaries are written in the windows proven on
+  the Mac. Every answer has a think block at its start taken off (an unclosed one is an error);
+  a row for a hybrid thinking model would also get the empty think block its template writes
+  for `enable_thinking=false` (`ChatQuirks::no_think`). A structured answer is held to one JSON
+  object by a grammar applied only to a token sampled freely that breaks it.
+- **One installed at a time.** Should the registry offer more than one, installing another
+  replaces the one in use once its download has verified (`llm.local.model`), so there is never
+  a moment with none; one a call held then is deleted at the next launch.
+- **Downloads and removal**, for every model: `model.cancel` and `model.remove` run on the
+  screens' thread, so neither waits behind a download on the command thread. Each `model.update`
+  has its own cancel token from when it is queued; a cancelled download keeps its part files for
+  a resume. A removal is refused while a job, a call or an update holds the model, and deletes
+  only the row's own directory, directly inside the models root (a link in its place is
+  refused). Before anything is fetched, the download's remaining bytes plus 1 GiB are checked
+  against the free space where models go (`SystemInfo`: `statfs` on the Mac,
+  `GetDiskFreeSpaceExW` on Windows): `not_enough_space`, and nothing changes.
 
 ## The screens' commands
 
@@ -505,8 +544,9 @@ this call"; questions about a live meeting (`meeting.ask`) run on `ink-ask`.
   choice as it is then (`meeting.mic_switched`). `meeting.started` names the title (the
   calendar's event on now, from the shell), the app and the mic.
 - **What it runs on.** The VAD (Silero), loaded at the start; the far end's diarizer (Nemotron),
-  loaded only for the final pass and let go of after it; and the language model the shell
-  registered, for the summary, commitments and Ask, sized to its context (`context_tokens`: the
+  loaded only for the final pass and let go of after it; and the AI setting's language model (the
+  chosen provider, the core's own on Windows, or the one the shell registered), for the summary,
+  commitments and Ask, sized to its context (`context_tokens`: the
   on-device model holds 4,096 tokens, so a long meeting's summary is written in windows cut by
   size and combined in groups). Foundation Models generates structured answers to the request's
   JSON Schema. Any of them missing is said, never guessed around.
