@@ -5,7 +5,7 @@
 //! |---|---|---|
 //! | VAD | the router's [`Job::VoiceActivity`] model (Silero), loaded at the meeting's start | the fallbacks level everything, and the shell says voice detection is unavailable |
 //! | Diarizer | the router's [`Job::Diarization`] model (Nemotron), loaded only for the final pass and let go of after it | the far end stays one voice, "Them" |
-//! | Language model | the one the shell registered (Foundation Models on the Mac), asked at each call | no summary, and the pass says so (`summary_unavailable`) |
+//! | Language model | the AI setting's: the chosen own-key provider, the core's own on this machine (Windows), or the one the shell registered (Foundation Models on the Mac), asked at each call | no summary, and the pass says so (`summary_unavailable`) |
 //!
 //! Each is looked up when a meeting starts, never assumed: a build without the VAD's or the
 //! diarizer's adapter lists neither in its registry, and a Mac without Apple Intelligence
@@ -24,6 +24,7 @@ use ink_pipeline::events::VadUnavailable;
 use ink_pipeline::speech::VadSource;
 
 use crate::llms::PolishModel;
+use crate::local::LOCAL_CONTEXT_TOKENS;
 use crate::runtime::Shared;
 
 /// The context the shell's language model is taken to hold when it does not say: the on-device
@@ -120,17 +121,20 @@ pub fn llm(shared: &Shared) -> Option<Arc<dyn Llm>> {
 }
 
 /// The context the language model a meeting uses holds, in tokens: the chosen own-key provider's,
-/// else the registered model's (the order [`ShellLlms::pick`](crate::llms::ShellLlms::pick)
-/// follows), else [`DEFAULT_CONTEXT_TOKENS`].
+/// else the core's own model's ([`LOCAL_CONTEXT_TOKENS`]), else the registered model's (the order
+/// [`ShellLlms::pick`](crate::llms::ShellLlms::pick) follows), else [`DEFAULT_CONTEXT_TOKENS`].
 pub fn context_tokens(shared: &Shared) -> u32 {
-    match shared.llms.cloud() {
-        Some(cloud) => cloud.context_tokens(),
-        None => shared
-            .llms
-            .pick_shell()
-            .and_then(|shell| shell.context_tokens()),
+    if let Some(cloud) = shared.llms.cloud() {
+        return cloud.context_tokens().unwrap_or(DEFAULT_CONTEXT_TOKENS);
     }
-    .unwrap_or(DEFAULT_CONTEXT_TOKENS)
+    if shared.llms.local().is_some() {
+        return LOCAL_CONTEXT_TOKENS;
+    }
+    shared
+        .llms
+        .pick_shell()
+        .and_then(|shell| shell.context_tokens())
+        .unwrap_or(DEFAULT_CONTEXT_TOKENS)
 }
 
 /// How a meeting's summary is sized for the language model it uses.

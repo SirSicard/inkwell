@@ -692,6 +692,7 @@ impl Voice {
             shared.events.clone(),
             shared.clock.clone(),
             warmer.handle(),
+            shared.local.clone(),
             activity.clone(),
             ctl.clone(),
         );
@@ -912,20 +913,24 @@ fn key_sink(
     })
 }
 
-/// The chain's events: to the shell, and to what follows the takes (the warm-up at a start; the
+/// The chain's events: to the shell, and to what follows the takes (the warm-ups at a start: the
+/// dictation engine's, and the core's own language model's when the take will use it; the
 /// activity the mic's idle time is measured from).
 fn chain_sink(
     events: Events,
     clock: Arc<dyn ink_core::Clock>,
     warm: WarmHandle,
+    local: Arc<crate::local::LocalLlms>,
     activity: Arc<Activity>,
     ctl: SyncSender<Ctl>,
 ) -> EventSink<DictationEvent> {
     Arc::new(move |e| {
         match &e {
-            DictationEvent::Started { .. } => {
+            DictationEvent::Started { edit, mode, .. } => {
                 activity.busy.store(true, Ordering::Release);
                 warm.key_down();
+                // Only a send: whether the take uses it is decided on its own thread.
+                local.take_started(*edit, mode.clone());
             }
             DictationEvent::Inserted { .. }
             | DictationEvent::Discarded(_)

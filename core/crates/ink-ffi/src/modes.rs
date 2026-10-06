@@ -375,7 +375,7 @@ pub fn listed(
             ("polish_models", Some(Value::Array(models))),
             (
                 "setting_polish_model",
-                choices.first().map(|(r, _)| r.id().into()),
+                shared.llms.pick_ref().map(|r| r.id().into()),
             ),
             ("saved", saved.map(Into::into)),
             ("ref", reference.map(Into::into)),

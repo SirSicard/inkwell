@@ -907,6 +907,7 @@ fn the_catalogue_names_language_models_suggests_one_size_and_says_the_free_space
             permissions: Arc::new(ink_ffi::queries::NoPermissionProbe),
             local: ink_ffi::runtime::LocalParts {
                 system: system.clone(),
+                ..Default::default()
             },
             meetings: Default::default(),
         });

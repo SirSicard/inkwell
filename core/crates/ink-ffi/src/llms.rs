@@ -6,9 +6,11 @@
 //! take polished after such a change uses what is registered then. With several registered, the
 //! lowest id wins, so the choice never depends on timing.
 //!
-//! The user's own-key provider ([`cloud`](crate::cloud), chosen in Settings > AI) is kept here too.
-//! The user's choice comes first: while a provider is chosen it is used, and a model the shell
-//! registered (the Mac's Foundation Models) is used while none is.
+//! The user's own-key provider ([`cloud`](crate::cloud), chosen in Settings > AI) is kept here too,
+//! and the core's own model on this machine ([`local`](crate::local), Windows' Qwen3, once one is
+//! downloaded). The user's choice comes first: while a provider is chosen it is used; while none
+//! is, the core's own model is, and a model the shell registered (the Mac's Foundation Models)
+//! while there is neither. The Mac has no model of the core's own, so its order is unchanged.
 //!
 //! # A mode's own model
 //!
@@ -31,6 +33,7 @@ use ink_pipeline::consent::Destination;
 use ink_pipeline::modes::ModelPin;
 
 use crate::external::ExternalLlm;
+use crate::local::{LOCAL_ID, LocalLlm};
 
 /// The setting for local-only mode: `on` (the default: a model that is not on this machine is
 /// refused) or `off`.
@@ -50,7 +53,8 @@ pub fn local_only_setting(store: &dyn ink_core::Store) -> bool {
 }
 
 /// A language model as a mode names it (`polish_model` in the stored modes): `engine:<id>`, a model
-/// the shell registered under that id (on the Mac, `engine:apple-foundation-models`), or
+/// the shell registered under that id (on the Mac, `engine:apple-foundation-models`), or the
+/// core's own model on this machine (`engine:local`, whichever size is installed), or
 /// `provider:<id>`, the own-key provider chosen in Settings > AI with the model chosen there
 /// (`provider:anthropic`). A provider not chosen now is not one the core holds: a mode naming it
 /// is not polished until it is chosen again.
@@ -80,12 +84,15 @@ impl ModelRef {
     }
 }
 
-/// The registered language models, by id, and the chosen own-key provider. `Send + Sync`; the
-/// locks are held only to insert, remove or copy out an `Arc`, never across a call.
+/// The registered language models, by id, the chosen own-key provider, and the core's own model
+/// on this machine. `Send + Sync`; the locks are held only to insert, remove or copy out an `Arc`,
+/// never across a call.
 #[derive(Default)]
 pub struct ShellLlms {
     engines: RwLock<BTreeMap<String, Arc<ExternalLlm>>>,
     cloud: RwLock<Option<Arc<ByokLlm>>>,
+    /// The core's own model installed on this machine, `engine:local`.
+    local: RwLock<Option<Arc<LocalLlm>>>,
 }
 
 impl ShellLlms {
@@ -113,13 +120,57 @@ impl ShellLlms {
         removed.is_some()
     }
 
-    /// The model polish goes to now: the chosen own-key provider, else a model the shell
-    /// registered, if either. The user's choice wins over the shell's model.
+    /// The model polish goes to now: the chosen own-key provider, else the core's own model on
+    /// this machine, else a model the shell registered, if any. The user's choice wins.
     pub fn pick(&self) -> Option<Arc<dyn Llm>> {
-        match self.cloud() {
-            Some(cloud) => Some(cloud as Arc<dyn Llm>),
-            None => self.pick_shell().map(|shell| shell as Arc<dyn Llm>),
+        if let Some(cloud) = self.cloud() {
+            return Some(cloud as Arc<dyn Llm>);
         }
+        if let Some(local) = self.local() {
+            return Some(local as Arc<dyn Llm>);
+        }
+        self.pick_shell().map(|shell| shell as Arc<dyn Llm>)
+    }
+
+    /// **Any thread.** What [`pick`](Self::pick) gives, as a mode names it: the AI setting's
+    /// model.
+    pub fn pick_ref(&self) -> Option<ModelRef> {
+        if let Some(info) = self
+            .cloud
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .map(|c| c.info())
+        {
+            return Provider::from_id(&info.provider).map(ModelRef::Provider);
+        }
+        if self.local().is_some() {
+            return Some(ModelRef::Engine(LOCAL_ID.into()));
+        }
+        self.engines
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .keys()
+            .next()
+            .map(|id| ModelRef::Engine(id.clone()))
+    }
+
+    /// The core's own model on this machine, if one is installed.
+    pub fn local(&self) -> Option<Arc<LocalLlm>> {
+        self.local
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Sets the core's own model (`None`: none is installed). A call already holding the previous
+    /// one finishes with it.
+    pub fn set_local(&self, llm: Option<Arc<LocalLlm>>) {
+        let previous = std::mem::replace(
+            &mut *self.local.write().unwrap_or_else(PoisonError::into_inner),
+            llm,
+        );
+        drop(previous);
     }
 
     /// The model the shell registered that [`pick`](Self::pick) gives, if one is registered.
@@ -137,6 +188,9 @@ impl ShellLlms {
     /// name is given (a provider's only: an engine has no model to pick, so `None`).
     pub fn get(&self, r: &ModelRef, model: Option<&str>) -> Option<Arc<dyn Llm>> {
         match (r, model) {
+            (ModelRef::Engine(id), None) if id == LOCAL_ID => {
+                self.local().map(|local| local as Arc<dyn Llm>)
+            }
             (ModelRef::Engine(id), None) => self
                 .engines
                 .read()
@@ -161,6 +215,12 @@ impl ShellLlms {
     /// lock, so no engine is held (and none can be released on this thread) to answer.
     pub fn info_of(&self, r: &ModelRef, model: Option<&str>) -> Option<LlmInfo> {
         match (r, model) {
+            (ModelRef::Engine(id), None) if id == LOCAL_ID => self
+                .local
+                .read()
+                .unwrap_or_else(PoisonError::into_inner)
+                .as_ref()
+                .map(|local| local.info()),
             (ModelRef::Engine(id), None) => self
                 .engines
                 .read()
@@ -188,8 +248,9 @@ impl ShellLlms {
     }
 
     /// **Any thread.** Every model a mode can pick now, as [`pick`](Self::pick) orders them (so
-    /// the first is the AI setting's): the chosen own-key provider, then the registered models by
-    /// id. Described under the locks, holding none of them.
+    /// the first is the AI setting's): the chosen own-key provider, then the core's own model
+    /// (`engine:local`), then the registered models by id. Described under the locks, holding
+    /// none of them.
     pub fn choices(&self) -> Vec<(ModelRef, LlmInfo)> {
         let cloud = self
             .cloud
@@ -200,9 +261,16 @@ impl ShellLlms {
                 let info = cloud.info();
                 Some((ModelRef::Provider(Provider::from_id(&info.provider)?), info))
             });
+        let local = self
+            .local
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .map(|local| (ModelRef::Engine(LOCAL_ID.into()), local.info()));
         let engines = self.engines.read().unwrap_or_else(PoisonError::into_inner);
         cloud
             .into_iter()
+            .chain(local)
             .chain(
                 engines
                     .iter()

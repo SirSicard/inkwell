@@ -51,6 +51,7 @@ use crate::gate::{ModelGate, Routed, refused_event};
 use crate::hub::{EventOut, Events, Hub};
 use crate::import02::Import02;
 use crate::llms::{PolishModel, ShellLlms};
+use crate::local::{LocalLlms, LocalModel};
 use crate::mailbox::DEFAULT_AUDIO_CAPACITY;
 use crate::meeting::{CaptureEnded, CaptureSide, MeetingInfo, MeetingRun, Replay};
 use crate::queries::QueryWorker;
@@ -205,6 +206,7 @@ impl Parts {
         let import02 = Import02::production(store.clone());
         let models = ModelDir::new(&config.models_dir);
         let fetch = ink_engines::HttpFetch::new().map_err(|e| format!("HTTP: {e}"))?;
+        let local = LocalParts::production(&models);
         let parts = Self {
             store,
             clock: platform_clock()?,
@@ -217,35 +219,92 @@ impl Parts {
             models,
             data_dir: config.data_dir.clone(),
             permissions,
-            local: LocalParts::production(),
+            local,
             meetings: MeetingPlatform::production()?,
         };
         Ok((parts, import02))
     }
 }
 
-/// What the core reads from this machine itself. The default knows nothing: free space and memory
-/// are unknown (a download then goes ahead without the space check, and the Default language
-/// model is suggested), as in tests that do not ask.
+/// What the core reads from this machine itself, and runs on it of its own. The default knows
+/// nothing and runs nothing: free space and memory are unknown (a download then goes ahead
+/// without the space check, and the Default language model is suggested), and no language model
+/// of the core's own loads, as in tests that do not ask.
 pub struct LocalParts {
     /// The machine's free disk space and memory.
     pub system: Arc<dyn SystemInfo>,
+    /// Loads a registry language row ([`crate::local`]): llama.cpp in a build with
+    /// `engine-llama`.
+    pub llm_loader: Arc<dyn Loader<LocalModel>>,
 }
 
 impl Default for LocalParts {
     fn default() -> Self {
         Self {
             system: Arc::new(UnknownSystem),
+            llm_loader: Arc::new(NoLocalModels),
         }
     }
 }
 
 impl LocalParts {
-    /// The platform's.
-    fn production() -> Self {
+    /// The platform's, and this build's language model adapter.
+    fn production(models: &ModelDir) -> Self {
         Self {
             system: platform_system(),
+            llm_loader: local_llm_loader(models),
         }
+    }
+}
+
+/// The language model loader of a build that runs none.
+struct NoLocalModels;
+
+impl Loader<LocalModel> for NoLocalModels {
+    fn load(&self, _: &EngineRow) -> Result<LocalModel, EngineError> {
+        Err(EngineError::Unsupported(
+            "this build runs no language model of its own",
+        ))
+    }
+}
+
+#[cfg(feature = "engine-llama")]
+fn local_llm_loader(models: &ModelDir) -> Arc<dyn Loader<LocalModel>> {
+    Arc::new(LlamaChatLoader {
+        models: models.clone(),
+    })
+}
+
+#[cfg(not(feature = "engine-llama"))]
+fn local_llm_loader(_: &ModelDir) -> Arc<dyn Loader<LocalModel>> {
+    Arc::new(NoLocalModels)
+}
+
+/// Loads a registry language row's GGUF with llama.cpp, with its chat quirks.
+#[cfg(feature = "engine-llama")]
+struct LlamaChatLoader {
+    models: ModelDir,
+}
+
+#[cfg(feature = "engine-llama")]
+impl Loader<LocalModel> for LlamaChatLoader {
+    fn load(&self, row: &EngineRow) -> Result<LocalModel, EngineError> {
+        let ink_engines::RowKind::Language(language) = &row.kind else {
+            return Err(EngineError::Unsupported("not a language model"));
+        };
+        // Only a verified install: the marker is written after every file's hash checked.
+        if !self.models.is_installed(row) {
+            return Err(EngineError::ModelMissing(row.id.clone()));
+        }
+        let [file] = row.files.as_slice() else {
+            return Err(EngineError::Failed(format!(
+                "{}: a language model is one file",
+                row.id
+            )));
+        };
+        let path = self.models.file_path(row, file);
+        ink_engines::llama::LlamaLlm::load_with(&path, &language.name, language.chat)
+            .map(|llm| Box::new(llm) as LocalModel)
     }
 }
 
@@ -421,6 +480,9 @@ pub struct Shared {
     pub models: ModelDir,
     /// The machine's free disk space and memory.
     pub system: Arc<dyn SystemInfo>,
+    /// The core's own language model on this machine: its residency and its thread's mailbox
+    /// ([`local`](crate::local)).
+    pub local: Arc<LocalLlms>,
     /// Ids of the engines the shell registered, of every kind: one id space.
     externals: Mutex<Vec<String>>,
     /// The ink's bands writer, lent by the C ABI; the pump publishes through it.
@@ -625,6 +687,7 @@ pub struct Core {
     asking: Asking,
     retention: Sweeper,
     tester: crate::cloud::Tester,
+    local_thread: crate::local::LocalThread,
     sound: crate::sound::SoundThread,
 }
 
@@ -641,15 +704,22 @@ impl Core {
         let router = Router::new(&parts.registry, parts.models.clone(), os);
         #[cfg(all(windows, feature = "engine-llama"))]
         let router = router.with_gpu_probe(has_gpu);
+        let gate: Arc<ModelGate> = Arc::default();
+        let local = Arc::new(LocalLlms::new(
+            parts.local.llm_loader,
+            parts.clock.clone(),
+            gate.clone(),
+        ));
         let shared = Arc::new(Shared {
             events: hub.events(),
             models: parts.models,
             system: parts.local.system,
+            local,
             router,
             residency: Residency::new(parts.loader, parts.clock.clone()),
             store: parts.store,
             clock: parts.clock,
-            gate: Arc::default(),
+            gate,
             registry: parts.registry,
             installer: parts.installer,
             shutdown: CancelToken::new(),
@@ -667,8 +737,12 @@ impl Core {
             import02: std::sync::OnceLock::new(),
             sound: crate::sound::Sound::default(),
         });
-        // The chosen own-key provider, if any, before anything can call a model.
+        // The chosen own-key provider, if any, and the core's own model on this machine, before
+        // anything can call a model. One installed at a time: one an earlier replacement could
+        // not delete goes first.
         crate::cloud::load(&shared);
+        crate::local::tidy(&shared);
+        crate::local::refresh(&shared);
         let runs = Arc::new(Mutex::new(Runs::default()));
         let (commands, rx) = mpsc::channel::<Envelope>();
         let command_thread = {
@@ -691,6 +765,7 @@ impl Core {
         let _ = shared.control.set(Mutex::new(control.sender()));
         let asking = Asking::start(shared.clone(), runs.clone())?;
         let tester = crate::cloud::Tester::start(shared.clone())?;
+        let local_thread = crate::local::LocalThread::start(shared.clone())?;
         let sound = crate::sound::SoundThread::start(shared.clone(), runs.clone())?;
         shared.events.emit(events::ready());
         // Detection follows the call policies (crate::calls): it listens while any app could be
@@ -717,6 +792,7 @@ impl Core {
             asking,
             retention,
             tester,
+            local_thread,
             sound,
         })
     }
@@ -798,6 +874,12 @@ impl Core {
                 ("streaming", scores)
             }
             Registration::Llm(e) => {
+                if id == crate::local::LOCAL_ID {
+                    return refuse(
+                        Registration::Llm(e),
+                        format!("engine id {id} is the core's own model's"),
+                    );
+                }
                 if self.shared.registry.get(&id).is_some() {
                     return refuse(
                         Registration::Llm(e),
@@ -927,6 +1009,7 @@ impl Core {
             asking,
             retention,
             tester,
+            local_thread,
             sound,
         } = self;
         shared.shutdown.cancel();
@@ -957,6 +1040,8 @@ impl Core {
         if let Some(dictation) = dictation {
             stop_dictation(dictation);
         }
+        // After every thread that calls it: a warm-up under way finishes first.
+        local_thread.stop();
         let ids = std::mem::take(&mut *lock(&shared.externals));
         // Every stream is closed by now (the meeting's chain, which held them, is joined), so
         // letting go here runs each engine's release.
@@ -974,6 +1059,15 @@ impl Core {
                 Ok(Unloaded::WasLoaded) => models_unloaded += 1,
                 Ok(Unloaded::NotLoaded) => {}
                 Err(e) => log::error!("shutdown: model {id} could not be unloaded: {e}"),
+            }
+        }
+        // The core's own language model too: ggml's teardown needs every model gone.
+        shared.llms.set_local(None);
+        for id in shared.local.resident() {
+            match shared.local.unload(&id) {
+                Ok(Unloaded::WasLoaded) => models_unloaded += 1,
+                Ok(Unloaded::NotLoaded) => {}
+                Err(e) => log::error!("shutdown: language model {id} could not be unloaded: {e}"),
             }
         }
         let bands = shared.take_bands();
@@ -1244,15 +1338,31 @@ fn update(shared: &Shared, current: &str, next: &str, fail: &dyn Fn(String)) {
         event(ty, &fields)
     };
     shared.events.emit(ids_event("model.update_started", &[]));
-    let result = update_model(
-        &shared.residency,
-        shared.installer.as_ref(),
-        current_row,
-        next_row,
-        &shared.shutdown,
-        update_progress(shared, current, next),
-    );
+    // A language model is in its own residency, which the update does not know: unloaded here,
+    // under the hold, so no file it has open is replaced.
+    let unloaded = [current_row, next_row]
+        .into_iter()
+        .filter(|row| crate::models::is_language(row))
+        .try_for_each(|row| shared.local.unload(&row.id).map(|_| ()));
+    let result = match unloaded {
+        Err(error) => Err(ink_pipeline::update::UpdateError::StillLoaded {
+            error,
+            rewarm_failed: None,
+        }),
+        Ok(()) => update_model(
+            &shared.residency,
+            shared.installer.as_ref(),
+            current_row,
+            next_row,
+            &shared.shutdown,
+            update_progress(shared, current, next),
+        ),
+    };
     drop(hold);
+    if result.is_ok() && crate::models::is_language(next_row) {
+        // In use from now on, and the other size deleted: one installed at a time.
+        crate::local::installed(shared, next_row);
+    }
     if result.is_ok() && next == ink_engines::SILERO_VAD_ID {
         // A running dictation takes the voice detector now, queued before the shell hears that
         // the install ended, so a take it starts after that is levelled with it.

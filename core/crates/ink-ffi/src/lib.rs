@@ -57,6 +57,7 @@ pub mod hub;
 pub mod import02;
 pub mod library;
 pub mod llms;
+pub mod local;
 pub mod logging;
 pub mod mailbox;
 pub mod meeting;

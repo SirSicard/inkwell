@@ -665,3 +665,99 @@ pub fn store_polish_consents(
         )
         .unwrap();
 }
+
+/// What a [`MockLocalLoader`]'s models report: loads, calls, drops.
+#[derive(Default)]
+pub struct LocalJournal {
+    pub loads: AtomicUsize,
+    pub calls: AtomicUsize,
+    pub drops: AtomicUsize,
+}
+
+/// Loads a mock language model for the core's own (`engine:local`) in place of llama.cpp: it
+/// answers `answer` to every request, after `gate` opens when one is set.
+pub struct MockLocalLoader {
+    pub answer: String,
+    pub gate: Mutex<Option<Arc<Gate>>>,
+    pub journal: Arc<LocalJournal>,
+}
+
+impl MockLocalLoader {
+    pub fn new(answer: &str) -> Arc<Self> {
+        Arc::new(Self {
+            answer: answer.into(),
+            gate: Mutex::new(None),
+            journal: Arc::default(),
+        })
+    }
+
+    pub fn loads(&self) -> usize {
+        self.journal.loads.load(Ordering::SeqCst)
+    }
+
+    pub fn calls(&self) -> usize {
+        self.journal.calls.load(Ordering::SeqCst)
+    }
+
+    /// Local parts with this loader and `system` (unknown free space and memory when `None`).
+    pub fn parts(
+        self: &Arc<Self>,
+        system: Option<Arc<FakeSystem>>,
+    ) -> ink_ffi::runtime::LocalParts {
+        let mut parts = ink_ffi::runtime::LocalParts {
+            llm_loader: self.clone(),
+            ..Default::default()
+        };
+        if let Some(system) = system {
+            parts.system = system;
+        }
+        parts
+    }
+}
+
+struct MockLocalModel {
+    answer: String,
+    gate: Option<Arc<Gate>>,
+    journal: Arc<LocalJournal>,
+}
+
+impl ink_core::Llm for MockLocalModel {
+    fn info(&self) -> ink_core::LlmInfo {
+        ink_core::LlmInfo {
+            provider: "mock".into(),
+            model: "mock local".into(),
+            endpoint: ink_core::Endpoint::InProcess,
+        }
+    }
+
+    fn complete(
+        &self,
+        _: &ink_core::LlmRequest,
+        _: &CancelToken,
+    ) -> Result<ink_core::LlmResponse, ink_core::LlmError> {
+        self.journal.calls.fetch_add(1, Ordering::SeqCst);
+        if let Some(gate) = &self.gate {
+            gate.wait();
+        }
+        Ok(ink_core::LlmResponse {
+            text: self.answer.clone(),
+        })
+    }
+}
+
+impl Drop for MockLocalModel {
+    fn drop(&mut self) {
+        self.journal.drops.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+impl Loader<ink_ffi::local::LocalModel> for MockLocalLoader {
+    fn load(&self, _: &EngineRow) -> Result<ink_ffi::local::LocalModel, EngineError> {
+        self.journal.loads.fetch_add(1, Ordering::SeqCst);
+        Ok(Box::new(MockLocalModel {
+            answer: self.answer.clone(),
+            gate: self.gate.lock().unwrap().clone(),
+            journal: self.journal.clone(),
+        }))
+    }
+}
