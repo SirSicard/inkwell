@@ -10,11 +10,22 @@ use crate::json::bad;
 /// The instruction to the model. Boring on purpose: whatever comes back is pasted straight over
 /// the user's text, so the failure that matters is a model that explains, apologises, or wraps
 /// the answer in quotes.
+///
+/// Edits that take text away are named and told to be applied. 0.2's "If the instruction cannot
+/// be applied, reply with the original text unchanged." gave small models a way out: in the local
+/// model bench all four candidates answered "delete the last sentence" with the text unchanged
+/// (the only edit of ten any of them failed). Giving the text back is still the answer to an
+/// instruction that is not an edit of it, cannot be done to it, or would be harmful. "Harmful",
+/// not "should not be done": a small model may read that as leave to skip any edit. An empty
+/// answer (deleting everything) or one that talks about itself leaves the selection alone anyway
+/// ([`apply_edit`]).
 pub const EDIT_SYSTEM_PROMPT: &str = "\
-You rewrite text according to an instruction. Reply with the rewritten text and \
-nothing else: no preamble, no explanation, no quotation marks around the result, \
-no markdown fences. Preserve the original language unless told otherwise. If the \
-instruction cannot be applied, reply with the original text unchanged.";
+You rewrite text according to an instruction. Apply the instruction even when it removes, \
+moves or shortens text: \"delete the last sentence\" means replying with the text without its \
+last sentence. Reply with the rewritten text and nothing else: no preamble, no explanation, no \
+quotation marks around the result, no markdown fences. Preserve the original language unless \
+told otherwise. Reply with the original text unchanged only when the instruction is not a \
+change to the text, cannot be done to it, or would be harmful.";
 
 /// The answer's token budget.
 const MAX_TOKENS: u32 = 1024;
@@ -222,6 +233,76 @@ mod tests {
                 "{instruction}"
             );
         }
+    }
+
+    /// A model that records the request it was sent and answers with a scripted reply.
+    struct Scripted {
+        reply: &'static str,
+        sent: std::sync::Mutex<Option<LlmRequest>>,
+    }
+
+    impl Llm for Scripted {
+        fn info(&self) -> ink_core::LlmInfo {
+            MockLlm::new(Endpoint::InProcess, "").info()
+        }
+
+        fn complete(
+            &self,
+            request: &LlmRequest,
+            _cancel: &CancelToken,
+        ) -> Result<ink_core::LlmResponse, LlmError> {
+            *self.sent.lock().unwrap() = Some(request.clone());
+            Ok(ink_core::LlmResponse {
+                text: self.reply.to_owned(),
+            })
+        }
+    }
+
+    // The local model bench: every candidate gave "delete the last sentence" back unchanged, which
+    // the old prompt's catch-all ("if the instruction cannot be applied, reply with the original
+    // text unchanged") invited. The prompt now says to apply edits that remove text, and keeps
+    // the unchanged reply for instructions that are not an edit or cannot be done. What a real
+    // model makes of the wording is measured, not unit-tested; this pins the wording.
+    #[test]
+    fn the_prompt_asks_for_edits_that_remove_text_to_be_applied() {
+        let llm = Scripted {
+            reply: "We shipped the feature. It took three weeks.",
+            sent: std::sync::Mutex::new(None),
+        };
+        let selection = "We shipped the feature. It took three weeks. The team is happy.";
+        assert_eq!(
+            apply_edit(
+                &llm,
+                selection,
+                "delete the last sentence",
+                &CancelToken::new()
+            )
+            .unwrap(),
+            "We shipped the feature. It took three weeks."
+        );
+        let sent = llm.sent.lock().unwrap().take().unwrap();
+        let system = sent.system.split_whitespace().collect::<Vec<_>>().join(" ");
+        assert!(
+            system.contains("Apply the instruction even when it removes, moves or shortens text"),
+            "{system}"
+        );
+        assert!(system.contains("\"delete the last sentence\""), "{system}");
+        // The way out is narrowed, not gone, and the catch-all is gone.
+        assert!(
+            system.contains(
+                "unchanged only when the instruction is not a change to the text, cannot be done \
+                 to it, or would be harmful"
+            ),
+            "{system}"
+        );
+        assert!(
+            !system.contains("If the instruction cannot be applied"),
+            "{system}"
+        );
+        assert_eq!(
+            sent.user,
+            build_user_message(selection, "delete the last sentence")
+        );
     }
 
     #[test]
