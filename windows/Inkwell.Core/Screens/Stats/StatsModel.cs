@@ -17,6 +17,13 @@
 // autoupdating calendar is): a PC that changes zone while Inkwell runs counts in the new one. A
 // record made while travelling is placed by the zone the PC is in now, as the store keeps no zone
 // per record.
+//
+// The gentle streak (Settings > Stats), as the Mac's: rest days, a pause and a switch to hide it,
+// all the core's to count; this model keeps what the user chose and sends it. A pause or resume is
+// answered with the numbers counted afresh. Last week's review leads the screen until the user
+// dismisses it: the dismissal is the core's to keep (stats.review_dismissed), and the card goes at
+// once, coming back only if the dismissal could not be saved. A best just set is the Drop's to say
+// (DictationDrop.Note): the core reports it once, in a milestone check's answer.
 using System.Globalization;
 using Inkwell.Core.Events;
 
@@ -61,15 +68,52 @@ public sealed class StatsModel : ObservableModel
     {
         ShellSetting.StatsCelebrate.CommandId(),
         ShellSetting.StatsTypingWpm.CommandId(),
+        ShellSetting.StatsRestDays.CommandId(),
+        ShellSetting.StatsStreak.CommandId(),
+        ShellSetting.StatsShareHeatmap.CommandId(),
+        ShellSetting.StatsReviewDismissed.CommandId(),
     };
+
+    /// <summary>A change to the streak's pause.</summary>
+    public enum StreakChange
+    {
+        Pausing,
+        Resuming,
+    }
 
     /// <summary>Settings > Stats' words (the Mac's StatsSettingsSection, in Windows terms).</summary>
     public const string CelebrateTitle = "Celebrate milestones";
-    public const string CelebrateDetail = "A quiet glow on the orb and one line, once for each milestone: 1,000 to 100,000 words, and streaks of 7, 30 and 100 active days. With Always still or Windows' animation effects off, only the line.";
+    public const string CelebrateDetail = "A quiet glow on the orb and one line, once for each milestone: 1,000 to 100,000 words, and streaks of 7, 30 and 100 active days. With Always still or Windows' animation effects off, only the line. A personal best gets a short note in the Drop.";
     public const string TypingTitle = "Typing speed";
     public const string TypingDetail = "Time saved is typing the same words at this speed, less the time spent speaking.";
     public const string SettingsFailedText = "Couldn't read or save a Stats setting. It may not be what it shows.";
     public const string WhereText = "Counted on this PC from your library. Nothing is sent, and nothing is compared with anyone.";
+    public const string StreakTitle = "Show the streak";
+    public const string StreakDetail = "Off, no streak shows on Stats or the share card, and its milestones aren't celebrated. It's still counted, so turning it back on loses nothing.";
+    public const string RestDaysTitle = "Rest days";
+    public const string RestDaysDetail = "Days you take off. They neither count toward a streak nor break it, even if you dictate on one.";
+    public const string PauseTitle = "Pause the streak";
+    public const string PauseDetail = "For a holiday or time off: days without a dictation don't count against the streak, for up to 90 days.";
+    public const string LastRestDayHelp = "At least one day counts toward the streak";
+    public const string ReviewDismissFailedText = "Couldn't dismiss it. It stays until you try again.";
+
+    /// <summary>What the pause row says: running since a day, or what a pause does.</summary>
+    public static string PauseCaption(string? pausedSince, CultureInfo? culture = null) =>
+        pausedSince is null ? PauseDetail : $"Paused since {StatsFormat.ShortDate(pausedSince, culture)}. It ends by itself after 90 days, or when you resume.";
+
+    /// <summary>What the pause row says before the numbers are in: counting, or that they couldn't be.</summary>
+    public static string PauseUnknown(bool failed) => failed ? "Couldn't read whether the streak is paused." : "Counting…";
+
+    /// <summary>What a failed pause or resume says.</summary>
+    public static string StreakFailure(StreakChange change) =>
+        change == StreakChange.Pausing ? "Couldn't pause the streak. Try again." : "Couldn't resume the streak. Try again.";
+
+    /// <summary>What a rest-day toggle says to Narrator: <c>Saturday, rest day</c>.</summary>
+    public static string RestDaySpoken(StatsFormat.Weekday day, bool rest)
+    {
+        ArgumentNullException.ThrowIfNull(day);
+        return $"{day.Name}, {(rest ? "rest day" : "counts")}";
+    }
 
     /// <summary>The typing speed as Narrator reads it.</summary>
     public static string TypingSpoken(int wpm) => $"{wpm} words per minute";
@@ -77,6 +121,7 @@ public sealed class StatsModel : ObservableModel
     /// <summary>The prefix of stats.get's refs, and of milestones.check's.</summary>
     public const string StatsRefPrefix = "stats-";
     public const string MilestonesRefPrefix = "milestones-";
+    public const string StreakRefPrefix = "streak-";
 
     private readonly Action<CoreCommand> send;
     private readonly IWakeScheduler wake;
@@ -85,6 +130,10 @@ public sealed class StatsModel : ObservableModel
     private int sequence;
     private string? latestGet;
     private IDisposable? loadTimer;
+    private IDisposable? streakTimer;
+    /// <summary>The pause or resume not answered yet.</summary>
+    private string? pendingStreak;
+    private HashSet<int> restDays = [];
 
     /// <summary>
     /// The Stats screen shows, and its window is on screen: it then counts again when something is
@@ -141,6 +190,33 @@ public sealed class StatsModel : ObservableModel
 
     /// <summary>A Stats setting could not be read or saved: Settings says so (it may not be what it shows).</summary>
     public bool SettingsFailed { get; private set; }
+
+    /// <summary>Settings > Stats: the weekdays the streak rests on (ISO, 1 Monday to 7 Sunday).</summary>
+    public IReadOnlySet<int> RestDays => restDays;
+
+    /// <summary>Settings > Stats: the streak shows (on unless hidden).</summary>
+    public bool StreakShown { get; private set; } = true;
+
+    /// <summary>The share card may carry the heatmap (off unless turned on).</summary>
+    public bool ShareHeatmap { get; private set; }
+
+    /// <summary>A pause or a resume of the streak sent and not answered yet.</summary>
+    public StreakChange? StreakChanging { get; private set; }
+
+    /// <summary>The pause or resume that failed, until the next is sent.</summary>
+    public StreakChange? StreakChangeFailed { get; private set; }
+
+    /// <summary>The week whose review the user dismissed (its first day): hidden at once.</summary>
+    public string? DismissedWeek { get; private set; }
+
+    /// <summary>The week whose dismissal could not be saved: its review shows again, and says so.</summary>
+    public string? ReviewDismissFailedWeek { get; private set; }
+
+    /// <summary>The review showing is one whose dismissal could not be saved.</summary>
+    public bool ReviewDismissFailed => ReviewDismissFailedWeek is not null && WeekReview?.Week == ReviewDismissFailedWeek;
+
+    /// <summary>Last week's review, until the user dismisses it (the core then leaves it out).</summary>
+    public WeekReview? WeekReview => Counted?.WeekReview is { } review && review.Week != DismissedWeek ? review : null;
 
     private bool Visible => screenShown && windowOnScreen;
 
@@ -212,6 +288,149 @@ public sealed class StatsModel : ObservableModel
         }
         LoadState = Load.Failed;
         Changed();
+    }
+
+    /// <summary>Settings shows the pause from the numbers: counted once when it first shows.</summary>
+    public void SettingsAppeared()
+    {
+        if (Counted is null && LoadState != Load.Loading)
+        {
+            Reload();
+        }
+    }
+
+    /// <summary>Dismisses last week's review for good: hidden now, kept by the core.</summary>
+    public void DismissReview(WeekReview review)
+    {
+        ArgumentNullException.ThrowIfNull(review);
+        DismissedWeek = review.Week;
+        ReviewDismissFailedWeek = null;
+        Write(ShellSetting.StatsReviewDismissed, review.Week);
+        Changed();
+    }
+
+    /// <summary>Makes <paramref name="iso"/> a rest day or not. All seven never are: a streak needs a day to count.</summary>
+    public void SetRestDay(int iso, bool on)
+    {
+        if (iso is < 1 or > 7)
+        {
+            return;
+        }
+        var days = new HashSet<int>(restDays);
+        if (on)
+        {
+            days.Add(iso);
+        }
+        else
+        {
+            days.Remove(iso);
+        }
+        if (days.Count >= 7 || days.SetEquals(restDays))
+        {
+            return;
+        }
+        restDays = days;
+        Write(ShellSetting.StatsRestDays, RestDaysValue(days));
+        Changed();
+    }
+
+    public void SetStreakShown(bool shown)
+    {
+        StreakShown = shown;
+        Write(ShellSetting.StatsStreak, shown ? "shown" : "hidden");
+        Changed();
+    }
+
+    public void SetShareHeatmap(bool on)
+    {
+        ShareHeatmap = on;
+        Write(ShellSetting.StatsShareHeatmap, on ? "on" : "off");
+        Changed();
+    }
+
+    /// <summary>Pauses the streak from today: answered with the numbers.</summary>
+    public void PauseStreak() => ChangeStreak(StreakChange.Pausing);
+
+    /// <summary>Ends the running pause: answered with the numbers.</summary>
+    public void ResumeStreak() => ChangeStreak(StreakChange.Resuming);
+
+    private void ChangeStreak(StreakChange change)
+    {
+        if (StreakChanging is not null)
+        {
+            return;
+        }
+        var reference = Ref(StreakRefPrefix);
+        StreakChanging = change;
+        StreakChangeFailed = null;
+        pendingStreak = reference;
+        // Its answer is the newest count.
+        latestGet = reference;
+        var (offsets, weekStart) = CalendarFields();
+        send(change == StreakChange.Pausing
+            ? new CoreCommand.StreakPause(offsets, weekStart, reference)
+            : new CoreCommand.StreakResume(offsets, weekStart, reference));
+        // Never answered: said once the screen's time limit passes, and the button works again.
+        streakTimer?.Dispose();
+        streakTimer = wake.After(LoadLimit, () => StreakTimedOut(reference));
+        Changed();
+    }
+
+    /// <summary>The pause or resume was not answered within the time limit: said, and the button works again.</summary>
+    public void StreakTimedOut(string reference)
+    {
+        if (reference != pendingStreak)
+        {
+            return;
+        }
+        StreakFailed();
+        // Its answer was to be the screen's numbers: none came.
+        if (reference == latestGet && LoadState == Load.Loading)
+        {
+            LoadState = Load.Failed;
+            loadTimer?.Dispose();
+            loadTimer = null;
+        }
+        Changed();
+    }
+
+    private void StreakFailed()
+    {
+        StreakChangeFailed = StreakChanging;
+        StreakChanging = null;
+        pendingStreak = null;
+        streakTimer?.Dispose();
+        streakTimer = null;
+    }
+
+    /// <summary>stats.rest_days' value for <paramref name="days"/>: <c>none</c>, or ascending and comma-separated.</summary>
+    public static string RestDaysValue(IEnumerable<int> days)
+    {
+        ArgumentNullException.ThrowIfNull(days);
+        var sorted = days.Order().ToList();
+        return sorted.Count == 0 ? "none" : string.Join(",", sorted.Select(d => d.ToString(CultureInfo.InvariantCulture)));
+    }
+
+    /// <summary>
+    /// The rest days in stats.rest_days' value, read as the core reads it: anything it would not
+    /// take (a day twice, out of order, all seven) is none.
+    /// </summary>
+    public static IReadOnlySet<int> ParseRestDays(string? value)
+    {
+        if (value is null or "none")
+        {
+            return new HashSet<int>();
+        }
+        var days = new List<int>();
+        foreach (var part in value.Split(','))
+        {
+            if (part.Length != 1 || part[0] is < '1' or > '7' || part[0] - '0' <= (days.Count == 0 ? 0 : days[^1]))
+            {
+                return new HashSet<int>();
+            }
+            days.Add(part[0] - '0');
+        }
+        return days.Count < 7 ? days.ToHashSet() : new HashSet<int>();
     }
 
     public void SetCelebrate(bool on)
@@ -291,6 +510,7 @@ public sealed class StatsModel : ObservableModel
         return failed.Command switch
         {
             "stats.get" => failed.Id?.StartsWith(StatsRefPrefix, StringComparison.Ordinal) ?? false,
+            "streak.pause" or "streak.resume" => failed.Id?.StartsWith(StreakRefPrefix, StringComparison.Ordinal) ?? false,
             "setting.get" or "setting.set" => failed.Id is string id && SettingIds.Contains(id),
             _ => false,
         };
@@ -313,6 +533,9 @@ public sealed class StatsModel : ObservableModel
                 unechoed.Clear();
                 send(new CoreCommand.SettingGet(ShellSetting.StatsCelebrate));
                 send(new CoreCommand.SettingGet(ShellSetting.StatsTypingWpm));
+                send(new CoreCommand.SettingGet(ShellSetting.StatsRestDays));
+                send(new CoreCommand.SettingGet(ShellSetting.StatsStreak));
+                send(new CoreCommand.SettingGet(ShellSetting.StatsShareHeatmap));
                 CheckMilestones();
                 return false;
             case DictationInserted { Record: not null }:
@@ -325,7 +548,23 @@ public sealed class StatsModel : ObservableModel
                     Reload();
                 }
                 return false;
-            case StatsCounted answer when answer.Ref is not null && answer.Ref == latestGet:
+            case StatsCounted answer when answer.Ref is not null && (answer.Ref == latestGet || answer.Ref == pendingStreak):
+                if (answer.Ref == pendingStreak)
+                {
+                    pendingStreak = null;
+                    StreakChanging = null;
+                    streakTimer?.Dispose();
+                    streakTimer = null;
+                }
+                if (answer.Ref != latestGet)
+                {
+                    return true;
+                }
+                // A pause answered after its time limit did change: it failed only as far as was known.
+                if (answer.Ref.StartsWith(StreakRefPrefix, StringComparison.Ordinal))
+                {
+                    StreakChangeFailed = null;
+                }
                 Counted = answer;
                 LoadState = Load.Loaded;
                 loadTimer?.Dispose();
@@ -357,10 +596,65 @@ public sealed class StatsModel : ObservableModel
                     Reload();
                 }
                 return true;
+            case SettingValue { Key: "stats.rest_days" } value:
+                if (EarlierEcho(ShellSetting.StatsRestDays))
+                {
+                    return false;
+                }
+                SettingsFailed = false;
+                restDays = [.. ParseRestDays(value.Value)];
+                // The streak is counted with them; a hidden Stats counts when it shows.
+                if (Visible && Counted is not null && !restDays.SetEquals((Counted.Dictation.RestDays ?? []).Select(d => (int)d)))
+                {
+                    Reload();
+                }
+                return true;
+            case SettingValue { Key: "stats.streak" } value:
+                if (EarlierEcho(ShellSetting.StatsStreak))
+                {
+                    return false;
+                }
+                SettingsFailed = false;
+                StreakShown = value.Value != "hidden";
+                if (Visible && Counted is not null && (Counted.Dictation.StreakHidden ?? false) == StreakShown)
+                {
+                    Reload();
+                }
+                return true;
+            case SettingValue { Key: "stats.share_heatmap" } value:
+                if (EarlierEcho(ShellSetting.StatsShareHeatmap))
+                {
+                    return false;
+                }
+                SettingsFailed = false;
+                ShareHeatmap = value.Value == "on";
+                return true;
+            case SettingValue { Key: "stats.review_dismissed" }:
+                _ = EarlierEcho(ShellSetting.StatsReviewDismissed);
+                return false;
             case CommandFailed { Command: "stats.get" } failed when failed.Id is not null && failed.Id == latestGet:
                 LoadState = Load.Failed;
                 loadTimer?.Dispose();
                 loadTimer = null;
+                return true;
+            case CommandFailed { Command: "streak.pause" or "streak.resume" } failed when failed.Id is not null && failed.Id == pendingStreak:
+                StreakFailed();
+                // The pause's answer was to be the screen's numbers: none comes.
+                if (failed.Id == latestGet && LoadState == Load.Loading)
+                {
+                    LoadState = Load.Failed;
+                    loadTimer?.Dispose();
+                    loadTimer = null;
+                }
+                return true;
+            case CommandFailed failed when failed.Id == ShellSetting.StatsReviewDismissed.CommandId():
+                if (failed.Command == "setting.set")
+                {
+                    _ = EarlierEcho(ShellSetting.StatsReviewDismissed);
+                    // Not kept: the review shows again, and says so.
+                    ReviewDismissFailedWeek = DismissedWeek;
+                    DismissedWeek = null;
+                }
                 return true;
             case CommandFailed failed when failed.Id is string id && SettingIds.Contains(id):
                 if (failed.Command == "setting.set" && SettingKey(id) is ShellSetting key)
@@ -403,13 +697,16 @@ public sealed class StatsModel : ObservableModel
         {
             return false;
         }
-        Pending = new Celebration(++celebrationSerial, biggest.Id, StatsFormat.MilestoneNote(biggest.Kind, biggest.Threshold, Culture));
+        Pending = new Celebration(++celebrationSerial, biggest.Id, StatsFormat.MilestoneNote(biggest.Kind, biggest.Threshold, Culture, biggest.Name));
         return true;
     }
 
     private static ShellSetting? SettingKey(string id) =>
         id == ShellSetting.StatsCelebrate.CommandId() ? ShellSetting.StatsCelebrate
         : id == ShellSetting.StatsTypingWpm.CommandId() ? ShellSetting.StatsTypingWpm
+        : id == ShellSetting.StatsRestDays.CommandId() ? ShellSetting.StatsRestDays
+        : id == ShellSetting.StatsStreak.CommandId() ? ShellSetting.StatsStreak
+        : id == ShellSetting.StatsShareHeatmap.CommandId() ? ShellSetting.StatsShareHeatmap
         : null;
 
     private void SomethingSaved()

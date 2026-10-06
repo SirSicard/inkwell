@@ -10,6 +10,10 @@
 // preview's size and came out blurred. The preview shows the PNG itself, as the Mac's does. Copy
 // puts only that image on the clipboard (the PNG, and a bitmap for apps that take only that);
 // Save asks where with Windows' save picker.
+//
+// Beside the numbers the card can carry a records line, a seal for each milestone reached that the
+// user keeps ticked (all of them at first), and the heatmap: its tick is the user's own setting
+// (stats.share_heatmap), kept, and off unless they turn it on.
 using System.Runtime.InteropServices.WindowsRuntime;
 using Inkwell.Core.Events;
 using Inkwell.Core.Glow;
@@ -19,6 +23,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Automation.Peers;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Imaging;
 using Microsoft.UI.Xaml.Shapes;
@@ -50,6 +55,9 @@ internal sealed class StatsShareDialog
     private readonly Func<nint> windowHandle;
     private readonly ContentDialog dialog;
     private readonly HashSet<ShareStat> selected = [.. ShareStats.Defaults];
+    /// <summary>The seals ticked: every one reached, at first (null until the user changes one).</summary>
+    private HashSet<string>? seals;
+    private bool records;
     /// <summary>Where the card is drawn: in the dialog's tree (RenderTargetBitmap draws only what is), out of its view.</summary>
     private readonly Canvas cardHost = new() { Width = 0, Height = 0 };
     private readonly Image preview;
@@ -147,8 +155,10 @@ internal sealed class StatsShareDialog
     /// <summary>What the ticks and the card were last made from: only new numbers, a new mode or new colours make them again (a reload that changes nothing would reset the ticks and the focus).</summary>
     private (StatsCounted Counted, bool Dark, GlowColours Colours)? built;
 
-    private IReadOnlyList<ShareLine> Lines() =>
-        stats.Counted is { } counted ? ShareStats.Lines(counted, selected, stats.Culture) : [];
+    private ShareContent Content() =>
+        stats.Counted is { } counted
+            ? ShareContent.Make(counted, selected, records, stats.ShareHeatmap, seals ?? [.. ShareSeal.Available(counted).Select(s => s.Id)], stats.Culture)
+            : ShareContent.Empty;
 
     private void Rebuild()
     {
@@ -176,6 +186,71 @@ internal sealed class StatsShareDialog
             box.Unchecked += (_, _) => Tick(stat, false);
             ticks.Children.Add(box);
         }
+        var hasRecords = ShareRecords.Line(counted, stats.Culture) is not null;
+        var recordsBox = new CheckBox { Content = hasRecords ? "Records" : "Records (none yet)", IsChecked = records && hasRecords, IsEnabled = hasRecords };
+        recordsBox.Checked += (_, _) => Extra(() => records = true);
+        recordsBox.Unchecked += (_, _) => Extra(() => records = false);
+        ticks.Children.Add(recordsBox);
+        var hasDays = counted.Dictation.DictationsAll > 0;
+        var heatmapBox = new CheckBox
+        {
+            Content = hasDays ? "Heatmap of the last 12 weeks" : "Heatmap (none yet)",
+            IsChecked = stats.ShareHeatmap && hasDays,
+            IsEnabled = hasDays,
+        };
+        AutomationProperties.SetHelpText(heatmapBox, HeatmapNote);
+        // The user's own choice, kept: off unless they turn it on.
+        heatmapBox.Checked += (_, _) => Extra(() => stats.SetShareHeatmap(true));
+        heatmapBox.Unchecked += (_, _) => Extra(() => stats.SetShareHeatmap(false));
+        ticks.Children.Add(heatmapBox);
+        ticks.Children.Add(new TextBlock { Text = HeatmapNote, Style = Parts.TextStyle("InkCaptionStyle"), Margin = new Thickness(28, -6, 0, 0) });
+        var available = ShareSeal.Available(counted);
+        if (available.Count > 0)
+        {
+            var heading = new TextBlock { Text = "Seals", Style = Parts.TextStyle("InkCaptionStyle"), Margin = new Thickness(0, 4, 0, 0) };
+            AutomationProperties.SetHeadingLevel(heading, AutomationHeadingLevel.Level2);
+            ticks.Children.Add(heading);
+            var row = new WrapPanel { Spacing = 6, RowSpacing = 6 };
+            foreach (var seal in available)
+            {
+                var toggle = new ToggleButton
+                {
+                    Content = seal.Name,
+                    IsChecked = seals?.Contains(seal.Id) ?? true,
+                    MinWidth = 0,
+                    Padding = new Thickness(10, 3, 10, 4),
+                };
+                AutomationProperties.SetName(toggle, $"Seal: {seal.Name}");
+                toggle.Click += (_, _) =>
+                {
+                    var ticked = seals ?? [.. available.Select(s => s.Id)];
+                    if (toggle.IsChecked == true)
+                    {
+                        ticked.Add(seal.Id);
+                    }
+                    else
+                    {
+                        ticked.Remove(seal.Id);
+                    }
+                    seals = ticked;
+                    Report(null, failed: false);
+                    _ = Render();
+                };
+                row.Children.Add(toggle);
+            }
+            ticks.Children.Add(row);
+        }
+        _ = Render();
+    }
+
+    /// <summary>What the heatmap's tick says under it.</summary>
+    private const string HeatmapNote = "It shows which days you dictated.";
+
+    /// <summary>A tick beside the numbers: changes what the card carries, and clears what Copy or Save said.</summary>
+    private void Extra(Action change)
+    {
+        change();
+        Report(null, failed: false);
         _ = Render();
     }
 
@@ -197,23 +272,23 @@ internal sealed class StatsShareDialog
     private async Task Render()
     {
         var mine = ++renders;
-        var lines = Lines();
-        AutomationProperties.SetName(preview, ShareStats.Spoken(lines));
-        AutomationProperties.SetName(empty, ShareStats.Spoken(lines));
-        preview.Visibility = lines.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
-        empty.Visibility = lines.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        var content = Content();
+        AutomationProperties.SetName(preview, content.Spoken());
+        AutomationProperties.SetName(empty, content.Spoken());
+        preview.Visibility = content.IsEmpty ? Visibility.Collapsed : Visibility.Visible;
+        empty.Visibility = content.IsEmpty ? Visibility.Visible : Visibility.Collapsed;
         png = null;
         save.IsEnabled = false;
         copy.IsEnabled = false;
         cardHost.Children.Clear();
-        if (lines.Count == 0 || cardHost.XamlRoot is not { } root)
+        if (content.IsEmpty || cardHost.XamlRoot is not { } root)
         {
             return;
         }
         // Laid out so that its pixels are Scale × its points at this screen's scale, far to the
         // left of the dialog, where nobody sees it.
         var unit = Scale / root.RasterizationScale;
-        var card = Card(lines, theme.Dark, theme.Colours.You, theme.Colours.Them, unit);
+        var card = Card(content, theme.Dark, theme.Colours.You, theme.Colours.Them, unit);
         Canvas.SetLeft(card, -CardWidth * unit * 4);
         cardHost.Children.Add(card);
         try
@@ -347,13 +422,86 @@ internal sealed class StatsShareDialog
         }
     }
 
+    /// <summary>The days as the Stats screen shades them, a column per week, in your colour, over "Last 12 weeks".</summary>
+    private static StackPanel Heatmap(IReadOnlyList<int> levels, GlowPalette mode, GlowRgb you, Brush secondary, FontFamily face, double unit)
+    {
+        double[] opacity = [0, 0.3, 0.5, 0.75, 1];
+        var chip = new SolidColorBrush(GlowTheme.ColorOf(GlowRgb.From(mode.Text), (byte)Math.Round(0.07 * 255)));
+        var grid = new Grid { ColumnSpacing = 3 * unit, RowSpacing = 3 * unit, HorizontalAlignment = HorizontalAlignment.Left };
+        var weeks = (levels.Count + 6) / 7;
+        for (var w = 0; w < weeks; w++)
+        {
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(12 * unit) });
+        }
+        for (var r = 0; r < 7; r++)
+        {
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(12 * unit) });
+        }
+        for (var i = 0; i < levels.Count; i++)
+        {
+            var level = Math.Clamp(levels[i], 0, 4);
+            var square = new Rectangle
+            {
+                Width = 12 * unit,
+                Height = 12 * unit,
+                RadiusX = 3 * unit,
+                RadiusY = 3 * unit,
+                Fill = level == 0 ? chip : new SolidColorBrush(GlowTheme.ColorOf(you, (byte)Math.Round(opacity[level] * 255))),
+            };
+            Grid.SetColumn(square, i / 7);
+            Grid.SetRow(square, i % 7);
+            grid.Children.Add(square);
+        }
+        var panel = new StackPanel { Spacing = 6 * unit };
+        panel.Children.Add(grid);
+        panel.Children.Add(new TextBlock { Text = "Last 12 weeks", FontFamily = face, FontSize = 12 * unit, Foreground = secondary });
+        return panel;
+    }
+
+    /// <summary>A wax seal: the milestone's count in a ring of your colour, its name under it.</summary>
+    private static StackPanel Seal(ShareSeal seal, GlowRgb you, Brush text, Brush secondary, FontFamily display, FontFamily face, double unit)
+    {
+        var ring = new Grid { Width = 46 * unit, Height = 46 * unit, HorizontalAlignment = HorizontalAlignment.Center };
+        ring.Children.Add(new Ellipse
+        {
+            Fill = new SolidColorBrush(GlowTheme.ColorOf(you, (byte)Math.Round(0.18 * 255))),
+            Stroke = new SolidColorBrush(GlowTheme.ColorOf(you, (byte)Math.Round(0.75 * 255))),
+            StrokeThickness = 1.5 * unit,
+        });
+        ring.Children.Add(new TextBlock
+        {
+            Text = seal.Mark,
+            FontFamily = display,
+            FontSize = (seal.Mark.Length > 3 ? 13 : 15) * unit,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            Foreground = text,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+        });
+        var panel = new StackPanel { Spacing = 4 * unit, Width = 66 * unit };
+        panel.Children.Add(ring);
+        panel.Children.Add(new TextBlock
+        {
+            Text = seal.Name,
+            FontFamily = face,
+            FontSize = 10 * unit,
+            Foreground = secondary,
+            TextAlignment = TextAlignment.Center,
+            TextWrapping = TextWrapping.Wrap,
+            MaxLines = 2,
+        });
+        return panel;
+    }
+
     /// <summary>
     /// The card itself, at <paramref name="unit"/> pixels per point: "Inkwell", each number over its
-    /// label, the foot, on the mode's background with your two colours as a soft glow in its corner.
+    /// label, the records line, the heatmap and the seals when the user put them on, the foot, on
+    /// the mode's background with your two colours as a soft glow in its corner.
     /// </summary>
-    public static Border Card(IReadOnlyList<ShareLine> lines, bool dark, GlowRgb you, GlowRgb them, double unit)
+    public static Border Card(ShareContent card, bool dark, GlowRgb you, GlowRgb them, double unit)
     {
-        ArgumentNullException.ThrowIfNull(lines);
+        ArgumentNullException.ThrowIfNull(card);
+        var lines = card.Lines;
         var mode = GlowScheme.Palette(dark);
         var text = new SolidColorBrush(GlowTheme.ColorOf(GlowRgb.From(mode.Text)));
         var secondary = new SolidColorBrush(GlowTheme.ColorOf(GlowRgb.From(mode.Secondary)));
@@ -369,7 +517,27 @@ internal sealed class StatsShareDialog
             one.Children.Add(new TextBlock { Text = line.Label, FontFamily = face, FontSize = 14 * unit, Foreground = secondary });
             numbers.Children.Add(one);
         }
-        content.Children.Add(numbers);
+        if (lines.Count > 0)
+        {
+            content.Children.Add(numbers);
+        }
+        if (card.Records is string records)
+        {
+            content.Children.Add(new TextBlock { Text = records, FontFamily = face, FontSize = 14 * unit, Foreground = text, TextWrapping = TextWrapping.Wrap });
+        }
+        if (card.Heatmap is { } levels)
+        {
+            content.Children.Add(Heatmap(levels, mode, you, secondary, face, unit));
+        }
+        if (card.Seals.Count > 0)
+        {
+            var row = new WrapPanel { Spacing = 10 * unit, RowSpacing = 10 * unit };
+            foreach (var seal in card.Seals)
+            {
+                row.Children.Add(Seal(seal, you, text, secondary, display, face, unit));
+            }
+            content.Children.Add(row);
+        }
         content.Children.Add(new TextBlock { Text = ShareStats.Foot, FontFamily = face, FontSize = 12 * unit, Foreground = secondary });
         var glow = new Ellipse
         {
