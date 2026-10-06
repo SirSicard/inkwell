@@ -107,7 +107,9 @@ public final class InkClock: NSObject {
     @objc private nonisolated func screensChanged(_ note: Notification) {
         let restart: @MainActor @Sendable () -> Void = { [weak self] in
             // Views on it, not a link: views that went live with no screen (or lost it to a change
-            // that left none) have no link, and nothing else ever starts one for them.
+            // that left none) have no link, and nothing else ever starts one for them. This covers
+            // views that went live with no screen at all. It is not proven to be what hung the
+            // milestone glow tests for 40 minutes: their waits are bounded now, which covers that.
             guard let self, self.clientCount > 0 else { return }
             self.stopLink()
             self.startLink(on: nil)
