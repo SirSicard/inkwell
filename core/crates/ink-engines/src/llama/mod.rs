@@ -281,16 +281,19 @@ enum Stop {
 enum GenerateError {
     Cancelled,
     Failed(String),
+    /// The answer's grammar allows no next token: this answer cannot be finished, as a malformed
+    /// one cannot, though the model works.
+    NoAllowedToken,
 }
 
 /// Picks the next token from the logits of the last position decoded, and advances its state; or
 /// says why there is none (the message names the step, never the text).
 trait NextToken {
-    fn next(&mut self, ctx: &LlamaContext<'_>) -> Result<LlamaToken, String>;
+    fn next(&mut self, ctx: &LlamaContext<'_>) -> Result<LlamaToken, GenerateError>;
 }
 
 impl NextToken for LlamaSampler {
-    fn next(&mut self, ctx: &LlamaContext<'_>) -> Result<LlamaToken, String> {
+    fn next(&mut self, ctx: &LlamaContext<'_>) -> Result<LlamaToken, GenerateError> {
         // Samples from the last decoded position's logits and advances the sampler's state.
         Ok(self.sample(ctx, -1))
     }
@@ -326,7 +329,7 @@ impl GrammarOnRejection {
 }
 
 impl NextToken for GrammarOnRejection {
-    fn next(&mut self, ctx: &LlamaContext<'_>) -> Result<LlamaToken, String> {
+    fn next(&mut self, ctx: &LlamaContext<'_>) -> Result<LlamaToken, GenerateError> {
         // One row of logits is kept per decode here (the prompt's last token, then each answer
         // token), so the last decoded position's are the context's first row.
         let free = Self::pick(&self.chain, &mut ctx.token_data_array());
@@ -339,7 +342,7 @@ impl NextToken for GrammarOnRejection {
                     .filter(|&t| self.allows(t))
                     // Never accepted: llama.cpp's grammar aborts the process on a token it does
                     // not allow (a dead grammar leaves every logit at minus infinity).
-                    .ok_or("the JSON grammar allows no next token")?
+                    .ok_or(GenerateError::NoAllowedToken)?
             }
         };
         self.grammar.accept(token);
@@ -369,7 +372,7 @@ fn generate(
         if cancel.is_cancelled() {
             return Err(GenerateError::Cancelled);
         }
-        let token = sampler.next(ctx).map_err(GenerateError::Failed)?;
+        let token = sampler.next(ctx)?;
         if model.is_eog_token(token) {
             stop = Stop::EndOfText;
             break;

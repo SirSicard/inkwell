@@ -290,7 +290,9 @@ impl ShellLlms {
     }
 
     /// **Any thread.** Every model a mode can pick now, as [`pick`](Self::pick) orders them (so
-    /// the first is the AI setting's): the chosen own-key provider, then the core's own model
+    /// the first is the AI setting's, when it has one: [`pick_ref`](Self::pick_ref) says), even
+    /// while the AI setting's choice cannot be read (a mode's own pin still holds): the chosen
+    /// own-key provider, then the core's own model
     /// (`engine:local`), then the registered models by id. Described under the locks, holding
     /// none of them.
     pub fn choices(&self) -> Vec<(ModelRef, LlmInfo)> {

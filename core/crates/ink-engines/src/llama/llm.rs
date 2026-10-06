@@ -162,6 +162,11 @@ impl Llm for LlamaLlm {
             Ok((_, Stop::Budget)) => Err(engine("output hit the token budget")),
             Err(GenerateError::Cancelled) => Err(LlmError::Cancelled),
             Err(GenerateError::Failed(e)) => Err(engine(e)),
+            // As a malformed answer: this request's problem, so a summary goes on with its other
+            // parts.
+            Err(GenerateError::NoAllowedToken) => Err(LlmError::BadResponse(
+                "local model: the JSON grammar allows no next token".into(),
+            )),
         }
     }
 }

@@ -1432,6 +1432,8 @@ fn update(
             update_progress(shared, current, next),
         ),
     };
+    // The download is over: a model.cancel from now on finds none (it would stop nothing).
+    shared.installs.done(install);
     drop(hold);
     if result.is_ok() && crate::models::is_language(next_row) {
         // In use from now on, and the other size deleted: one installed at a time.
@@ -1458,8 +1460,6 @@ fn update(
     if let Err(e) = &result {
         log::warn!("model update {current} -> {next} failed: {e}");
     }
-    // Ended before it is said: a model.cancel from now on finds no download to cancel.
-    shared.installs.done(install);
     shared.events.emit(ids_event(
         "model.update_finished",
         &[

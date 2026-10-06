@@ -138,11 +138,12 @@ impl LocalLlms {
         self.send(Wake::Take { edit, mode });
     }
 
-    fn send(&self, wake: Wake) {
-        if let Some(tx) = lock(&self.mailbox).as_ref() {
-            // A stopped thread drops it: the core is shutting down.
-            let _ = tx.send(wake);
-        }
+    /// Whether it reached the thread: a stopped one (the core shutting down), or one not started
+    /// yet, drops it.
+    fn send(&self, wake: Wake) -> bool {
+        lock(&self.mailbox)
+            .as_ref()
+            .is_some_and(|tx| tx.send(wake).is_ok())
     }
 
     /// The model `row` as a call holds it: through the gate (refused while an update or a
@@ -205,8 +206,9 @@ struct Told<'a>(&'a LocalLlms);
 impl Drop for Told<'_> {
     fn drop(&mut self) {
         use std::sync::atomic::Ordering;
-        if !self.0.used_pending.swap(true, Ordering::AcqRel) {
-            self.0.send(Wake::Used);
+        if !self.0.used_pending.swap(true, Ordering::AcqRel) && !self.0.send(Wake::Used) {
+            // Not delivered: the flag must not keep every later wake back.
+            self.0.used_pending.store(false, Ordering::Release);
         }
     }
 }
@@ -335,7 +337,7 @@ fn run(shared: &Shared, rx: &Receiver<Wake>) {
                 // again.
                 local
                     .used_pending
-                    .store(false, std::sync::atomic::Ordering::Release);
+                    .swap(false, std::sync::atomic::Ordering::AcqRel);
             }
             Err(RecvTimeoutError::Timeout) => {
                 // A model's drop that panics costs that unload, never the thread.
@@ -636,6 +638,29 @@ mod tests {
         assert_eq!(loader.loads.load(Ordering::SeqCst), 0, "nothing loaded");
         drop(hold);
         llm.complete(&request(), &CancelToken::new()).unwrap();
+    }
+
+    #[test]
+    fn once_shutdown_has_begun_no_call_loads_the_model() {
+        let loader = Arc::new(Answering {
+            loads: AtomicUsize::new(0),
+        });
+        let shutdown = CancelToken::new();
+        let local = Arc::new(LocalLlms::new(
+            loader.clone(),
+            Arc::new(MockClock::new(1_000, 0)),
+            Arc::default(),
+            shutdown.clone(),
+        ));
+        let llm = local.handle(&row()).unwrap();
+        shutdown.cancel();
+        let refused = llm.complete(&request(), &CancelToken::new()).unwrap_err();
+        assert_eq!(refused, LlmError::Cancelled);
+        let (_, answer_ms, timed) = llm.timed(&request(), &CancelToken::new());
+        assert_eq!((answer_ms, timed), (None, Err(LlmError::Cancelled)));
+        local.warm(&row());
+        assert_eq!(loader.loads.load(Ordering::SeqCst), 0, "nothing loaded");
+        assert!(local.resident().is_empty());
     }
 
     #[test]
