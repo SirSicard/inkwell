@@ -34,10 +34,21 @@ public sealed partial class SoundSection : UserControl
 
     public SoundModel Model { get; }
 
+    /// <summary>The test state last drawn: a level alone only moves the meter.</summary>
+    private (SoundModel.TestState, SoundModel.Devices?, string?, string?)? drawn;
+
     private void OnChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e) => Render();
 
     private void Render()
     {
+        Meter.Value = Model.TestLevel;
+        var now = (Model.Test, Model.Current, Model.InputProblem ?? Model.OutputProblem, Model.TestRefused);
+        if (drawn == now)
+        {
+            // A level: the bar moves, and nothing else is read again (the meter's value is its own).
+            return;
+        }
+        drawn = now;
         rendering = true;
         try
         {
@@ -50,7 +61,10 @@ public sealed partial class SoundSection : UserControl
         }
         InputPicker.IsEnabled = Model.Current is not null;
         AutomationProperties.SetHelpText(InputPicker, Model.InputCaption);
-        InputCaption.Text = Model.InputCaption;
+        // The caption says the missing mic itself; the line under it is what Narrator reads as it happens.
+        InputCaption.Text = Model.MissingLine is null ? Model.InputCaption : "";
+        InputCaption.Visibility = Model.MissingLine is null ? Visibility.Visible : Visibility.Collapsed;
+        Show(MissingLine, Model.MissingLine);
         Show(InputProblem, Model.InputProblem);
         OutputRow.Visibility = Model.HasOutputs ? Visibility.Visible : Visibility.Collapsed;
         AutomationProperties.SetHelpText(OutputPicker, Model.OutputCaption);
@@ -61,8 +75,8 @@ public sealed partial class SoundSection : UserControl
         AutomationProperties.SetName(TestButton, Model.IsTesting ? "Stop the microphone test" : "Test the microphone");
         // Stop always works: the last mic may go mid-test.
         TestButton.IsEnabled = Model.IsTesting || Model.Current is not { Inputs.Count: 0 };
-        Meter.Value = Model.TestLevel;
-        AutomationProperties.SetItemStatus(Meter, Model.LevelSpoken);
+        // The bar's own value is its level for Narrator; the status says only whether a test runs.
+        AutomationProperties.SetItemStatus(Meter, Model.Test == SoundModel.TestState.Running ? "Testing" : "No test running");
         Show(TestLine, Model.TestLineIsProblem ? null : Model.TestLine);
         Show(TestProblem, Model.TestLineIsProblem ? Model.TestLine : null);
     }

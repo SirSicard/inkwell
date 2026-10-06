@@ -316,8 +316,8 @@ public sealed class SoundModel(Action<CoreCommand> send) : ObservableModel
 
     /// <summary>The chosen mic is not connected, and Automatic stands in: the line that says so.</summary>
     public string? MissingLine =>
-        Current is { Using: { Reason: MicReason.ChosenMissing } using } d
-            ? $"{d.WantedName ?? "The microphone you chose"} isn't connected. Inkwell is using {using.Name} until it is."
+        Current is { Using: { Reason: MicReason.ChosenMissing } mic } d
+            ? $"{d.WantedName ?? "The microphone you chose"} isn't connected. Inkwell is using {mic.Name} until it is."
             : null;
 
     /// <summary>The caption under the microphone picker.</summary>
@@ -352,16 +352,16 @@ public sealed class SoundModel(Action<CoreCommand> send) : ObservableModel
     {
         get
         {
-            if (Current?.OutputUsing is not { } using)
+            if (Current?.OutputUsing is not { } output)
             {
                 return Current?.Outputs is { Count: 0 } ? "No output is connected." : "Record now, and a call Inkwell can't hear alone, record what this output plays.";
             }
-            return using.Reason switch
+            return output.Reason switch
             {
                 OutputReason.ChosenMissing =>
                     $"{Current.OutputWantedName ?? "The output you chose"} isn't connected. Inkwell records the default output until it is.",
                 OutputReason.Chosen =>
-                    $"Record now, and a call Inkwell can't hear alone, record what {using.Name} plays, even when Windows' default changes.",
+                    $"Record now, and a call Inkwell can't hear alone, record what {output.Name} plays, even when Windows' default changes.",
                 _ => "Record now, and a call Inkwell can't hear alone, record what the default output plays, and follow it when it changes.",
             };
         }

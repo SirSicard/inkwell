@@ -34,6 +34,22 @@ public sealed class MicNoticeTests
         Assert.Null(store.MicFallback);
     }
 
+    /// <summary>A meeting's stand-in is said by the meeting: a take ending meanwhile keeps it, the meeting's end lets it go.</summary>
+    [Fact]
+    public void AFallbackSaidForAMeetingLastsAsLongAsTheMeeting()
+    {
+        var store = new CoreStore();
+        store.Apply([
+            Ev.Of("""{"type":"meeting.started","record":"r"}"""),
+            Ev.Of("""{"type":"audio.input_fallback","wanted":{"id":"hs","name":"Headset (Buds)"},"mic_name":"M","mic_transport":"usb"}"""),
+            Ev.Of("""{"type":"dictation.started","take":1,"edit":false}"""),
+            Ev.Of("""{"type":"dictation.discarded","reason":"too_short"}"""),
+        ]);
+        Assert.NotNull(store.MicFallback);
+        store.Apply([Ev.Of("""{"type":"meeting.finished","record":"r"}""")]);
+        Assert.Null(store.MicFallback);
+    }
+
     [Fact]
     public void AMeetingsMicThatWentIsKeptForLiveAndTheDropSaysItUntilTheNextLine()
     {

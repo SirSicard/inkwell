@@ -82,6 +82,9 @@ public sealed class OnboardingModel : ObservableModel
             return;
         }
         Step = following[0];
+        // The try-it starts afresh each time the Ready step is reached.
+        NotHearing = false;
+        TakeEnded();
         Changed();
     }
 
@@ -175,6 +178,13 @@ public sealed class OnboardingModel : ObservableModel
     {
         switch (e)
         {
+            // The try-it is only the Ready step's: a take on another step, or after the first run,
+            // neither shows the hint nor schedules a look.
+            case DictationStarted or DictationPartial or DictationStopped or DictationDiscarded or DictationInserted
+                or DictationFailed or DictationShortPressIgnored or DictationMicFailed
+                when !(Showing && Step == OnboardingStep.Ready):
+                TakeEnded();
+                break;
             case DictationStarted { Edit: false } started:
                 TakeEnded();
                 heldTake = started.Take;
@@ -188,7 +198,7 @@ public sealed class OnboardingModel : ObservableModel
                     }
                 });
                 break;
-            case DictationPartial partial when partial.Take == heldTake && !string.IsNullOrWhiteSpace(partial.Text):
+            case DictationPartial words when words.Take == heldTake && !string.IsNullOrWhiteSpace(words.Text):
                 // Words came after all (a pause past 5 s): it hears you.
                 heldHeardWords = true;
                 SetNotHearing(false);

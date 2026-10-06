@@ -292,6 +292,16 @@ public class OnboardingModelTests
         var wakes = new HeldWakes();
         var live = true;
         var onboarding = new OnboardingModel(new Sent().Send) { Wake = wakes, HasLiveWords = () => live };
+        onboarding.Apply(Ev.Of("""{"type":"setting.value","key":"onboarding.done"}"""));
+        // On another step a take is not the try-it: no look, no hint.
+        onboarding.Apply(Ev.Of("""{"type":"dictation.started","take":0,"edit":false}"""));
+        onboarding.Apply(Ev.Of("""{"type":"dictation.discarded","reason":"no_speech"}"""));
+        Assert.Empty(wakes.Waiting);
+        Assert.False(onboarding.NotHearing);
+        while (onboarding.Step != OnboardingStep.Ready)
+        {
+            onboarding.Next();
+        }
         onboarding.Apply(Ev.Of("""{"type":"dictation.started","take":1,"edit":false}"""));
         Assert.Single(wakes.Waiting);
         wakes.Waiting[0]();
@@ -321,6 +331,12 @@ public class OnboardingModelTests
         Assert.False(onboarding.NotHearing); // a tap says nothing about the mic
         // A voice edit is not the try-it.
         onboarding.Apply(Ev.Of("""{"type":"dictation.started","take":5,"edit":true}"""));
+        Assert.Empty(wakes.Waiting);
+        // Once the first run is done, takes are none of its business.
+        onboarding.Apply(Ev.Of("""{"type":"dictation.discarded","reason":"silence"}"""));
+        Assert.True(onboarding.NotHearing);
+        onboarding.Next(); // Start
+        onboarding.Apply(Ev.Of("""{"type":"dictation.started","take":6,"edit":false}"""));
         Assert.Empty(wakes.Waiting);
     }
 }

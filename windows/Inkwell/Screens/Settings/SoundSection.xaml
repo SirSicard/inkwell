@@ -30,13 +30,22 @@
                     HorizontalAlignment="Stretch"
                     AutomationProperties.Name="Microphone"
                     SelectionChanged="OnInputChosen" />
-                <!-- A live region: a chosen mic that leaves is said (MissingLine), not only shown. -->
                 <TextBlock
                     x:Name="InputCaption"
+                    AutomationProperties.AccessibilityView="Raw"
+                    Style="{StaticResource InkCaptionStyle}"
+                    TextWrapping="Wrap" />
+                <!-- Only a chosen mic that leaves is said as it happens (MissingLine), not every caption. -->
+                <TextBlock
+                    x:Name="MissingLine"
                     AutomationProperties.LiveSetting="Polite"
                     Style="{StaticResource InkCaptionStyle}"
                     TextWrapping="Wrap" />
-                <TextBlock x:Name="InputProblem" Style="{StaticResource InkAlertTextStyle}" TextWrapping="Wrap" />
+                <TextBlock
+                    x:Name="InputProblem"
+                    AutomationProperties.LiveSetting="Polite"
+                    Style="{StaticResource InkAlertTextStyle}"
+                    TextWrapping="Wrap" />
             </StackPanel>
         </Grid>
 
@@ -55,7 +64,11 @@
                     AutomationProperties.Name="Their sound from"
                     SelectionChanged="OnOutputChosen" />
                 <TextBlock x:Name="OutputCaption" Style="{StaticResource InkCaptionStyle}" TextWrapping="Wrap" />
-                <TextBlock x:Name="OutputProblem" Style="{StaticResource InkAlertTextStyle}" TextWrapping="Wrap" />
+                <TextBlock
+                    x:Name="OutputProblem"
+                    AutomationProperties.LiveSetting="Polite"
+                    Style="{StaticResource InkAlertTextStyle}"
+                    TextWrapping="Wrap" />
             </StackPanel>
         </Grid>
 
