@@ -72,6 +72,8 @@ public sealed class ScreenModels
         Appearance = new AppearanceModel(send, this.log);
         Stats = new StatsModel(send, wake ?? NoWake.Instance);
         Sound = new SoundModel(send);
+        Onboarding.Wake = wake ?? NoWake.Instance;
+        Onboarding.HasLiveWords = () => Catalogue.Line(Job.LivePartials) is { Known: true, Engine: not null };
     }
 
     public PermissionsModel Permissions { get; }

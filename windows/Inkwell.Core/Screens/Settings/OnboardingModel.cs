@@ -130,10 +130,83 @@ public sealed class OnboardingModel : ObservableModel
         return failed.Command == "setting.get" && failed.Id == SettingId;
     }
 
+    // The Ready step's try-it hint, as the Mac's TryItHint: when the orb heard nothing, where to
+    // pick the microphone. Shown after a take that found no speech or only silence, or 5 s into a
+    // take held with no words heard (only where words come live: with no live model a take shows
+    // none until it ends); gone when words come, or a take types something. One delayed call per
+    // take, no timer. The first run has no picker of its own (one place for it: Settings > Sound).
+
+    public const string NotHearingText = "Not hearing you? Once you're set up, Settings > Sound picks the microphone and tests it.";
+
+    /// <summary>How long a held take may hear no words before the hint shows.</summary>
+    public static readonly TimeSpan NotHearingAfter = TimeSpan.FromSeconds(5);
+
+    /// <summary>The take being held, and its one delayed look.</summary>
+    private long? heldTake;
+    private bool heldHeardWords;
+    private IDisposable? heldLook;
+
+    /// <summary>Whether the try-it heard nothing: the Ready step says where the microphone is picked.</summary>
+    public bool NotHearing { get; private set; }
+
+    /// <summary>Runs the 5 s look (ScreenModels gives it the app's wake scheduler; none: never).</summary>
+    public IWakeScheduler? Wake { get; set; }
+
+    /// <summary>Whether a live model gives words while a take is held (the catalogue's Live words line).</summary>
+    public Func<bool> HasLiveWords { get; set; } = () => false;
+
+    private void SetNotHearing(bool on)
+    {
+        if (NotHearing != on)
+        {
+            NotHearing = on;
+            Changed();
+        }
+    }
+
+    private void TakeEnded()
+    {
+        heldTake = null;
+        heldLook?.Dispose();
+        heldLook = null;
+    }
+
     public void Apply(InkEvent e)
     {
         switch (e)
         {
+            case DictationStarted { Edit: false } started:
+                TakeEnded();
+                heldTake = started.Take;
+                heldHeardWords = false;
+                var take = started.Take;
+                heldLook = Wake?.After(NotHearingAfter, () =>
+                {
+                    if (heldTake == take && !heldHeardWords && HasLiveWords())
+                    {
+                        SetNotHearing(true);
+                    }
+                });
+                break;
+            case DictationPartial partial when partial.Take == heldTake && !string.IsNullOrWhiteSpace(partial.Text):
+                // Words came after all (a pause past 5 s): it hears you.
+                heldHeardWords = true;
+                SetNotHearing(false);
+                break;
+            case DictationStopped:
+                TakeEnded();
+                break;
+            case DictationDiscarded { Reason: Discard.Silence or Discard.NoSpeech or Discard.NothingHeard }:
+                TakeEnded();
+                SetNotHearing(true);
+                break;
+            case DictationInserted:
+                TakeEnded();
+                SetNotHearing(false);
+                break;
+            case DictationDiscarded or DictationFailed or DictationShortPressIgnored or DictationMicFailed or CoreStopped:
+                TakeEnded();
+                break;
             case SettingValue value when value.Key == ShellSetting.OnboardingDone.Key():
                 Completed = value.Value == "true";
                 Changed();
