@@ -62,6 +62,11 @@ public sealed record LiveMeeting(string Record)
     public FarEnd? FarEnd { get; init; }
     /// <summary>It records everything the PC plays instead of the app alone (meeting.far_end_fallback).</summary>
     public bool FarEndFallback { get; init; }
+    /// <summary>
+    /// Its mic went mid-meeting and another records now (meeting.mic_switched). Live says it for the
+    /// rest of the meeting; the Drop until the next line arrives (<see cref="MicSwitch.AtLine"/>).
+    /// </summary>
+    public MicSwitch? MicSwitch { get; init; }
     /// <summary>meeting.stopped arrived: capture ended and the final pass is running.</summary>
     public bool Stopping { get; init; }
     /// <summary>How far the final pass has come (meeting.transcribed, .diarized, .summarized), while Stopping.</summary>
@@ -92,7 +97,7 @@ public sealed record LiveMeeting(string Record)
     public bool Equals(LiveMeeting? other) =>
         other is not null && Record == other.Record && Title == other.Title && App == other.App && AppName == other.AppName
         && MicName == other.MicName && MicReason == other.MicReason && FarEnd == other.FarEnd
-        && FarEndFallback == other.FarEndFallback && Stopping == other.Stopping && Blotted == other.Blotted
+        && FarEndFallback == other.FarEndFallback && MicSwitch == other.MicSwitch && Stopping == other.Stopping && Blotted == other.Blotted
         && Sides.Count == other.Sides.Count && !Sides.Except(other.Sides).Any()
         && Partials.Count == other.Partials.Count && !Partials.Except(other.Partials).Any()
         && Finals.SequenceEqual(other.Finals) && Ledger == other.Ledger;
@@ -136,6 +141,17 @@ public readonly record struct BlotProgress(bool Transcribed, bool Diarized, bool
         }
     }
 }
+
+/// <summary>A meeting's mic that went, and the one recording in its place.</summary>
+/// <param name="From">The mic that went, as Windows named it, when known.</param>
+/// <param name="To">The mic recording now.</param>
+/// <param name="AtLine">How many lines the meeting had heard when it switched (its ledger's Seen): the switch is news until a line comes after it.</param>
+public sealed record MicSwitch(string? From, string To, int AtLine);
+
+/// <summary>The mic the user chose isn't connected, and another opened in its place (audio.input_fallback, said once per spell).</summary>
+/// <param name="Wanted">The chosen mic's name, when the core remembers one.</param>
+/// <param name="Using">The mic recording instead.</param>
+public sealed record MicFallback(string? Wanted, string Using);
 
 /// <summary>An app the core offers to record.</summary>
 public sealed record MeetingOffer(string App, string AppName);
@@ -209,6 +225,13 @@ public sealed class CoreStore : ObservableModel
     /// <summary>The take in progress, while there is one.</summary>
     public LiveDictation? LiveDictation { get; private set; }
     public DictationOutcome? LastDictation { get; private set; }
+    /// <summary>
+    /// A chosen mic that isn't connected, with the one recording instead: the Drop says so for the
+    /// take or meeting it opened for, then it is let go of. Gone too when the devices say the chosen
+    /// mic is back (or the choice changed). The core says it once per spell, also for a mic test;
+    /// one said for a test is shown at the next take, which is on the same stand-in.
+    /// </summary>
+    public MicFallback? MicFallback { get; private set; }
     public ImmutableList<Notice> Notices { get; private set; } = [];
 
     /// <summary>Events applied so far (tests and diagnostics).</summary>
@@ -262,6 +285,7 @@ public sealed class CoreStore : ObservableModel
         {
             // The core
             case CoreStopped:
+                MicFallback = null;
                 Meeting = null;
                 Offer = null;
                 Listening = null;
@@ -405,6 +429,23 @@ public sealed class CoreStore : ObservableModel
                     }
                 }
                 break;
+            case MeetingMicSwitched switched:
+                UpdateMeeting(switched.Record, m => m with
+                {
+                    MicName = switched.MicName,
+                    MicReason = switched.MicReason,
+                    MicSwitch = new MicSwitch(switched.FromName, switched.MicName, m.Ledger.Seen),
+                });
+                break;
+            case AudioInputFallback fallback:
+                MicFallback = new MicFallback(fallback.Wanted.Name, fallback.MicName);
+                break;
+            case AudioDevices devices when devices.Using?.Reason != Events.MicReason.ChosenMissing:
+                MicFallback = null;
+                break;
+            case AudioDevicesChanged devices when devices.Using?.Reason != Events.MicReason.ChosenMissing:
+                MicFallback = null;
+                break;
             case MeetingFarEndFallback fallback:
                 UpdateMeeting(fallback.Record, m => m with { FarEndFallback = true });
                 break;
@@ -487,6 +528,11 @@ public sealed class CoreStore : ObservableModel
     {
         Dictation = DictationPhase.Idle;
         LiveDictation = null;
+        // Said for the take whose mic it was; a meeting recording says it on its own.
+        if (Meeting is null)
+        {
+            MicFallback = null;
+        }
     }
 
     /// <summary>
@@ -512,6 +558,7 @@ public sealed class CoreStore : ObservableModel
         {
             LastLedger = (record, live.Ledger);
             Meeting = null;
+            MicFallback = null;
         }
     }
 }

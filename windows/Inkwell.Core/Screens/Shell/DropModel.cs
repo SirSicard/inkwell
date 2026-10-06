@@ -100,8 +100,13 @@ public static class MeetingDrop
         return dictation == DictationPhase.Idle ? DropInk.Idle : DropInk.Dictating;
     }
 
-    /// <summary>A live meeting's lines for <paramref name="ink"/> (meeting, problem or blotting).</summary>
-    public static DropLine Live(LiveMeeting meeting, DropInk ink)
+    /// <summary>
+    /// A live meeting's lines for <paramref name="ink"/> (meeting, problem or blotting).
+    /// <paramref name="micFallback"/>: the chosen mic isn't connected and another records (said
+    /// until the first line); a mic that went mid-call is said over the latest line until a line
+    /// comes after it.
+    /// </summary>
+    public static DropLine Live(LiveMeeting meeting, DropInk ink, MicFallback? micFallback = null)
     {
         ArgumentNullException.ThrowIfNull(meeting);
         switch (ink)
@@ -120,10 +125,25 @@ public static class MeetingDrop
                 // Said until the first line arrives: other apps' sound is in this recording.
                 var waiting = meeting.FarEndFallback
                     ? $"Inkwell couldn't hear {meeting.AppName ?? "the call"} alone, so it is recording everything this PC plays"
-                    : "Recording this meeting";
+                    : micFallback is { } fallback ? FallbackLine(fallback) : "Recording this meeting";
                 var title = source is null ? "● REC" : $"● REC · {source}";
-                return new(title, latest.Length > 0 ? latest : waiting, DropLineTone.Recording);
+                var switched = meeting.MicSwitch is { } change && change.AtLine == meeting.Ledger.Seen ? SwitchLine(change) : null;
+                return new(title, switched ?? (latest.Length > 0 ? latest : waiting), DropLineTone.Recording);
         }
+    }
+
+    /// <summary>"Headset (AirPods Pro) isn't connected. Using Microphone (Realtek)."</summary>
+    public static string FallbackLine(MicFallback fallback)
+    {
+        ArgumentNullException.ThrowIfNull(fallback);
+        return $"{fallback.Wanted ?? "Your chosen mic"} isn't connected. Using {fallback.Using}.";
+    }
+
+    /// <summary>"Headset (AirPods Pro) went. Now recording with Microphone (Realtek)."</summary>
+    public static string SwitchLine(MicSwitch change)
+    {
+        ArgumentNullException.ThrowIfNull(change);
+        return $"{change.From ?? "Your mic"} went. Now recording with {change.To}.";
     }
 
     /// <summary>
@@ -148,9 +168,10 @@ public static class DictationDrop
 {
     /// <summary>
     /// A take in progress: "Dictating · Slack · Chat" (the app in front and its mode) over its live
-    /// words, or what it is doing when there are none. Null when no take is in progress.
+    /// words, or what it is doing when there are none (a stand-in mic for one that isn't connected,
+    /// <paramref name="micFallback"/>, while it listens). Null when no take is in progress.
     /// </summary>
-    public static DropLine? Live(DictationPhase phase, LiveDictation? live)
+    public static DropLine? Live(DictationPhase phase, LiveDictation? live, MicFallback? micFallback = null)
     {
         if (phase == DictationPhase.Idle)
         {
@@ -169,7 +190,7 @@ public static class DictationDrop
         {
             return new(title, words, LiveWords: true);
         }
-        return new(title, "Listening");
+        return new(title, micFallback is { } fallback ? MeetingDrop.FallbackLine(fallback) : "Listening");
     }
 
     /// <summary>
@@ -310,8 +331,8 @@ public sealed class DropModel
         live = Ink switch
         {
             DropInk.Idle => null,
-            DropInk.Dictating => DictationDrop.Live(store.Dictation, store.LiveDictation),
-            _ => MeetingDrop.Live(store.Meeting!, Ink),
+            DropInk.Dictating => DictationDrop.Live(store.Dictation, store.LiveDictation, store.MicFallback),
+            _ => MeetingDrop.Live(store.Meeting!, Ink, store.MicFallback),
         };
         // The core offers only while nothing is being captured; what is live (a take, or the last
         // meeting's final pass) hides the offer until it ends.
