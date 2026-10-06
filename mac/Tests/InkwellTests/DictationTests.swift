@@ -277,6 +277,10 @@ final class DictationModelTests: XCTestCase {
         XCTAssertEqual(note(#"{"type":"dictation.warning","kind":"release_missed"}"#)?.title, "Stopped after 3 minutes")
         // Polish on, but its model now sends somewhere the user has not agreed to.
         XCTAssertEqual(note(#"{"type":"dictation.warning","kind":"polish_not_allowed","message":"Example Cloud"}"#)?.title, "Not polished")
+        // The mode names a model of its own the core does not hold, or that sends elsewhere now:
+        // nothing was sent, and Settings > Modes says which (it was quiet before).
+        XCTAssertEqual(note(#"{"type":"dictation.warning","kind":"polish_model_missing","message":"the mode's model is not held"}"#),
+                       DropText(title: "Not polished", detail: "Check this mode's model in Settings > Modes", tone: .alert))
         XCTAssertNil(note(#"{"type":"dictation.warning","kind":"tail_cut_short"}"#))
         // Every note is words the shell wrote: never the user's.
         let dictation = DictationModel(send: { _ in })

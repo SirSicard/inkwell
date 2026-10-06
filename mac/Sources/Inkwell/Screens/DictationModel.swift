@@ -423,13 +423,16 @@ final class DictationModel {
             case .polishNotAllowed:
                 // Polish is on, but its model now sends somewhere the user has not agreed to.
                 return DropText(title: "Not polished", detail: "Polish needs your OK again in Settings", tone: .alert)
+            case .polishModelMissing:
+                // The mode names a model of its own that the core does not hold now, or that sends
+                // elsewhere than where the user agreed: nothing was sent, and Settings > Modes says
+                // which and how to fix it.
+                return DropText(title: "Not polished", detail: "Check this mode's model in Settings > Modes", tone: .alert)
             case .releaseMissed:
                 return DropText(title: "Stopped after 3 minutes", detail: "The key's release never arrived")
             // Shown elsewhere (Today's notices, Settings) or nothing the user acts on at once.
-            // polishModelMissing (a mode's own model is gone) is for the modes editor's branch to
-            // surface; until then it is quiet, as polishUnavailable is.
             case .vadFailed, .audioLost, .tailCutShort, .focusUnreadable, .polishUnavailable,
-                 .polishModelMissing, .polishFailed, .noModeForStyle, .saveFailed,
+                 .polishFailed, .noModeForStyle, .saveFailed,
                  .deletedTextNotScrubbed, .deletedTextScrubbed, .other:
                 return nil
             }
