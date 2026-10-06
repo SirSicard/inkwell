@@ -26,7 +26,7 @@ public class ScreenModelsTests
         Assert.Contains(new CoreCommand.SettingGet(ShellSetting.OnboardingDone), sent.Commands);
         Assert.Contains("permissions.check", names);
         Assert.Contains("models.list", names);
-        Assert.Contains(new CoreCommand.SettingGet(ShellSetting.MeetingsDetect), sent.Commands);
+        Assert.Contains(sent.Commands, c => c is CoreCommand.MeetingsCallsList);
         Assert.Contains(sent.Commands, c => c is CoreCommand.ConsentGet { Feature: LlmFeature.Polish });
         Assert.Contains(sent.Commands, c => c is CoreCommand.ConsentGet { Feature: LlmFeature.Edit });
         Assert.Contains(sent.Commands, c => c is CoreCommand.ConsentGet { Feature: LlmFeature.Meetings });
@@ -88,7 +88,8 @@ public class ScreenModelsTests
             ("permissions.check", null), ("models.list", null), ("modes.list", null), ("commitment.set_done", null),
             ("note.add", "r:line:0"), ("note.update", "r:line:0:update"), ("note.delete", "r:line:0:delete"),
             ("setting.get", "setting:dictation.polish"), ("setting.set", "setting:dictation.key"),
-            ("setting.set", "setting:meetings.llm"), ("setting.get", "setting:meetings.detect"),
+            ("setting.set", "setting:meetings.llm"), ("setting.get", "setting:meetings.calls.default"),
+            ("meetings.calls.set", "calls:1"),
             ("consent.allow", "consent.allow:edit:3"), ("snippets.save", "snippets:2"), ("meeting.start", "meeting.start"),
             ("model.update", "model.update:qwen3-asr-1.7b-q8"),
         })

@@ -1,6 +1,7 @@
 // Meetings as the user drives them, as the Mac's MeetingModel: record now, record the call the
-// Drop offers or say not this one, stop, and the settings that shape them: listening for calls,
-// the headset mic, and how long the library keeps records.
+// Drop offers or say not this one, stop, and the settings that shape them: the headset mic, and
+// how long the library keeps records (the call policies, which replaced listening for calls, are
+// CallPolicyModel's).
 //
 // Recording starts only when the user asks (Today's "Record now", the menu, and the Drop's
 // "Record this call"). Detection only offers. A meeting's title comes from the calendar when a
@@ -85,7 +86,6 @@ public sealed class MeetingModel(
     /// <summary>The ids of this model's setting commands (CoreCommand gives each setting command one).</summary>
     public static IReadOnlySet<string> SettingIds { get; } = new HashSet<string>(StringComparer.Ordinal)
     {
-        ShellSetting.MeetingsDetect.CommandId(),
         ShellSetting.MeetingsHeadsetMic.CommandId(),
         ShellSetting.RetentionDays.CommandId(),
     };
@@ -103,9 +103,6 @@ public sealed class MeetingModel(
     private string? offered;
 
     public MeetingFailure? Failure { get; private set; }
-
-    /// <summary>Whether the core listens for calls (the user's setting; on unless turned off).</summary>
-    public bool Detect { get; private set; } = true;
 
     /// <summary>With Bluetooth output, record the headset's own mic.</summary>
     public bool HeadsetMic { get; private set; }
@@ -128,7 +125,6 @@ public sealed class MeetingModel(
 
     public void Load()
     {
-        send(new CoreCommand.SettingGet(ShellSetting.MeetingsDetect));
         send(new CoreCommand.SettingGet(ShellSetting.MeetingsHeadsetMic));
         send(new CoreCommand.SettingGet(ShellSetting.RetentionDays));
     }
@@ -191,13 +187,6 @@ public sealed class MeetingModel(
     /// </summary>
     public void Recover() => send(new CoreCommand.MeetingsRecover());
 
-    public void SetDetect(bool on)
-    {
-        Detect = on;
-        Changed();
-        send(new CoreCommand.SettingSet(ShellSetting.MeetingsDetect, on ? "on" : "off"));
-    }
-
     public void SetHeadsetMic(bool on)
     {
         HeadsetMic = on;
@@ -241,10 +230,6 @@ public sealed class MeetingModel(
     {
         switch (e)
         {
-            case SettingValue value when value.Key == ShellSetting.MeetingsDetect.Key():
-                Detect = value.Value != "off";
-                Changed();
-                break;
             case SettingValue value when value.Key == ShellSetting.MeetingsHeadsetMic.Key():
                 HeadsetMic = value.Value == "on";
                 Changed();

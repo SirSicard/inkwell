@@ -51,6 +51,7 @@ public sealed class ScreenModels
         Owed = new OwedModel(send);
         Live = new LiveModel(send, log: this.log);
         Meetings = new MeetingModel(send, cal, log: this.log);
+        Calls = new CallPolicyModel(send, apps);
         Import02 = new Import02Model(send, this.log);
         Onboarding = new OnboardingModel(send, this.log, Import02);
         Storage = new StorageModel(dataDirectory, modelsDirectory, reveal, this.log);
@@ -83,6 +84,8 @@ public sealed class ScreenModels
     public OwedModel Owed { get; }
     public LiveModel Live { get; }
     public MeetingModel Meetings { get; }
+    /// <summary>Each app's call policy, and the default (Settings > Meetings, the Drop's offer).</summary>
+    public CallPolicyModel Calls { get; }
     public OnboardingModel Onboarding { get; }
     public StorageModel Storage { get; }
     public DictationModel Dictation { get; }
@@ -135,6 +138,7 @@ public sealed class ScreenModels
             Owed.Apply(e);
             Live.Apply(e);
             Meetings.Apply(e);
+            Calls.Apply(e);
             Onboarding.Apply(e);
             Import02.Apply(e);
             if (Onboarding.Showing)
@@ -188,6 +192,7 @@ public sealed class ScreenModels
         Onboarding.Load();
         Polish.Load();
         Meetings.Load();
+        Calls.Load();
         // Meetings a crash interrupted are finished now (the Mac waits for its own engines first;
         // this shell registers none).
         Meetings.Recover();
@@ -223,7 +228,7 @@ public sealed class ScreenModels
         ArgumentNullException.ThrowIfNull(failed);
         return PermissionsModel.Handles(failed) || Polish.Handles(failed) || CatalogueModel.Handles(failed)
             || ModesModel.Handles(failed) || OwedModel.Handles(failed) || LiveModel.Handles(failed)
-            || MeetingModel.Handles(failed) || OnboardingModel.Handles(failed) || DictationModel.Handles(failed) || ShortcutRecorderModel.Handles(failed)
+            || MeetingModel.Handles(failed) || CallPolicyModel.Handles(failed) || OnboardingModel.Handles(failed) || DictationModel.Handles(failed) || ShortcutRecorderModel.Handles(failed)
             || Ai.Handles(failed) || CloudModel.Handles(failed) || SnippetsModel.Handles(failed) || VoiceCommandsModel.Handles(failed)
             || Library.Handles(failed) || Import02Model.Handles(failed) || AppearanceModel.Handles(failed) || StatsModel.Handles(failed);
     }

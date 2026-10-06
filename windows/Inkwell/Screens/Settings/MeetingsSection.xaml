@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Settings > Meetings: listening for calls, the headset's microphone, and what a meeting records.
+<!-- Settings > Meetings: each app's call recording (Always, Ask or Never, and the default for the
+     rest), the headset's microphone, and what a meeting records.
      As the Mac's MeetingsSection, in Windows words. Record now is on Today; how long records
      are kept is in Storage, as on the Mac. Windows asks no permission for the other side's sound,
      so the Mac's line about that permission has no place here. -->
@@ -18,25 +19,110 @@
     </UserControl.Resources>
     <StackPanel Spacing="10">
         <TextBlock AutomationProperties.HeadingLevel="Level2" Style="{StaticResource InkHeadingStyle}" Text="Meetings" />
+        <!-- The call policies: the default for apps not chosen for, with a warning under Always and a
+             hint under Never, then each app the core has seen with its own choice. -->
+        <TextBlock x:Name="CallsFailure" Style="{StaticResource InkAlertTextStyle}" TextWrapping="Wrap" Visibility="Collapsed" />
         <Grid ColumnSpacing="12">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="150" />
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
-            <TextBlock VerticalAlignment="Top" Margin="0,6,0,0" Style="{StaticResource InkBodyStyle}" Text="Offer to record calls" />
+            <TextBlock
+                VerticalAlignment="Top"
+                Margin="0,6,0,0"
+                AutomationProperties.AccessibilityView="Raw"
+                Style="{StaticResource InkBodyStyle}"
+                Text="{x:Bind local:MeetingsSection.DefaultTitle}"
+                TextWrapping="Wrap" />
             <StackPanel Grid.Column="1" Spacing="4">
-                <ToggleSwitch
-                    x:Name="Detect"
-                    MinWidth="0"
-                    AutomationProperties.HelpText="{x:Bind local:MeetingsSection.DetectDetail}"
-                    AutomationProperties.Name="Offer to record calls"
-                    IsOn="{x:Bind Model.Detect, Mode=OneWay}"
-                    OffContent=""
-                    OnContent=""
-                    Toggled="OnDetectToggled" />
-                <TextBlock AutomationProperties.AccessibilityView="Raw" Style="{StaticResource InkCaptionStyle}" Text="{x:Bind local:MeetingsSection.DetectDetail}" />
+                <RadioButtons
+                    x:Name="DefaultChoice"
+                    AutomationProperties.HelpText="{x:Bind local:MeetingsSection.DefaultCaption}"
+                    AutomationProperties.Name="{x:Bind local:MeetingsSection.DefaultTitle}"
+                    MaxColumns="3"
+                    SelectionChanged="OnDefaultChosen">
+                    <x:String>Always</x:String>
+                    <x:String>Ask</x:String>
+                    <x:String>Never</x:String>
+                </RadioButtons>
+                <TextBlock AutomationProperties.AccessibilityView="Raw" Style="{StaticResource InkCaptionStyle}" Text="{x:Bind local:MeetingsSection.DefaultCaption}" />
+                <TextBlock x:Name="Note" Style="{StaticResource InkAlertTextStyle}" TextWrapping="Wrap" Visibility="Collapsed" />
+                <!-- Under Always: it records without asking, so the people on the call must be told. -->
+                <Grid x:Name="AlwaysWarningRow" Margin="0,2,0,0" ColumnSpacing="6" Visibility="Collapsed">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <FontIcon
+                        VerticalAlignment="Top"
+                        Margin="0,2,0,0"
+                        AutomationProperties.AccessibilityView="Raw"
+                        FontSize="14"
+                        Foreground="{ThemeResource InkAlertBrush}"
+                        Glyph="&#xE7BA;" />
+                    <TextBlock Grid.Column="1" Style="{StaticResource InkAlertTextStyle}" Text="{x:Bind local:MeetingsSection.AlwaysWarning}" TextWrapping="Wrap" />
+                </Grid>
+                <TextBlock
+                    x:Name="NeverHintLine"
+                    Margin="0,2,0,0"
+                    Style="{StaticResource InkCaptionStyle}"
+                    Text="{x:Bind local:MeetingsSection.NeverHint}"
+                    Visibility="Collapsed" />
             </StackPanel>
         </Grid>
+        <TextBlock x:Name="Unreadable" Style="{StaticResource InkAlertTextStyle}" TextWrapping="Wrap" Visibility="Collapsed" />
+        <Grid x:Name="NoApps" ColumnSpacing="12" Visibility="Collapsed">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="150" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <TextBlock Style="{StaticResource InkBodyStyle}" Text="{x:Bind local:MeetingsSection.AppsTitle}" />
+            <TextBlock Grid.Column="1" Style="{StaticResource InkCaptionStyle}" Text="{x:Bind local:MeetingsSection.NoAppsText}" />
+        </Grid>
+        <StackPanel x:Name="AppsHost" Spacing="2" Visibility="Collapsed">
+            <TextBlock AutomationProperties.HeadingLevel="Level3" Style="{StaticResource InkEyebrowStyle}" Text="{x:Bind local:MeetingsSection.AppsTitle}" />
+            <ItemsRepeater x:Name="AppRows">
+                <ItemsRepeater.ItemTemplate>
+                    <DataTemplate x:DataType="local:CallAppRowItem">
+                        <Grid Padding="0,6" ColumnSpacing="12" Tag="{x:Bind Id}">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="150" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <Grid ColumnSpacing="8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <local:AppIconTile VerticalAlignment="Top" App="{x:Bind Label}" AutomationProperties.AccessibilityView="Raw" />
+                                <TextBlock
+                                    Grid.Column="1"
+                                    VerticalAlignment="Center"
+                                    MaxLines="2"
+                                    Style="{StaticResource InkBodyStyle}"
+                                    Text="{x:Bind Name}"
+                                    TextTrimming="CharacterEllipsis"
+                                    TextWrapping="Wrap" />
+                            </Grid>
+                            <StackPanel Grid.Column="1" Spacing="2">
+                                <ComboBox
+                                    x:Name="Choice"
+                                    MinWidth="170"
+                                    AutomationProperties.Name="{x:Bind PickerName}"
+                                    ItemsSource="{x:Bind Titles}"
+                                    SelectedIndex="{x:Bind Selected}"
+                                    SelectionChanged="OnAppChosen" />
+                                <TextBlock
+                                    AutomationProperties.Name="{x:Bind SeenName}"
+                                    Style="{StaticResource InkCaptionStyle}"
+                                    Text="{x:Bind Seen}"
+                                    Visibility="{x:Bind local:SettingsFormat.Shows(Seen)}" />
+                            </StackPanel>
+                        </Grid>
+                    </DataTemplate>
+                </ItemsRepeater.ItemTemplate>
+            </ItemsRepeater>
+        </StackPanel>
         <Grid ColumnSpacing="12">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="150" />
@@ -74,7 +160,7 @@
             <TextBlock Grid.Row="1" Style="{StaticResource FactLabel}" Text="You" />
             <TextBlock Grid.Row="1" Grid.Column="1" Style="{StaticResource FactText}" Text="Your microphone, as &#x201C;Hear you&#x201D; allows." />
             <TextBlock Grid.Row="2" Style="{StaticResource FactLabel}" Text="Them" />
-            <TextBlock Grid.Row="2" Grid.Column="1" Style="{StaticResource FactText}" Text="For a call you record when Inkwell offers, the call app's own sound. With Record now, or when Inkwell can't hear the call app alone, everything this PC plays, and Inkwell says so." />
+            <TextBlock Grid.Row="2" Grid.Column="1" Style="{StaticResource FactText}" Text="For a call Inkwell offers or records by itself, the call app's own sound. With Record now, or when Inkwell can't hear the call app alone, everything this PC plays, and Inkwell says so." />
             <TextBlock Grid.Row="3" Style="{StaticResource FactLabel}" Text="Headphones" />
             <TextBlock Grid.Row="3" Grid.Column="1" Style="{StaticResource FactText}" Text="With Bluetooth headphones, Inkwell records the PC's own microphone: a headset microphone carries only call-quality sound." />
             <TextBlock Grid.Row="4" Style="{StaticResource FactLabel}" Text="Where" />
