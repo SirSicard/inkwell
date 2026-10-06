@@ -67,6 +67,9 @@ enum CoreCommand: Equatable, Sendable {
     /// turns the feature on, or fails if the model has moved since.
     /// `ref` comes back in its `consent.state`, or as the id of a `command.failed`.
     case consentAllow(feature: LlmFeature, to: LlmDestination, endpoint: String?, key: String?, ref: String)
+    /// Takes polish's consent for one destination away (Settings > AI lists each): `consent.state`
+    /// with `ref`, or `command.failed` with it as the id. Revoking the last turns polish off.
+    case consentRevoke(feature: LlmFeature, to: LlmDestination, endpoint: String?, ref: String)
     /// Settings > Snippets and Voice commands: each answered by its `.listed` with `ref`, or a
     /// `command.failed` with that id. A save sends the whole list; the core refuses it over a
     /// stored list it cannot read unless `replaceUnreadable` (the user chose to start over).
@@ -162,6 +165,9 @@ enum CoreCommand: Equatable, Sendable {
             ["cmd": "consent.allow", "feature": feature.rawValue, "to": to.rawValue, "id": ref]
                 .merging(endpoint.map { ["endpoint": $0] } ?? [:]) { a, _ in a }
                 .merging(key.map { ["key": $0] } ?? [:]) { a, _ in a }
+        case .consentRevoke(let feature, let to, let endpoint, let ref):
+            ["cmd": "consent.revoke", "feature": feature.rawValue, "to": to.rawValue, "id": ref]
+                .merging(endpoint.map { ["endpoint": $0] } ?? [:]) { a, _ in a }
         case .snippetsList(let ref): ["cmd": "snippets.list", "id": ref]
         case .snippetsSave(let snippets, let replace, let ref):
             ["cmd": "snippets.save", "snippets": snippets.map(\.fields), "id": ref]
@@ -227,6 +233,7 @@ enum CoreCommand: Equatable, Sendable {
         case .dictationDisable: "dictation.disable"
         case .consentGet: "consent.get"
         case .consentAllow: "consent.allow"
+        case .consentRevoke: "consent.revoke"
         case .snippetsList: "snippets.list"
         case .snippetsSave: "snippets.save"
         case .voiceCommandsList: "voice_commands.list"

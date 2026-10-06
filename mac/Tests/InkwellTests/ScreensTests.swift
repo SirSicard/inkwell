@@ -2336,10 +2336,12 @@ final class SettingsCardsLayoutTests: XCTestCase {
     }
 
     /// The widest rows: a recorded dictation key, the edit key with the longest name, a provider
-    /// with its server, key and model fields, a snippet and a voice command, and models
-    /// downloading, waiting and failed with the core's words.
+    /// with its server, key and model fields, a snippet and a voice command, models downloading,
+    /// waiting and failed with the core's words, and polish's consents with Revoke.
     private func screens() -> ScreenModels {
         let screens = ScreenModels(send: { _ in }, calendar: FakeCalendar(), apps: WorkspaceApps())
+        // Polish on, with an OK on this Mac and one for a cloud provider, each with Revoke.
+        screens.polish.apply(event(#"{"type":"consent.state","feature":"polish","on":true,"allowed":true,"to":"on_device","name":"SystemLanguageModel.default","consents":[{"to":"on_device"},{"to":"cloud","name":"OpenRouter","endpoint":"https://openrouter.ai/api/v1"}]}"#))
         screens.dictation.apply(event(#"{"type":"setting.value","key":"dictation.enabled","value":"on"}"#))
         screens.dictation.apply(event(#"{"type":"setting.value","key":"dictation.key","value":"ctrl+shift+space"}"#))
         screens.dictation.apply(event(#"{"type":"setting.value","key":"dictation.edit_key","value":"right_command"}"#))

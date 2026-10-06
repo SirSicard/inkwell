@@ -464,8 +464,9 @@ final class ScreenModels {
         case "llm.providers", "llm.key.save", "llm.key.delete", "llm.choose", "llm.test":
             // Said under Settings > AI's language model.
             CloudModel.handles(failed)
-        case "consent.get", "consent.allow":
-            // Shown under the Polish or the summaries toggle, or in the Dictation section for voice edit.
+        case "consent.get", "consent.allow", "consent.revoke":
+            // Shown under the Polish or the summaries toggle, or in the Dictation section for voice
+            // edit (a revoke under Polish).
             true
         // Settings > Snippets and Voice commands say so. The key note that could not be read is
         // not shown (there is nothing to say then); it is logged.

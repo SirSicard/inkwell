@@ -733,6 +733,9 @@ private struct AISection: View {
                 .font(Typography.caption)
                 .foregroundStyle(Theme.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
+            // One OK per destination: a mode may polish on a model of its own (Settings > Modes).
+            PolishConsentsRow(polish: polish)
+                .padding(.top, 4)
             SettingColumns {
                 Text("Summaries and Ask")
             } controls: {
@@ -762,6 +765,54 @@ private struct AISection: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         .polishConsent(polish, host: .settings)
+    }
+}
+
+// MARK: - Settings > AI: where polish may send
+
+/// Each destination the user agreed polish may send to, with Revoke.
+struct PolishConsentsRow: View {
+    let polish: PolishModel
+
+    var body: some View {
+        let consents = polish.state?.consents ?? []
+        SettingColumns {
+            Text("Polish may send to")
+        } controls: {
+            VStack(alignment: .leading, spacing: 8) {
+                if consents.isEmpty {
+                    Text("Nowhere yet. Polish asks before it first sends anywhere.")
+                        .font(Typography.caption)
+                        .foregroundStyle(Theme.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                ForEach(Array(consents.enumerated()), id: \.offset) { _, granted in
+                    LineOrStack(minWidth: 260) {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(granted.label)
+                            Text(granted.detail)
+                                .font(Typography.caption)
+                                .foregroundStyle(Theme.secondaryText)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityElement(children: .combine)
+                        Button("Revoke") { polish.consent.revoke(granted) }
+                            .fixedSize()
+                            .accessibilityLabel("Revoke polish's OK for \(granted.label)")
+                    }
+                    .accessibilityElement(children: .contain)
+                }
+                if !consents.isEmpty {
+                    Text("Revoking the last one turns polish off. Modes on a model there go in as you said them.")
+                        .font(Typography.caption)
+                        .foregroundStyle(Theme.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .font(Typography.body)
+        .accessibilityElement(children: .contain)
     }
 }
 
