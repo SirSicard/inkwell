@@ -166,6 +166,24 @@ final class StatsPlayModelTests: XCTestCase {
         stats.streakTimedOut(pending)
         XCTAssertEqual(stats.streakChangeFailed, .pausing)
         XCTAssertNil(stats.pendingStreak)
+
+        // Answered after all: what it did shows, and the failure goes.
+        stats.apply(event(statsCounted(ref: pending, dictations: 3, dictationExtra: #","streak_paused_since":"2026-10-03""#)))
+        XCTAssertNil(stats.streakChangeFailed)
+    }
+
+    /// Review fix: a pause that is never answered while the screen has nothing to show ends in
+    /// "couldn't count", not a spinner for ever (its answer was to be the screen's numbers).
+    func testAPauseNeverAnsweredDoesNotSpinTheScreenForEver() throws {
+        let stats = model()
+        stats.load()
+        stats.pauseStreak()
+        let pause = try XCTUnwrap(stats.pendingStreak)
+        if let get = stats.pendingLoad { stats.loadTimedOut(get) }
+        XCTAssertEqual(stats.loadState, .loading, "the get's limit is no longer the one that counts")
+        stats.streakTimedOut(pause)
+        XCTAssertEqual(stats.loadState, .failed)
+        XCTAssertNil(stats.pendingLoad)
     }
 
     /// A stats.get sent before a pause is answered after it would show the numbers from before:
@@ -209,10 +227,26 @@ final class StatsPlayModelTests: XCTestCase {
         XCTAssertTrue(stats.reviewDismissFailed)
         XCTAssertFalse(stats.settingsFailed, "said on the card, not in Settings")
 
+        // A later count of the same week still says so; the next week's review does not.
+        stats.load()
+        let again = try XCTUnwrap(lastRef("stats.get"))
+        stats.apply(event(statsCounted(ref: again, words: (1, 2, 3), dictations: 2, extra: fullReview)))
+        XCTAssertTrue(stats.reviewDismissFailed)
+        stats.load()
+        let next = try XCTUnwrap(lastRef("stats.get"))
+        stats.apply(event(statsCounted(ref: next, words: (1, 2, 3), dictations: 2, extra: fullReview.replacingOccurrences(of: "2026-09-28", with: "2026-10-05"))))
+        XCTAssertFalse(stats.reviewDismissFailed, "a new week's review was never dismissed")
+        stats.load()
+        let back = try XCTUnwrap(lastRef("stats.get"))
+        stats.apply(event(statsCounted(ref: back, words: (1, 2, 3), dictations: 2, extra: fullReview)))
+
         stats.dismissReview(review)
         XCTAssertFalse(stats.reviewDismissFailed)
         stats.apply(event(#"{"type":"setting.value","key":"stats.review_dismissed","value":"2026-09-28"}"#))
         XCTAssertNil(stats.weekReview)
+        // Its echo was its own: a later dismissal's failure is still taken.
+        stats.apply(event(#"{"type":"command.failed","command":"setting.set","id":"setting:stats.review_dismissed","message":"x"}"#))
+        XCTAssertTrue(stats.reviewDismissFailed)
         // A later week's review is a new one.
         stats.load()
         let later = try XCTUnwrap(lastRef("stats.get"))
@@ -225,8 +259,9 @@ final class StatsPlayModelTests: XCTestCase {
     func testABestIsANoteInTheDrop() throws {
         let best = event(#"{"type":"milestones.reached","ref":"milestones-4","milestones":[],"best":{"id":"longest_dictation","unit":"ms","old":160000,"new":192000,"date":"2026-10-03","record":"r9"}}"#)
         let note = try XCTUnwrap(DictationModel.note(for: best, hasLanguageModel: true))
-        XCTAssertEqual(note, DropText(title: "Longest dictation yet", detail: "3 min 12 s · previous best 2 min 40 s"))
+        XCTAssertEqual(note, DropText(title: "Longest dictation yet", detail: "3 min 12 s · previous best 2 min 40 s", yields: true))
         XCTAssertEqual(note.tone, .plain)
+        XCTAssertTrue(note.yields, "never over the take's own note")
         XCTAssertNil(DictationModel.note(for: event(#"{"type":"milestones.reached","ref":"milestones-5","milestones":[]}"#), hasLanguageModel: true))
 
         let dictation = DictationModel(send: { _ in })
@@ -234,6 +269,17 @@ final class StatsPlayModelTests: XCTestCase {
         let shown = try XCTUnwrap(dictation.note)
         dictation.apply(event(#"{"type":"milestones.reached","ref":"milestones-6","milestones":[]}"#))
         XCTAssertEqual(dictation.note, shown, "nothing new to say")
+
+        // In the Drop: never over a note that shows or waits (the take's own, an alert above all).
+        let ink = ShellInk(store: CoreStore())
+        let drop = DropController(ink: ink, notes: dictation)
+        dictation.apply(event(#"{"type":"dictation.inserted","outcome":"blocked","text":"x"}"#))
+        drop.update()
+        XCTAssertEqual(drop.noteShowing?.text.tone, .alert)
+        dictation.apply(best)
+        drop.update()
+        XCTAssertEqual(drop.noteShowing?.text.tone, .alert, "the alert stays")
+        XCTAssertNotEqual(drop.shownText?.title, "Longest dictation yet")
 
         let stats = model()
         stats.checkMilestones()
@@ -317,8 +363,8 @@ final class StatsPlayFormatTests: XCTestCase {
         let cases: [(String, String, Int, Int, String, String)] = [
             ("longest_dictation", "ms", 160_000, 192_000, "Longest dictation yet", "3 min 12 s · previous best 2 min 40 s"),
             ("fastest_dictation", "wpm", 150, 168, "Fastest dictation yet", "168 wpm · previous best 150 wpm"),
-            ("most_words_day", "words", 1_980, 2_340, "Most words in a day yet", "2,340 words · previous best 1,980"),
-            ("best_week", "words", 7_400, 8_120, "Most words in a week yet", "8,120 words · previous best 7,400"),
+            ("most_words_day", "words", 1_980, 2_340, "Most words in a day yet", "2,340 words · previous best 1,980 words"),
+            ("best_week", "words", 7_400, 8_120, "Most words in a week yet", "8,120 words · previous best 7,400 words"),
             ("longest_meeting", "ms", 4_200_000, 5_520_000, "Longest meeting yet", "1 h 32 min · previous best 1 h 10 min"),
             ("longest_monologue", "ms", 185_000, 250_000, "Longest monologue yet", "4 min 10 s · previous best 3 min 5 s"),
         ]
@@ -506,25 +552,24 @@ final class StatsPlayLayoutTests: XCTestCase {
             dictationExtra: playDictation, extra: allBests + fullReview)
     }
 
-    private func screens() -> ScreenModels {
+    private func screens() throws -> ScreenModels {
         var sent: [CoreCommand] = []
         let screens = ScreenModels(send: { sent.append($0) }, calendar: NoCalendar(), apps: WorkspaceApps())
         screens.stats.apply(event(#"{"type":"setting.value","key":"stats.rest_days","value":"6,7"}"#))
         screens.stats.apply(event(#"{"type":"setting.value","key":"stats.share_heatmap","value":"on"}"#))
         screens.stats.load()
-        if let ref = sent.last?.commandID {
-            screens.stats.apply(event(full().replacingOccurrences(of: "REF", with: ref)))
-        }
+        let ref = try XCTUnwrap(sent.last?.commandID)
+        screens.stats.apply(event(full().replacingOccurrences(of: "REF", with: ref)))
         // The review's failure line too: the tallest the card gets.
-        if let review = screens.stats.weekReview {
-            screens.stats.dismissReview(review)
-            screens.stats.apply(event(#"{"type":"command.failed","command":"setting.set","id":"setting:stats.review_dismissed","message":"x"}"#))
-        }
+        let review = try XCTUnwrap(screens.stats.weekReview)
+        screens.stats.dismissReview(review)
+        screens.stats.apply(event(#"{"type":"command.failed","command":"setting.set","id":"setting:stats.review_dismissed","message":"x"}"#))
+        XCTAssertTrue(screens.stats.reviewDismissFailed)
         return screens
     }
 
     func testTheCardsFitTheNarrowestContentColumn() throws {
-        let screens = screens()
+        let screens = try screens()
         let counted = try XCTUnwrap(screens.stats.counted)
         XCTAssertNotNil(screens.stats.weekReview)
         // The narrowest the content gets: the window's 720 less the sidebar and the margins.
@@ -536,8 +581,25 @@ final class StatsPlayLayoutTests: XCTestCase {
         XCTAssertLessThanOrEqual(fitted.width, width + 0.5)
     }
 
+    /// The Records card's columns: as many as fit at their least width, never narrower than it
+    /// (one column when even one doesn't fit), never more than there are records.
+    func testRecordsTakeEvenColumnsThatFit() {
+        let columns = { (width: CGFloat, count: Int) in EvenColumns.columns(width, minimum: 150, spacing: 24, count: count) }
+        XCTAssertEqual(columns(300, 6).count, 1)
+        XCTAssertEqual(columns(324, 6).count, 2)
+        XCTAssertEqual(columns(324, 6).width, 150)
+        XCTAssertEqual(columns(560, 6).count, 3)
+        XCTAssertEqual(columns(560, 2).count, 2, "no empty columns")
+        XCTAssertEqual(columns(100, 6).width, 100, "one column, as wide as there is")
+        for width in stride(from: CGFloat(100), through: 900, by: 7) {
+            let (n, w) = columns(width, 6)
+            XCTAssertLessThanOrEqual(CGFloat(n) * w + CGFloat(n - 1) * 24, width + 0.5)
+            if n > 1 { XCTAssertGreaterThanOrEqual(w, 150) }
+        }
+    }
+
     func testTheScreenKeepsTheWindowAt720() throws {
-        let (window, content) = try layOut(screens(), width: 720)
+        let (window, content) = try layOut(try screens(), width: 720)
         defer { window.close() }
         XCTAssertEqual(content.frame.width, 720, accuracy: 0.5, "the screen widened the window")
         XCTAssertEqual(window.contentMinSize.width, 720, accuracy: 0.5)
@@ -556,7 +618,7 @@ final class StatsPlayLayoutTests: XCTestCase {
         }
         let out = URL(fileURLWithPath: folder, isDirectory: true)
         try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
-        let screens = screens()
+        let screens = try screens()
         defer { NSApp.appearance = nil }
         for mode in [GlowTheme.Mode.light, .dark] {
             screens.theme.setMode(mode)

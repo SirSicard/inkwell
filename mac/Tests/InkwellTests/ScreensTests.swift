@@ -2344,13 +2344,14 @@ final class SettingsCardsLayoutTests: XCTestCase {
         let screens = ScreenModels(send: { sent.append($0) }, calendar: FakeCalendar(), apps: WorkspaceApps())
         screens.stats.apply(event(#"{"type":"setting.value","key":"stats.rest_days","value":"6,7"}"#))
         screens.stats.settingsAppeared()
-        if let ref = sent.last?.commandID {
-            screens.stats.apply(event(statsCounted(ref: ref, dictations: 3, dictationExtra: #","streak_paused_since":"2026-10-02""#)))
-        }
+        let get = sent.last?.commandID ?? ""
+        screens.stats.apply(event(statsCounted(ref: get, dictations: 3, dictationExtra: #","streak_paused_since":"2026-10-02""#)))
         screens.stats.resumeStreak()
-        if let ref = sent.last?.commandID {
-            screens.stats.apply(event(#"{"type":"command.failed","command":"streak.resume","id":"\#(ref)","message":"x"}"#))
-        }
+        let resume = sent.last?.commandID ?? ""
+        screens.stats.apply(event(#"{"type":"command.failed","command":"streak.resume","id":"\#(resume)","message":"x"}"#))
+        // The widest rows are there, or this check measures less than it says.
+        XCTAssertNotNil(screens.stats.counted?.dictation.streakPausedSince)
+        XCTAssertEqual(screens.stats.streakChangeFailed, .resuming)
         screens.dictation.apply(event(#"{"type":"setting.value","key":"dictation.enabled","value":"on"}"#))
         screens.dictation.apply(event(#"{"type":"setting.value","key":"dictation.key","value":"ctrl+shift+space"}"#))
         screens.dictation.apply(event(#"{"type":"setting.value","key":"dictation.edit_key","value":"right_command"}"#))

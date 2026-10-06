@@ -15,6 +15,11 @@ struct StatsSettingsSection: View {
     static let restDaysDetail = "Days you take off. They neither count toward a streak nor break it, even if you dictate on one."
     static let pauseDetail = "For a holiday or time off: days without a dictation don't count against the streak, for up to 90 days."
 
+    /// What the pause row says before the numbers are in: counting, or that they couldn't be.
+    static func pauseUnknown(failed: Bool) -> String {
+        failed ? "Couldn't read whether the streak is paused." : "Counting\u{2026}"
+    }
+
     /// What the pause row says: running since a day, or what a pause does.
     static func pauseCaption(pausedSince: String?, calendar: Calendar) -> String {
         guard let since = pausedSince else { return pauseDetail }
@@ -53,12 +58,16 @@ struct StatsSettingsSection: View {
             row("Rest days", detail: Self.restDaysDetail) {
                 RestDayPicker(stats: stats)
             }
-            row("Pause the streak", detail: Self.pauseCaption(pausedSince: paused, calendar: stats.calendar)) {
+            // Unknown until counted: never a Pause offered over a pause that may be running.
+            let known = stats.counted != nil
+            row("Pause the streak", detail: known
+                ? Self.pauseCaption(pausedSince: paused, calendar: stats.calendar)
+                : Self.pauseUnknown(failed: stats.loadState == .failed)) {
                 VStack(alignment: .leading, spacing: 4) {
                     Button(paused == nil ? "Pause" : "Resume") {
                         if paused == nil { stats.pauseStreak() } else { stats.resumeStreak() }
                     }
-                    .disabled(stats.streakChanging != nil)
+                    .disabled(!known || stats.streakChanging != nil)
                     .accessibilityLabel(paused == nil ? "Pause the streak" : "Resume the streak")
                     if let failed = stats.streakChangeFailed {
                         Text(Self.streakFailure(failed))
@@ -140,7 +149,8 @@ struct ChipToggleStyle: ToggleStyle {
                     .opacity(enabled ? 1 : 0.45)
             }
             .buttonStyle(.plain)
-            .accessibilityAddTraits(configuration.isOn ? [.isToggle, .isSelected] : .isToggle)
+            .accessibilityAddTraits(.isToggle)
+            .accessibilityValue(configuration.isOn ? "On" : "Off")
         }
     }
 }
@@ -160,7 +170,6 @@ struct RestDayPicker: View {
                     .toggleStyle(ChipToggleStyle())
                     .disabled(last)
                     .accessibilityLabel(day.name)
-                    .accessibilityValue(on ? "Rest day" : "Counts")
                     .help(last ? "At least one day counts toward the streak" : day.name)
             }
         }

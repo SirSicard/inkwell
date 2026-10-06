@@ -267,8 +267,8 @@ enum StatsFormat {
         case .longestMeeting: "Longest meeting yet"
         case .longestMonologue: "Longest monologue yet"
         }
-        let old = news.unit == .words ? count(news.old, locale: locale) : bestValue(news.old, unit: news.unit, locale: locale)
-        return DropText(title: title, detail: "\(bestValue(news.new, unit: news.unit, locale: locale)) · previous best \(old)")
+        let (new, old) = (bestValue(news.new, unit: news.unit, locale: locale), bestValue(news.old, unit: news.unit, locale: locale))
+        return DropText(title: title, detail: "\(new) · previous best \(old)", yields: true)
     }
 
     // MARK: Week in review
@@ -297,7 +297,7 @@ enum StatsFormat {
             let weekday = day.formatted(Date.FormatStyle(locale: locale, calendar: calendar, timeZone: calendar.timeZone).weekday(.wide))
             lines.append("Busiest day: \(weekday), \(count(words, locale: locale)) words")
         }
-        if let wpm = r.wpm {
+        if let wpm = r.wpm, wpm > 0 {
             if let gain = r.wpmGain, gain > 0 {
                 lines.append("\(wpm) wpm, \(gain) faster than the four weeks before")
             } else {

@@ -68,8 +68,13 @@ final class StatsModel {
     private(set) var streakChangeFailed: StreakChange?
     /// The week whose review the user dismissed (its first day): hidden at once.
     private(set) var dismissedWeek: String?
-    /// The dismissal could not be saved: the review shows again, and says so.
-    private(set) var reviewDismissFailed = false
+    /// The week whose dismissal could not be saved: its review shows again, and says so.
+    private(set) var reviewDismissFailedWeek: String?
+
+    /// The review showing is one whose dismissal could not be saved.
+    var reviewDismissFailed: Bool {
+        reviewDismissFailedWeek != nil && weekReview?.week == reviewDismissFailedWeek
+    }
 
     /// A change to the streak's pause.
     enum StreakChange: Equatable, Sendable {
@@ -197,7 +202,7 @@ final class StatsModel {
     /// Dismisses last week's review for good: hidden now, kept by the core.
     func dismissReview(_ review: WeekReview) {
         dismissedWeek = review.week
-        reviewDismissFailed = false
+        reviewDismissFailedWeek = nil
         write(.statsReviewDismissed, review.week)
     }
 
@@ -246,6 +251,11 @@ final class StatsModel {
         streakChangeFailed = streakChanging
         streakChanging = nil
         pendingStreak = nil
+        // Its answer was to be the screen's numbers: none came.
+        if ref == latestGet, loadState == .loading {
+            loadState = .failed
+            pendingLoad = nil
+        }
     }
 
     /// stats.rest_days' value for `days`: `none`, or ascending and comma-separated.
@@ -347,6 +357,8 @@ final class StatsModel {
             counted = answer
             loadState = .loaded
             pendingLoad = nil
+            // A pause answered after its time limit did change: it failed only as far as was known.
+            if answer.ref?.hasPrefix("streak-") == true { streakChangeFailed = nil }
         case .milestonesReached(let answer) where answer.ref?.hasPrefix("milestones-") == true:
             // Every check's answer: each milestone is reported once ever. Usually none; several
             // only after a long gap, or from checks that overlapped. One line says the biggest.
@@ -405,8 +417,8 @@ final class StatsModel {
             if failed.command == "setting.set" {
                 _ = earlierEcho(.statsReviewDismissed)
                 // Not kept: the review shows again, and says so.
+                reviewDismissFailedWeek = dismissedWeek
                 dismissedWeek = nil
-                reviewDismissFailed = true
             }
         case .commandFailed(let failed) where Self.settingIDs.contains(failed.id ?? ""):
             if failed.command == "setting.set", let key = Self.settingKey(failed.id) {

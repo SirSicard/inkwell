@@ -239,9 +239,12 @@ private struct DictationCard: View {
                     if let month = StatsFormat.activeDaysThisMonth(d) {
                         Line(text: month)
                     }
-                    if let since = d.streakPausedSince {
-                        Line(text: StatsFormat.paused(since: since, calendar: calendar), secondary: true)
-                    }
+                }
+                // A pause shows before there is a streak to carry, as long as the streak shows.
+                if d.streakHidden != true, let since = d.streakPausedSince {
+                    Line(text: StatsFormat.paused(since: since, calendar: calendar), secondary: true)
+                }
+                if StatsFormat.streak(d) != nil {
                     Line(text: StatsFormat.streakRule(restDays: d.restDays ?? [], calendar: calendar), secondary: true)
                 }
             }
@@ -449,6 +452,12 @@ struct EvenColumns: Layout {
     var rowSpacing: CGFloat
 
     private func columns(_ width: CGFloat?, count: Int) -> (count: Int, width: CGFloat) {
+        Self.columns(width, minimum: minimum, spacing: spacing, count: count)
+    }
+
+    /// How many columns of at least `minimum` fit `width` (at most `count`, at least one), and
+    /// their width.
+    static func columns(_ width: CGFloat?, minimum: CGFloat, spacing: CGFloat, count: Int) -> (count: Int, width: CGFloat) {
         guard let width, width.isFinite else { return (max(1, min(count, 2)), minimum) }
         let fit = max(1, Int((width + spacing) / (minimum + spacing)))
         let n = max(1, min(fit, count))

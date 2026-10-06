@@ -157,6 +157,7 @@ final class DropController {
     private func takeNewNote(live: Bool) {
         guard let note = notes?.note, note.serial != lastNoteSerial else { return }
         lastNoteSerial = note.serial
+        if note.text.yields, noteShowing != nil || noteWaiting != nil { return }
         if live {
             noteWaiting = note
         } else {
