@@ -250,6 +250,7 @@ final class ScreenModels {
         send: @escaping SendCommand,
         calendar: any CalendarAccess = EventKitCalendar(),
         apps: any AppDirectory = WorkspaceApps(),
+        runningApps: any RunningApps = WorkspaceRunningApps(),
         callTitles: any CallTitles = EventKitCallTitles(),
         dataDirectory: URL? = nil,
         modelsDirectory: URL? = nil,
@@ -259,9 +260,13 @@ final class ScreenModels {
         cloud = CloudModel(send: send)
         stats = StatsModel(send: send)
         permissions = PermissionsModel(send: send, calendar: calendar)
-        polish = PolishModel(send: send)
+        let polish = PolishModel(send: send)
+        self.polish = polish
         catalogue = CatalogueModel(send: send)
-        modes = ModesModel(send: send, apps: apps)
+        // A mode's own OK is one of polish's consents; its chip reads polish's switch.
+        modes = ModesModel(
+            send: send, apps: apps, running: runningApps, consent: polish.consent,
+            polishSwitch: { [polish] in polish.preference })
         owed = OwedModel(send: send)
         live = LiveModel(send: send)
         meetings = MeetingModel(send: send, titles: callTitles)
@@ -433,7 +438,7 @@ final class ScreenModels {
     /// Whether a screen shows this failure itself (the rest the controller logs).
     func handles(_ failed: CommandFailed) -> Bool {
         switch failed.command {
-        case "permissions.check", "models.list", "modes.list", "commitment.set_done",
+        case "permissions.check", "models.list", "modes.list", "modes.save", "modes.delete", "commitment.set_done",
              "commitment.not_yet", "note.add", "note.update", "note.delete",
              "meeting.start", "meeting.stop", "meeting.dismiss", "meeting.ask":
             true
@@ -465,8 +470,8 @@ final class ScreenModels {
             // Said under Settings > AI's language model.
             CloudModel.handles(failed)
         case "consent.get", "consent.allow", "consent.revoke":
-            // Shown under the Polish or the summaries toggle, or in the Dictation section for voice
-            // edit (a revoke under Polish).
+            // Shown under the Polish or the summaries toggle, in the Dictation section for voice
+            // edit, or in Settings > Modes for a mode's own OK.
             true
         // Settings > Snippets and Voice commands say so. The key note that could not be read is
         // not shown (there is nothing to say then); it is logged.

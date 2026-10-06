@@ -1376,7 +1376,8 @@ final class ModesModelTests: XCTestCase {
             modes.rows[0].apps.map(\.name),
             ["Example Writer", "WhatsApp", "An app not on this Mac", "Slack", "An app not on this Mac", "Zoom", "Slack"])
         XCTAssertEqual(modes.rows[0].traits, ["Casual", "Clean up speech"])
-        XCTAssertEqual(modes.rows[1].traits, ["Formal", "Clean up speech", "Polish"])
+        XCTAssertEqual(modes.rows[1].traits, ["Formal", "Clean up speech"])
+        XCTAssertNil(modes.rows[1].polish.chip, "polish is on for it, but there is no model: no chip")
         XCTAssertTrue(modes.rows[1].isDefault, "the default is listed last")
     }
 
@@ -1740,7 +1741,7 @@ final class CoreCommandTests: XCTestCase {
         XCTAssertEqual(failed.id, "ask:3")
         XCTAssertEqual(failed.message, "couldn't send it: the core is not running")
         XCTAssertFalse(failed.message.contains("private"))
-        guard case .commandFailed(let noID) = CoreCommand.modesList.notSent("x") else {
+        guard case .commandFailed(let noID) = CoreCommand.meetingsRecover.notSent("x") else {
             return XCTFail("not a command.failed")
         }
         XCTAssertNil(noID.id)
@@ -1972,7 +1973,7 @@ final class ScreensCoreContractTests: XCTestCase {
         let onboarding = try answer(.settingGet(.onboardingDone)) { if case .settingValue(let v) = $0 { v } else { nil } }
         XCTAssertEqual(onboarding?.key, "onboarding.done")
         XCTAssertNil(onboarding?.value, "a fresh library has not onboarded")
-        let modes = try answer(.modesList) { if case .modesListed(let m) = $0 { m } else { nil } }
+        let modes = try answer(.modesList(ref: "modes:1")) { if case .modesListed(let m) = $0 { m } else { nil } }
         XCTAssertEqual(modes?.modes.map(\.name), ["Default"])
         let owed = try answer(.commitmentsList) { if case .commitmentsListed(let c) = $0 { c } else { nil } }
         XCTAssertEqual(owed?.items, [])
@@ -2337,11 +2338,13 @@ final class SettingsCardsLayoutTests: XCTestCase {
 
     /// The widest rows: a recorded dictation key, the edit key with the longest name, a provider
     /// with its server, key and model fields, a snippet and a voice command, models downloading,
-    /// waiting and failed with the core's words, and polish's consents with Revoke.
+    /// waiting and failed with the core's words, modes with many apps and their own models'
+    /// troubles (Confirm…, Allow…), and polish's consents with Revoke.
     private func screens() -> ScreenModels {
         let screens = ScreenModels(send: { _ in }, calendar: FakeCalendar(), apps: WorkspaceApps())
         // Polish on, with an OK on this Mac and one for a cloud provider, each with Revoke.
         screens.polish.apply(event(#"{"type":"consent.state","feature":"polish","on":true,"allowed":true,"to":"on_device","name":"SystemLanguageModel.default","consents":[{"to":"on_device"},{"to":"cloud","name":"OpenRouter","endpoint":"https://openrouter.ai/api/v1"}]}"#))
+        screens.modes.apply(event(WideModes.listing))
         screens.dictation.apply(event(#"{"type":"setting.value","key":"dictation.enabled","value":"on"}"#))
         screens.dictation.apply(event(#"{"type":"setting.value","key":"dictation.key","value":"ctrl+shift+space"}"#))
         screens.dictation.apply(event(#"{"type":"setting.value","key":"dictation.edit_key","value":"right_command"}"#))
@@ -3102,7 +3105,7 @@ final class CoreControllerCommandTests: XCTestCase {
         XCTAssertEqual(logged.messages, [], "nothing was dropped")
 
         // After the stop, a command has nowhere to go: said, never silently dropped.
-        core.send(.modesList)
+        core.send(.modesList(ref: "modes:1"))
         XCTAssertEqual(logged.messages.count, 1)
         XCTAssertTrue(logged.messages[0].contains("modes.list"), logged.messages[0])
     }
