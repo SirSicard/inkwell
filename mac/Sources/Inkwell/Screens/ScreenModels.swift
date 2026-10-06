@@ -28,6 +28,8 @@ final class OnboardingModel {
     /// The app is quitting: the sheet is ended so AppKit can quit, and nothing is recorded.
     private(set) var quitting = false
     var step: Step = .welcome
+    /// The Ready step's try-it heard nothing (TryItHint): it says where the microphone is picked.
+    var notHearing = false
 
     @ObservationIgnored private let send: SendCommand
     @ObservationIgnored private let log: ScreenLog

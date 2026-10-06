@@ -2813,6 +2813,20 @@ final class OnboardingLayoutTests: XCTestCase {
     /// longest status under it). Polish's own line is its longest kind, Apple Intelligence still
     /// being checked; every one of them is a single line at this width. The guide is there: the
     /// open step is taller than the closed one by the guide's height and more.
+    /// The Ready step with its "Not hearing you?" hint, and a permission still off, fits the
+    /// step (the orb's stand-in is its height).
+    func testTheReadyStepWithItsHintFitsTheSheet() {
+        let screens = ScreenModels(send: { _ in }, calendar: FakeCalendar(), apps: WorkspaceApps())
+        screens.onboarding.notHearing = true
+        let store = CoreStore()
+        let step = FirstRunReadyStep(orb: Color.clear.frame(height: readyOrbHeight))
+            .environment(ShellInk(store: store))
+        let room = OnboardingView.stepRoom
+        let size = needed(step, screens: screens)
+        XCTAssertLessThanOrEqual(size.height, room.height, "the step's height")
+        XCTAssertLessThanOrEqual(size.width, room.width + 0.5, "the step's width")
+    }
+
     func testThePolishStepFitsTheSheetWithGroqsGuideOpen() {
         let guide = NSHostingController(rootView: GroqKeyGuide(place: .firstRun))
             .sizeThatFits(in: CGSize(width: OnboardingView.stepRoom.width, height: 10_000))

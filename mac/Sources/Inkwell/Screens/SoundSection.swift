@@ -44,7 +44,8 @@ struct SoundSection: View {
                 HStack(spacing: 12) {
                     Button(sound.isTesting ? "Stop" : "Test") { sound.toggleTest() }
                         .accessibilityLabel(sound.isTesting ? "Stop the microphone test" : "Test the microphone")
-                        .disabled(sound.devices?.inputs.isEmpty ?? false)
+                        // Stop always works: the last mic may go mid-test.
+                        .disabled(!sound.isTesting && (sound.devices?.inputs.isEmpty ?? false))
                     LevelMeter(level: sound.level, live: sound.isTesting, animated: !reduceMotion)
                         .frame(maxWidth: 240)
                 }
@@ -54,10 +55,15 @@ struct SoundSection: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        // A chosen mic that left is said, not only shown.
+        // A chosen mic that left is said, not only shown, and so is how a test went.
         .onChange(of: sound.missingLine) { _, line in
             if let line {
                 AccessibilityNotification.Announcement(line).post()
+            }
+        }
+        .onChange(of: sound.test) { _, test in
+            if case .ended = test {
+                AccessibilityNotification.Announcement(sound.testLine).post()
             }
         }
     }

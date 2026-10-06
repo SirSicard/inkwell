@@ -17,8 +17,6 @@ struct OnboardingView: View {
     @State private var demo = InkState.idle
     /// The Polish step's own-key rows are open (closed at first: skipping them costs nothing).
     @State private var ownKey = false
-    /// The try-it heard nothing (TryItHint): the Ready step says where the microphone is picked.
-    @State private var notHearing = false
 
     /// The sheet's size and margin. Each step fits it without scrolling (OnboardingLayoutTests):
     /// 560 high, not 520, so the Speech models step holds two failures in the core's long words
@@ -231,21 +229,36 @@ struct OnboardingView: View {
     /// With no speech model a hold would type nothing: the step says a model is needed, with
     /// Today's download of the recommended set (its size and hosts shown), and no try-it.
     private var ready: some View {
+        FirstRunReadyStep(orb: orb(ink.state, height: readyOrbHeight, live: true))
+    }
+}
+
+/// The Ready step's orb's height.
+let readyOrbHeight: CGFloat = 150
+
+/// The Ready step: how to dictate, the try-it with the orb answering the voice (`orb`, the sheet's;
+/// the layout test passes a stand-in of its height), and the hint when it hears nothing.
+struct FirstRunReadyStep<Orb: View>: View {
+    @Environment(ScreenModels.self) private var screens
+    @Environment(ShellInk.self) private var ink
+    let orb: Orb
+
+    var body: some View {
         let dictation = screens.dictation
         let speech = screens.catalogue.speech
-        return VStack(alignment: .leading, spacing: 12) {
-            title("Ready")
+        VStack(alignment: .leading, spacing: 12) {
+            OnboardingView.title("Ready")
             if let needed = SpeechModels.readyLine(speech) {
                 SpeechModelLine(line: needed, lineFont: Typography.body)
                 Text("Inkwell lives in the menu bar; this window opens from there.")
             } else {
                 Text("Hold \(DictationModel.key(dictation.key)?.name ?? dictation.key), say something, and let go. Inkwell lives in the menu bar; this window opens from there.")
-                orb(ink.state, height: 150, live: true)
+                orb
                 Text(ink.state == .dictating ? "Listening…" : "Try it now: the orb answers your voice.")
                     .font(Typography.caption)
                     .foregroundStyle(Theme.secondaryText)
                     .frame(maxWidth: .infinity)
-                if notHearing {
+                if screens.onboarding.notHearing {
                     Text(TryItHint.text)
                         .font(Typography.caption)
                         .foregroundStyle(Theme.text)
@@ -275,11 +288,15 @@ struct OnboardingView: View {
         .onChange(of: ink.store.lastDictation) { _, outcome in
             if let hint = TryItHint.after(outcome) { setNotHearing(hint) }
         }
+        // Words came after all (a pause past 5 s): it hears you.
+        .onChange(of: ink.store.liveDictation?.partial) { _, words in
+            if TryItHint.heard(words) { setNotHearing(false) }
+        }
     }
 
     private func setNotHearing(_ on: Bool) {
-        guard on != notHearing else { return }
-        notHearing = on
+        guard on != screens.onboarding.notHearing else { return }
+        screens.onboarding.notHearing = on
         if on { AccessibilityNotification.Announcement(TryItHint.text).post() }
     }
 }
@@ -295,7 +312,12 @@ enum TryItHint {
     /// Whether a take still held after `silence` has heard nothing.
     static func afterHold(phase: CoreStore.DictationPhase, live: CoreStore.LiveDictation?, hasPartials: Bool) -> Bool {
         guard hasPartials, phase == .listening, let live, !live.edit else { return false }
-        return live.partial?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true
+        return !heard(live.partial)
+    }
+
+    /// Whether live words say the mic hears the user.
+    static func heard(_ words: String?) -> Bool {
+        !(words?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
     }
 
     /// What a take's end says: show (it heard nothing), hide (it typed something), or nil (no news).

@@ -46,8 +46,13 @@ final class SoundModel {
 
     private(set) var devices: Devices?
     private(set) var test: Test = .idle
-    /// The devices could not be read, or a choice could not be saved: said under the picker.
-    private(set) var problem: String?
+    /// The devices could not be listed: gone with the next list.
+    private var listProblem: String?
+    /// A choice the core refused: said until the user picks again (the list read after the
+    /// refusal shows the choice as it really is, and must not hide why it snapped back).
+    private var choiceProblem: String?
+    /// What is said under the picker.
+    var problem: String? { choiceProblem ?? listProblem }
     /// Why the test could not start (a meeting records): said under the button.
     private(set) var testRefused: String?
 
@@ -72,12 +77,29 @@ final class SoundModel {
     /// still connected, and its answer (or refusal) follows.
     func choose(_ id: String) {
         guard let devices, id != devices.input else { return }
-        problem = nil
+        choiceProblem = nil
+        // What records is unknown until the core answers (a stand-in's line would name the new mic
+        // as missing meanwhile), and a test's result was about the mic before.
         self.devices = Devices(
             inputs: devices.inputs, input: id,
             wantedName: devices.inputs.first { $0.id == id }?.name,
-            automatic: devices.automatic, using: devices.using)
+            automatic: devices.automatic, using: nil)
+        forgetTestResult()
         send(.settingSet(.audioInput, id))
+    }
+
+    /// Settings goes away: a running test stops (it would keep the mic open until its time is up).
+    func disappeared() {
+        if isTesting {
+            send(.audioTestStop(ref: Self.stopID))
+        }
+    }
+
+    /// A finished test's line is about the mic it ran on; another mic, or other devices, make it stale.
+    private func forgetTestResult() {
+        if case .ended = test {
+            test = .idle
+        }
     }
 
     var isTesting: Bool {
@@ -105,18 +127,24 @@ final class SoundModel {
 
     func apply(_ event: InkEvent) {
         switch event {
+        case .coreReady, .coreStopped:
+            // A test the core never ended (it stopped, or started again) is over.
+            test = .idle
+            testRefused = nil
         case .audioDevices(let d):
             devices = Devices(inputs: d.inputs, input: d.input, wantedName: d.wanted?.name, automatic: d.automatic, using: d.using)
-            problem = nil
+            listProblem = nil
         case .audioDevicesChanged(let d):
             devices = Devices(inputs: d.inputs, input: d.input, wantedName: d.wanted?.name, automatic: d.automatic, using: d.using)
-        case .audioTestStarted(let started):
+            forgetTestResult()
+        // Only this screen's test (its ref): a late answer to one stopped earlier never ends the next.
+        case .audioTestStarted(let started) where started.ref == Self.testID && isTesting:
             test = .running(mic: started.micName, level: 0)
-        case .audioTestLevel(let level):
+        case .audioTestLevel(let level) where level.ref == Self.testID:
             if case .running(let mic, _) = test {
                 test = .running(mic: mic, level: min(max(level.level, 0), 1))
             }
-        case .audioTested(let tested):
+        case .audioTested(let tested) where tested.ref == Self.testID && isTesting:
             test = .ended(tested.ended, heard: tested.heard, message: tested.message)
         case .commandFailed(let failed) where failed.id == Self.testID:
             test = .idle
@@ -125,11 +153,13 @@ final class SoundModel {
                 : "Couldn't start the test: \(failed.message)"
         case .commandFailed(let failed) where failed.id == Self.stopID:
             // No test was running: the screen already thinks so, or will when audio.tested lands.
+            // (A Stop pressed while the test was still opening can reach the core first; the test
+            // then runs to its end, and the button still offers Stop.)
             break
         case .commandFailed(let failed) where failed.id == Self.devicesID:
-            problem = "Couldn't list the microphones: \(failed.message)"
+            listProblem = "Couldn't list the microphones: \(failed.message)"
         case .commandFailed(let failed) where failed.id == Self.settingID:
-            problem = "Couldn't choose that microphone: \(failed.message)"
+            choiceProblem = "Couldn't choose that microphone: \(failed.message)"
             // The choice as it really is.
             load()
         default:

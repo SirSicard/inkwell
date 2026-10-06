@@ -54,17 +54,27 @@ final class MicNoticeStoreTests: XCTestCase {
         XCTAssertNil(store.micFallback, "the chosen mic is back")
     }
 
-    func testAMeetingsMicThatWentIsSaidUntilTheNewMicIsHeard() {
+    func testTheCoreStoppingLetsGoOfAFallback() {
+        let store = CoreStore()
+        store.apply([event(#"{"type":"audio.input_fallback","wanted":{"id":"pods","name":"AirPods Pro"},"mic_name":"M","mic_transport":"usb"}"#)])
+        store.apply([event(#"{"type":"core.stopped"}"#)])
+        XCTAssertNil(store.micFallback)
+    }
+
+    func testAMeetingsMicThatWentIsKeptForLiveAndMarksTheLineItCameAt() {
         let store = CoreStore()
         store.apply([event(#"{"type":"meeting.started","record":"r","mic_name":"AirPods Pro","mic_transport":"bluetooth","mic_reason":"chosen","far_end":"app"}"#)])
         store.apply([event(#"{"type":"meeting.mic_switched","record":"r","from_name":"AirPods Pro","from_transport":"bluetooth","mic_name":"MacBook Pro Microphone","mic_transport":"built_in","mic_reason":"chosen_missing"}"#)])
-        XCTAssertEqual(store.meeting?.micSwitch, CoreStore.MicSwitch(from: "AirPods Pro", to: "MacBook Pro Microphone"))
+        XCTAssertEqual(store.meeting?.micSwitch, CoreStore.MicSwitch(from: "AirPods Pro", to: "MacBook Pro Microphone", atLine: 0))
         XCTAssertEqual(store.meeting?.micName, "MacBook Pro Microphone")
         XCTAssertEqual(store.meeting?.micReason, .chosenMissing)
         store.apply([event(#"{"type":"meeting.final","record":"r","channel":"far","start_ms":0,"end_ms":900,"text":"Hello"}"#)])
-        XCTAssertNotNil(store.meeting?.micSwitch, "the other side's line says nothing of the mic")
-        store.apply([event(#"{"type":"meeting.final","record":"r","channel":"mic","start_ms":1000,"end_ms":1900,"text":"Hi"}"#)])
-        XCTAssertNil(store.meeting?.micSwitch)
+        XCTAssertNotNil(store.meeting?.micSwitch, "kept: Live says it for the rest of the meeting")
+        let meeting = try? XCTUnwrap(store.meeting)
+        // The Drop says it only until a line comes after it, from either side (a listening-only
+        // meeting would otherwise never show the other side's lines again).
+        let drop = DropText.for(.meeting, dictation: .idle, meeting: meeting, offer: nil, systemAudioOff: false)
+        XCTAssertEqual(drop.detail, "Hello")
     }
 }
 
@@ -95,7 +105,7 @@ final class MicNoticeTextTests: XCTestCase {
         meeting.appName = "Zoom"
         let waiting = DropText.for(.meeting, dictation: .idle, meeting: meeting, offer: nil, systemAudioOff: false, micFallback: fallback)
         XCTAssertEqual(waiting.detail, "AirPods Pro isn't connected. Using MacBook Pro Microphone.")
-        meeting.micSwitch = .init(from: "AirPods Pro", to: "MacBook Pro Microphone")
+        meeting.micSwitch = .init(from: "AirPods Pro", to: "MacBook Pro Microphone", atLine: meeting.ledger.seen)
         let switched = DropText.for(.meeting, dictation: .idle, meeting: meeting, offer: nil, systemAudioOff: false)
         XCTAssertEqual(switched.detail, "AirPods Pro went. Now recording with MacBook Pro Microphone.")
         XCTAssertEqual(switched.tone, .recording)

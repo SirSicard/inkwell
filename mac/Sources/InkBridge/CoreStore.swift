@@ -76,8 +76,8 @@ public final class CoreStore {
         /// The microphone it records, and why that one.
         public var micName: String?
         public var micReason: MicReason?
-        /// Its mic went mid-meeting and another records now (`meeting.mic_switched`): said until
-        /// the new mic's first line.
+        /// Its mic went mid-meeting and another records now (`meeting.mic_switched`). Live says it
+        /// for the rest of the meeting; the Drop until the next line arrives (`MicSwitch.atLine`).
         public var micSwitch: MicSwitch?
         /// What it records as the other side: the app alone, or everything this Mac plays.
         public var farEnd: FarEnd?
@@ -142,10 +142,14 @@ public final class CoreStore {
         public let from: String?
         /// The mic recording now.
         public let to: String
+        /// How many lines the meeting had heard when it switched (its ledger's `seen`): the switch
+        /// is news until a line comes after it.
+        public let atLine: Int
 
-        public init(from: String?, to: String) {
+        public init(from: String?, to: String, atLine: Int = 0) {
             self.from = from
             self.to = to
+            self.atLine = atLine
         }
     }
 
@@ -234,7 +238,8 @@ public final class CoreStore {
     public private(set) var lastDictation: DictationOutcome?
     /// A chosen mic that isn't connected, with the one recording instead: the Drop says so for the
     /// take or meeting it opened for, then it is let go of. Gone too when the devices say the
-    /// chosen mic is back (or the choice changed).
+    /// chosen mic is back (or the choice changed). The core says it once per spell, also for a
+    /// mic test; one said for a test is shown at the next take, which is on the same stand-in.
     public private(set) var micFallback: MicFallback?
     public private(set) var notices: [Notice] = []
 
@@ -284,6 +289,7 @@ public final class CoreStore {
                 : .failed("This app was built against core ABI \(INK_ABI_VERSION), and the core reports \(ready.abi).")
         case .coreStopped:
             status = .stopped
+            micFallback = nil
             meeting = nil
             offer = nil
             listening = nil
@@ -398,7 +404,7 @@ public final class CoreStore {
             updateMeeting(switched.record) {
                 $0.micName = switched.micName
                 $0.micReason = switched.micReason
-                $0.micSwitch = MicSwitch(from: switched.fromName, to: switched.micName)
+                $0.micSwitch = MicSwitch(from: switched.fromName, to: switched.micName, atLine: $0.ledger.seen)
             }
         case .audioInputFallback(let fallback):
             micFallback = MicFallback(wanted: fallback.wanted.name, using: fallback.micName)
@@ -424,8 +430,6 @@ public final class CoreStore {
             updateMeeting(final.record) {
                 $0.partials[final.channel] = nil
                 $0.append(final)
-                // The new mic is heard: the switch has been said long enough.
-                if final.channel == .mic { $0.micSwitch = nil }
             }
         case .meetingStopped(let stopped):
             updateMeeting(stopped.record) {

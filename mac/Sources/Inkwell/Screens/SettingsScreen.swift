@@ -136,7 +136,10 @@ struct SettingsScreen: View {
             screens.storage.measure()
             screens.sound.load()
         }
-        .onDisappear { screens.permissions.screenDisappeared() }
+        .onDisappear {
+            screens.permissions.screenDisappeared()
+            screens.sound.disappeared()
+        }
     }
 
     /// The cards' widest: 760 pt of section inside their padding, as wide as the page was before.

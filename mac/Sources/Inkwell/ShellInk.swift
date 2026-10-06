@@ -160,8 +160,8 @@ struct DropText: Equatable, Sendable {
             } else {
                 "Recording this meeting"
             }
-            // A mic that went mid-call is said over the latest line, until the new mic is heard.
-            let switched = meeting.micSwitch.map(Self.switchLine)
+            // A mic that went mid-call is said over the latest line, until a line comes after it.
+            let switched = meeting.micSwitch.flatMap { $0.atLine == meeting.ledger.seen ? Self.switchLine($0) : nil }
             return DropText(
                 title: ["● REC", source].compactMap { $0 }.joined(separator: " · "),
                 detail: switched ?? latest.flatMap { $0.isEmpty ? nil : $0 } ?? waiting,

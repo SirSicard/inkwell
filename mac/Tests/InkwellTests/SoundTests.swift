@@ -74,7 +74,27 @@ final class SoundModelTests: XCTestCase {
         XCTAssertEqual(sound.problem, "Couldn't choose that microphone: no microphone with that id is connected")
         XCTAssertEqual(sent.commands.last, .audioDevices(ref: SoundModel.devicesID), "the choice as it really is")
         sound.apply(devices())
-        XCTAssertNil(sound.problem, "a fresh answer clears it")
+        XCTAssertEqual(sound.devices?.input, "auto", "snapped back")
+        XCTAssertNotNil(sound.problem, "and still says why")
+        sound.choose("odd")
+        XCTAssertNil(sound.problem, "until the user picks again")
+        // A list that failed is said until a list arrives.
+        sound.apply(event(#"{"type":"command.failed","command":"audio.devices","id":"sound.devices","message":"the audio service is not answering"}"#))
+        XCTAssertEqual(sound.problem, "Couldn't list the microphones: the audio service is not answering")
+        sound.apply(devices())
+        XCTAssertNil(sound.problem)
+    }
+
+    /// While a choice is on its way, nothing is said about what records: the stand-in's line would
+    /// name the new choice as missing.
+    func testAPendingChoiceSaysNothingOfAStandIn() {
+        let sound = SoundModel(send: { _ in })
+        sound.apply(devices(
+            input: "gone", using: #"{"id":"mbp","name":"MacBook Pro Microphone","transport":"built_in","reason":"chosen_missing"}"#,
+            wanted: #"{"id":"gone","name":"Studio Mic","transport":"usb"}"#))
+        XCTAssertNotNil(sound.missingLine)
+        sound.choose("pods")
+        XCTAssertNil(sound.missingLine)
     }
 
     func testAChosenBluetoothMicSaysWhatItCosts() {
@@ -144,6 +164,45 @@ final class SoundModelTests: XCTestCase {
         sound.toggleTest()
         sound.apply(event(#"{"type":"audio.tested","ref":"sound.test","ended":"meeting","heard":true,"peak":0.5}"#))
         XCTAssertEqual(sound.testLine, "Stopped: a meeting started recording.")
+    }
+
+    /// A finished test's result is about the mic it ran on: another choice, or other devices, make
+    /// it go; a running test is left alone.
+    func testATestsResultGoesWithTheMicItWasAbout() {
+        let sound = SoundModel(send: { _ in })
+        sound.apply(devices())
+        sound.toggleTest()
+        sound.apply(event(#"{"type":"audio.tested","ref":"sound.test","ended":"done","heard":true,"peak":0.7}"#))
+        sound.choose("pods")
+        XCTAssertEqual(sound.test, .idle)
+        sound.toggleTest()
+        sound.apply(event(#"{"type":"audio.tested","ref":"sound.test","ended":"done","heard":false,"peak":0}"#))
+        sound.apply(devices(type: "audio.devices_changed"))
+        XCTAssertEqual(sound.test, .idle)
+        sound.toggleTest()
+        sound.apply(event(#"{"type":"audio.test_started","ref":"sound.test","mic_name":"M","mic_transport":"usb","mic_reason":"chosen","seconds":15}"#))
+        sound.apply(devices(type: "audio.devices_changed"))
+        XCTAssertTrue(sound.isTesting, "a running test goes on")
+    }
+
+    /// Only this screen's test, by its ref; a test the core never ended is over when the core
+    /// stops or starts again; leaving Settings stops a running test.
+    func testATestIsMatchedByItsRefAndNeverStuck() {
+        let sent = Sent()
+        let sound = SoundModel(send: sent.send)
+        sound.apply(event(#"{"type":"audio.tested","ref":"sound.test","ended":"stopped","heard":true,"peak":0.5}"#))
+        XCTAssertEqual(sound.test, .idle, "a late end with no test running changes nothing")
+        sound.toggleTest()
+        sound.apply(event(#"{"type":"audio.test_started","ref":"someone-else","mic_name":"M","mic_transport":"usb","mic_reason":"chosen","seconds":15}"#))
+        XCTAssertEqual(sound.test, .starting, "another's test")
+        sound.disappeared()
+        XCTAssertEqual(sent.commands.last, .audioTestStop(ref: SoundModel.stopID), "leaving Settings stops it")
+        sound.apply(event(#"{"type":"core.stopped"}"#))
+        XCTAssertEqual(sound.test, .idle)
+        XCTAssertFalse(sound.isTesting)
+        let before = sent.commands.count
+        sound.disappeared()
+        XCTAssertEqual(sent.commands.count, before, "nothing to stop")
     }
 
     func testATestRefusedWhileAMeetingRecordsSaysItWaits() {
