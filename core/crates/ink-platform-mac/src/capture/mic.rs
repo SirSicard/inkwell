@@ -7,17 +7,22 @@
 #![cfg(target_os = "macos")]
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use ink_audio::RealtimeGuard;
 use ink_core::{
     AudioSink, AudioSource, Channel, Permission, PermissionState, PlatformError, SourceStats,
     StreamFormat, Transport,
 };
-use objc2_core_audio::kAudioObjectPropertyScopeInput;
+use objc2_core_audio::{
+    kAudioDevicePropertyDeviceIsAlive, kAudioObjectPropertyScopeGlobal,
+    kAudioObjectPropertyScopeInput,
+};
 
 use super::hal::{self, HalDevice, ObjectId, capture_format};
 use super::io::{
-    FormatListener, InputContext, IoCounters, IoStats, RunningIo, finish, start_input,
+    ALIVE_PROPERTY, AliveContext, AliveReader, FormatListener, InputContext, IoCounters, IoHal,
+    IoStats, Listeners, RunningIo, SYSTEM_IO, alive_listener, finish, start_input,
 };
 use super::routing;
 use crate::clock::MacClock;
@@ -28,10 +33,17 @@ use crate::permissions;
 /// A Bluetooth headset mic delivers 16 kHz call audio and **digital zeros while the user is
 /// silent**, so a high share of exact zeros is normal on it (see
 /// [`CaptureHealth`](ink_audio::CaptureHealth)); on any other mic, zeros throughout mean no data.
+///
+/// **A mic that goes** (unplugged, a headset switched off) is seen by a listener on the device's
+/// `kAudioDevicePropertyDeviceIsAlive`: the source then reads as [`ended`](AudioSource::ended),
+/// so a meeting opens the mic again elsewhere, and `stop` says the device went.
 pub struct MacMicSource {
-    // Field order is drop order: IO stops before the format listener goes.
+    // Field order is drop order: IO stops before the format and alive listeners go.
     running: Option<RunningIo<InputContext>>,
     listener: Option<FormatListener>,
+    alive: Option<Listeners<AliveContext>>,
+    /// Set by the alive listener (a HAL notification thread) when the device dies.
+    gone: Arc<AtomicBool>,
     device: HalDevice,
     format: StreamFormat,
     clock: MacClock,
@@ -50,6 +62,8 @@ impl MacMicSource {
         Ok(Self {
             running: None,
             listener: None,
+            alive: None,
+            gone: Arc::default(),
             device,
             format,
             clock,
@@ -78,6 +92,40 @@ impl MacMicSource {
 fn input_format(device: &HalDevice) -> Result<StreamFormat, PlatformError> {
     read_input_format(device.id)
         .map_err(|problem| PlatformError::Device(format!("microphone {}: {problem}", device.name)))
+}
+
+/// Listens for `device` dying, marking `gone`, and looks once now (it may have gone since it was
+/// opened).
+pub(crate) fn watch_alive(
+    hal: &'static dyn IoHal,
+    device: ObjectId,
+    read: AliveReader,
+    gone: Arc<AtomicBool>,
+) -> Result<Listeners<AliveContext>, hal::HalError> {
+    // SAFETY: `alive_listener` reads its client data as an `AliveContext`, inside its gate.
+    let listeners = unsafe {
+        Listeners::register_on(
+            hal,
+            device,
+            &ALIVE_PROPERTY,
+            Some(alive_listener),
+            AliveContext::new(read, gone),
+            "listening for the microphone going away",
+        )
+    }?;
+    listeners.context().check_now();
+    Ok(listeners)
+}
+
+/// Whether `device` is alive, from the HAL.
+fn read_alive(device: ObjectId) -> Result<bool, hal::HalError> {
+    hal::get::<u32>(
+        device,
+        kAudioDevicePropertyDeviceIsAlive,
+        kAudioObjectPropertyScopeGlobal,
+        "reading whether the microphone is connected",
+    )
+    .map(|alive| alive != 0)
 }
 
 fn read_input_format(device: ObjectId) -> Result<StreamFormat, String> {
@@ -111,6 +159,19 @@ impl AudioSource for MacMicSource {
         }
         let id = self.device.id;
         self.counters = Arc::default(); // each session is judged on its own
+        self.gone = Arc::default();
+        let alive = watch_alive(
+            &SYSTEM_IO,
+            id,
+            Arc::new(move || read_alive(id)),
+            Arc::clone(&self.gone),
+        )?;
+        if self.gone.load(Ordering::Acquire) {
+            return Err(PlatformError::Device(format!(
+                "the microphone {} is not connected",
+                self.device.name
+            )));
+        }
         let (running, listener) = start_input(
             id,
             self.format,
@@ -123,6 +184,7 @@ impl AudioSource for MacMicSource {
         )?;
         self.running = Some(running);
         self.listener = Some(listener);
+        self.alive = Some(alive);
         Ok(())
     }
 
@@ -137,6 +199,25 @@ impl AudioSource for MacMicSource {
             self.format.sample_rate,
         );
         self.listener = None;
+        self.alive = None;
+        if self.gone.load(Ordering::Acquire) {
+            // The device's going explains whatever teardown said about it.
+            return Err(PlatformError::Device(format!(
+                "the microphone {} went away mid-session after {} frames",
+                self.device.name,
+                self.counters.snapshot().frames
+            )));
+        }
         result
+    }
+
+    /// The device died (the alive listener), the format changed, or a panic stopped delivery:
+    /// nothing more comes until the mic is opened again.
+    fn ended(&self) -> bool {
+        self.running.is_some()
+            && (self.gone.load(Ordering::Acquire) || {
+                let stats = self.counters.snapshot();
+                stats.rate_changes > 0 || stats.panics > 0
+            })
     }
 }
