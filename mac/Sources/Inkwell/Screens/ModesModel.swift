@@ -395,8 +395,6 @@ final class ModeEditor: Identifiable {
     var consentStep: ConsentModel.Destination?
     /// The core refused an app another mode has: the next save moves it (that save only).
     var takeApps = false
-    /// Apps as shown, by identity: looked up once (Launch Services reads files), not at each draw.
-    @ObservationIgnored var labels: [String: AppLabel] = [:]
 
     nonisolated var id: ObjectIdentifier { ObjectIdentifier(self) }
 
@@ -502,9 +500,9 @@ final class ModesModel {
     /// Asked for, or listed, at least once: only then do changes elsewhere read again.
     @ObservationIgnored private var loaded = false
     /// What is waiting for an answer, by ref.
-    @ObservationIgnored private var pendingSave: String?
-    /// The editor that sent it: a refusal that arrives once it has closed is said in the section.
-    @ObservationIgnored private var pendingSaveEditor: ModeEditor?
+    /// Saves waiting for the core, each with the editor that sent it: a refusal that arrives once
+    /// its editor has closed is said in the section (another editor may have saved meanwhile).
+    @ObservationIgnored private var pendingSaves: [String: ModeEditor] = [:]
     /// Apps as shown, by identity (lowercased): Launch Services is asked once per app.
     @ObservationIgnored private var labelCache: [String: AppLabel] = [:]
     @ObservationIgnored private var pendingDelete: (ref: String, name: String)?
@@ -603,10 +601,17 @@ final class ModesModel {
     /// The editor's draft, as a take would find it once saved: a model just picked (or confirmed)
     /// is recorded where it sends now.
     func polishState(_ editor: ModeEditor, polish: Bool? = nil, ignoringSwitch: Bool = false) -> PolishState {
-        let state: PolishModelState? = editor.pinChanged || editor.confirmed ? nil : editor.original?.polishModelState
+        let state: PolishModelState? = editor.pinChanged || confirmed(editor) ? nil : editor.original?.polishModelState
         return polishState(
             polish: polish ?? editor.polish, pin: editor.polishModel, modelName: editor.modelNameToSend, pinState: state,
             ignoringSwitch: ignoringSwitch)
+    }
+
+    /// Whether the editor's confirmation still holds: the destination confirmed is where the model
+    /// sends now (a listing since may say it moved again; the save would then be refused).
+    func confirmed(_ editor: ModeEditor) -> Bool {
+        guard let shown = editor.confirmedTo else { return false }
+        return choices.first { $0.id == shown.id }?.destination == shown.destination
     }
 
     /// The line under the editor's Polish switch, when the mode wants polish and nothing would
@@ -624,7 +629,7 @@ final class ModesModel {
     func modelNote(_ editor: ModeEditor) -> (text: String, isProblem: Bool) {
         // The model alone: the mode's switch and AI's are said under the Polish switch.
         let state = polishState(editor, polish: true, ignoringSwitch: true)
-        let asks = editor.polish && (editor.pinChanged || editor.confirmed || !(editor.original?.polish ?? false))
+        let asks = editor.polish && (editor.pinChanged || confirmed(editor) || !(editor.original?.polish ?? false))
         switch state {
         case .missing:
             return ("This model isn't available now, so this mode isn't polished. Pick another.", true)
@@ -711,7 +716,7 @@ final class ModesModel {
     /// Whether the editor offers Confirm: the mode's own model, unchanged, sends elsewhere than when
     /// it was saved, or where was never recorded.
     func canConfirmInEditor(_ editor: ModeEditor) -> Bool {
-        guard !editor.confirmed, !editor.pinChanged else { return false }
+        guard !confirmed(editor), !editor.pinChanged else { return false }
         if case .confirm = polishState(editor, polish: true, ignoringSwitch: true) { return true }
         return false
     }
@@ -792,7 +797,7 @@ final class ModesModel {
     func save() {
         guard let editor, !editor.saving else { return }
         editor.error = nil
-        if editor.polish, editor.pinChanged || editor.confirmed || !(editor.original?.polish ?? false),
+        if editor.polish, editor.pinChanged || confirmed(editor) || !(editor.original?.polish ?? false),
            case .needsOK(let choice, _, own: true) = polishState(editor) {
             editor.consentStep = choice.destination
             return
@@ -841,8 +846,7 @@ final class ModesModel {
         editor.takeApps = false
         save.replaceUnreadable = replaceUnreadable
         let ref = nextRef()
-        pendingSave = ref
-        pendingSaveEditor = editor
+        pendingSaves[ref] = editor
         editor.saving = true
         send(.modesSave(save, ref: ref))
     }
@@ -1016,11 +1020,9 @@ final class ModesModel {
         case .modesListed(let listed):
             show(listed)
             if let ref = listed.ref {
-                if ref == pendingSave {
-                    pendingSave = nil
+                if let sender = pendingSaves.removeValue(forKey: ref) {
                     // Saved: the editor that sent it closes (unless it already did).
-                    if editor === pendingSaveEditor { editor = nil }
-                    pendingSaveEditor = nil
+                    if editor === sender { editor = nil }
                 } else if ref == pendingDelete?.ref {
                     pendingDelete = nil
                     finished()
@@ -1070,6 +1072,15 @@ final class ModesModel {
             reload()
         case .settingValue(let value) where value.key == ShellSetting.llmLocalOnly.rawValue:
             reload()
+        case .coreStopped:
+            // Nothing in flight will be answered: the buttons are back, and nothing waits.
+            pendingSaves.values.forEach { $0.saving = false }
+            pendingSaves = [:]
+            pendingDelete = nil
+            pendingConfirm = nil
+            pendingStartOver = nil
+            pendingOK = nil
+            busy = false
         case .dictationWarningEvent(let warning) where warning.kind == .polishModelMissing:
             // A take found a mode's model gone or moved: show which.
             reload()
@@ -1108,9 +1119,7 @@ final class ModesModel {
         if failure.code == .listUnreadable {
             unreadable = true
         }
-        if id == pendingSave, let sender = pendingSaveEditor {
-            pendingSave = nil
-            pendingSaveEditor = nil
+        if let sender = pendingSaves.removeValue(forKey: id) {
             sender.saving = false
             if failure.code == .appTaken {
                 sender.takeApps = true
@@ -1150,6 +1159,8 @@ final class ModesModel {
 
     private func show(_ listed: ModesListed) {
         self.listed = listed
+        // An app not on this Mac may have been installed since: asked again.
+        labelCache = labelCache.filter { $0.value.installed }
         loaded = true
         failed = false
         unreadable = false

@@ -655,6 +655,54 @@ final class ModesEditorModelTests: XCTestCase {
         XCTAssertNil((sent.saves.last?["mode"] as? [String: Any])?["polish_model_confirm"], "no confirm without a new one")
     }
 
+    /// A confirmation the listing has since overtaken (the model moved again) no longer counts:
+    /// Confirm asks again.
+    func testAConfirmationAListingOvertookAsksAgain() throws {
+        let (modes, _, _) = model([mode("c", "Chat", model: "provider:groq", state: "moved"), defaultMode],
+                                  models: [apple, groq(allowed: true)])
+        modes.edit("c")
+        let editor = try XCTUnwrap(modes.editor)
+        modes.confirmInEditor(editor)
+        XCTAssertTrue(modes.confirmed(editor))
+        let moved = #"{"id":"provider:groq","name":"Groq","model":"llama-3.1-8b-instant","to":"cloud","endpoint":"https://elsewhere.example.com/v1","allowed":true,"blocked_local_only":false}"#
+        modes.apply(listing([mode("c", "Chat", model: "provider:groq", state: "moved"), defaultMode], models: [apple, moved]))
+        XCTAssertFalse(modes.confirmed(editor))
+        XCTAssertTrue(modes.canConfirmInEditor(editor))
+    }
+
+    /// Two editors' saves in flight: each refusal reaches its own sender.
+    func testOverlappingSavesKeepTheirOwnRefusals() throws {
+        let (modes, _, _) = model()
+        modes.edit("c")
+        let first = try XCTUnwrap(modes.editor)
+        first.name = "Casual"
+        modes.save()
+        modes.closeEditor()
+        modes.add()
+        let second = try XCTUnwrap(modes.editor)
+        second.name = ""
+        modes.save()
+        modes.apply(failed("modes.save", id: "modes:1", code: "name_is_style"))
+        XCTAssertEqual(modes.problem, "Your change to \u{201C}Chat\u{201D} wasn't saved. \(ModesModel.saveFailure(.nameIsStyle, editor: first))")
+        modes.apply(failed("modes.save", id: "modes:2", code: "name_blank"))
+        XCTAssertEqual(second.error, "Give the mode a name.")
+    }
+
+    /// The core stopped with something in flight: nothing waits for an answer that won't come.
+    func testACoreThatStoppedLeavesNothingWaiting() throws {
+        let (modes, _, _) = model([mode("c", "Chat"), mode("n", "Notes"), defaultMode])
+        modes.askDelete("c")
+        modes.delete(try XCTUnwrap(modes.deleting))
+        modes.edit("n")
+        let editor = try XCTUnwrap(modes.editor)
+        modes.save()
+        XCTAssertTrue(modes.busy)
+        XCTAssertTrue(editor.saving)
+        modes.apply(event(#"{"type":"core.stopped"}"#))
+        XCTAssertFalse(modes.busy)
+        XCTAssertFalse(editor.saving)
+    }
+
     /// Cancelled while its save was on its way: a refusal is said in the section, not dropped.
     func testASaveRefusedAfterItsEditorClosedIsSaid() throws {
         let (modes, _, _) = model()
@@ -719,17 +767,21 @@ final class ModesEditorModelTests: XCTestCase {
             var asked = 0
             func app(bundleID: String) -> (name: String, icon: NSImage)? {
                 asked += 1
-                return nil
+                return bundleID == "com.apple.mail" ? ("Mail", NSImage()) : nil
             }
         }
         let apps = Counting()
         let modes = ModesModel(send: { _ in }, apps: apps)
-        modes.apply(listing([mode("c", "Chat", apps: ["com.apple.mail"]), defaultMode]))
-        let first = apps.asked
-        XCTAssertEqual(first, 1)
-        for _ in 0..<5 { _ = modes.label("com.apple.mail") }
-        modes.apply(listing([mode("c", "Chat", apps: ["com.apple.mail"]), defaultMode]))
-        XCTAssertEqual(apps.asked, first)
+        modes.apply(listing([mode("c", "Chat", apps: ["com.apple.mail", "com.example.gone"]), defaultMode]))
+        XCTAssertEqual(apps.asked, 2)
+        for _ in 0..<5 {
+            _ = modes.label("com.apple.mail")
+            _ = modes.label("com.example.gone")
+        }
+        XCTAssertEqual(apps.asked, 2, "not at each draw")
+        // A new listing asks again about an app not on this Mac (it may have been installed since).
+        modes.apply(listing([mode("c", "Chat", apps: ["com.apple.mail", "com.example.gone"]), defaultMode]))
+        XCTAssertEqual(apps.asked, 3)
     }
 
     func testAnOKIsMatchedWhateverTheEndpointsTrailingSlash() {

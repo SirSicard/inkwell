@@ -337,7 +337,7 @@ struct ModeEditorSheet: View {
             if modes.canConfirmInEditor(editor) {
                 Button("Confirm") { modes.confirmInEditor(editor) }
                     .accessibilityLabel("Confirm where this mode's model sends")
-            } else if editor.confirmed {
+            } else if modes.confirmed(editor) {
                 caption("Confirmed. Saving records where it sends now.")
             }
         }
