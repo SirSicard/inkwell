@@ -333,6 +333,27 @@ public abstract record CoreCommand
         }
     }
 
+    /// <summary>
+    /// Takes polish's consent for one destination away (Settings > AI lists each): consent.state
+    /// with <paramref name="Ref"/>, or command.failed with it as the id. Revoking the last turns
+    /// polish off.
+    /// </summary>
+    public sealed record ConsentRevoke(LlmFeature Feature, LlmDestination To, string? Endpoint, string Ref) : CoreCommand
+    {
+        public override string Name => "consent.revoke";
+        private protected override IEnumerable<(string, object)> Fields()
+        {
+            yield return ("cmd", Name);
+            yield return ("feature", Wire.Name(Feature));
+            yield return ("to", Wire.Name(To));
+            yield return ("id", Ref);
+            if (Endpoint is not null)
+            {
+                yield return ("endpoint", Endpoint);
+            }
+        }
+    }
+
     /// <summary>Settings > AI's language model: the own-key providers and the one chosen (llm.providers with <paramref name="Ref"/>).</summary>
     public sealed record LlmProviders(string Ref) : CoreCommand
     {

@@ -42,6 +42,37 @@ public sealed record ConsentDestination(LlmDestination Kind, string? Endpoint, s
     };
 }
 
+/// <summary>A destination the user agreed a feature may send to, as consent.state lists it.</summary>
+/// <param name="Kind">On this PC, or a cloud provider.</param>
+/// <param name="Endpoint">For cloud, where it sends: what consent.revoke names.</param>
+/// <param name="Name">For cloud, the provider's name the user agreed to.</param>
+public sealed record ConsentGrant(LlmDestination Kind, string? Endpoint, string? Name)
+{
+    /// <summary>The words for it in Settings > AI: "Models on this PC", or the provider's name.</summary>
+    public string Label => Kind == LlmDestination.OnDevice
+        ? "Models on this PC"
+        : string.IsNullOrEmpty(Name) ? Host(Endpoint ?? "") : Name;
+
+    /// <summary>What going there means for the user's words.</summary>
+    public string Detail => Kind == LlmDestination.OnDevice
+        ? "Your words stay on this PC."
+        : $"Your words leave this PC for {Host(Endpoint ?? "")}.";
+
+    /// <summary>Whether it covers <paramref name="destination"/>: one on this PC covers every model on it; a cloud one, its endpoint.</summary>
+    public bool Covers(ConsentDestination destination)
+    {
+        ArgumentNullException.ThrowIfNull(destination);
+        return Kind == destination.Kind && (Kind == LlmDestination.OnDevice || Trimmed(Endpoint) == Trimmed(destination.Endpoint));
+    }
+
+    /// <summary>An endpoint as the core compares them: without its trailing slashes, which the core drops.</summary>
+    private static string Trimmed(string? endpoint) => (endpoint ?? "").TrimEnd('/');
+
+    /// <summary>An endpoint's host ("api.groq.com"), or the endpoint as it is.</summary>
+    public static string Host(string endpoint) =>
+        Uri.TryCreate(endpoint, UriKind.Absolute, out var uri) && uri.Host.Length > 0 ? uri.Host : endpoint;
+}
+
 /// <summary>The core's state for a feature, as the consent model keeps it.</summary>
 /// <param name="On">The feature's switch.</param>
 /// <param name="Allowed">Whether the consent covers the model the feature would use now.</param>
@@ -49,6 +80,15 @@ public sealed record ConsentDestination(LlmDestination Kind, string? Endpoint, s
 /// <param name="Error">What the core could not read ("couldn't read ...").</param>
 public sealed record ConsentSnapshot(bool On, bool Allowed, ConsentDestination? Destination, string? Error)
 {
+    /// <summary>
+    /// Every destination the user agreed the feature may send to (polish holds one per destination;
+    /// Settings > AI lists them, each with Revoke).
+    /// </summary>
+    public IReadOnlyList<ConsentGrant> Consents { get; init; } = [];
+
+    /// <summary>Whether one of the consents covers <paramref name="destination"/>.</summary>
+    public bool Covers(ConsentDestination destination) => Consents.Any(c => c.Covers(destination));
+
     public static ConsentSnapshot From(ConsentState state)
     {
         ArgumentNullException.ThrowIfNull(state);
@@ -58,7 +98,12 @@ public sealed record ConsentSnapshot(bool On, bool Allowed, ConsentDestination? 
             LlmDestination.Cloud when state.Endpoint is not null => ConsentDestination.Cloud(state.Endpoint, state.Name ?? ""),
             _ => null,
         };
-        return new ConsentSnapshot(state.On, state.Allowed, destination, state.Error);
+        // A cloud consent without its endpoint could not be revoked or matched: left out.
+        var consents = (state.Consents ?? [])
+            .Where(c => c.To == LlmDestination.OnDevice || c.Endpoint is not null)
+            .Select(c => new ConsentGrant(c.To, c.To == LlmDestination.OnDevice ? null : c.Endpoint, c.Name))
+            .ToList();
+        return new ConsentSnapshot(state.On, state.Allowed, destination, state.Error) { Consents = consents };
     }
 }
 
@@ -80,6 +125,8 @@ public enum ConsentFailure
     /// refused): the feature stays as it was.
     /// </summary>
     Allow,
+    /// <summary>A consent could not be revoked: it may still hold.</summary>
+    Revoke,
 }
 
 public sealed class ConsentModel : ObservableModel
@@ -95,6 +142,7 @@ public sealed class ConsentModel : ObservableModel
     /// <summary>The newest consent.get, and the newest consent.allow, for their failures.</summary>
     private string? newestGet;
     private string? newestAllow;
+    private string? newestRevoke;
 
     /// <param name="switchSettingId">The id of the command that turns the feature's switch off (its command.failed carries it).</param>
     public ConsentModel(LlmFeature feature, string switchSettingId, Action<CoreCommand> send)
@@ -177,6 +225,8 @@ public sealed class ConsentModel : ObservableModel
                     return $"Couldn't save the change, so {what} {stays} as {was}.";
                 case ConsentFailure.Allow:
                     return $"Couldn't turn {what} on, so {(meetings ? "they" : "it")} {stays} off. Try again.";
+                case ConsentFailure.Revoke:
+                    return $"Couldn't revoke that, so {what} may still send there. Try again.";
                 default:
                     break;
             }
@@ -379,6 +429,32 @@ public sealed class ConsentModel : ObservableModel
         send(new CoreCommand.ConsentAllow(Feature, destination.Kind, destination.IsOnDevice ? null : destination.Endpoint, key, reference));
     }
 
+    /// <summary>
+    /// The user agreed, in a mode's own step (Settings > Modes), that polish may send to
+    /// <paramref name="destination"/>, a model a mode can pick: the core adds that consent (and
+    /// turns polish's switch on), or fails if that model sends elsewhere now. Returns the command's
+    /// ref, which comes back in its consent.state or as the id of a command.failed: the asker
+    /// matches them and says what failed, so a failure here is not shown under the switch too.
+    /// </summary>
+    public string AllowForMode(ConsentDestination destination)
+    {
+        ArgumentNullException.ThrowIfNull(destination);
+        var reference = NextRef("allow");
+        send(new CoreCommand.ConsentAllow(Feature, destination.Kind, destination.IsOnDevice ? null : destination.Endpoint, null, reference));
+        return reference;
+    }
+
+    /// <summary>Settings > AI's Revoke: takes the consent for one destination away; the others stay.</summary>
+    public void Revoke(ConsentGrant grant)
+    {
+        ArgumentNullException.ThrowIfNull(grant);
+        Failure = null;
+        var reference = NextRef("revoke");
+        newestRevoke = reference;
+        send(new CoreCommand.ConsentRevoke(Feature, grant.Kind, grant.Kind == LlmDestination.OnDevice ? null : grant.Endpoint, reference));
+        Changed();
+    }
+
     /// <summary>The consent step's Cancel (or the step dismissed): nothing is sent.</summary>
     public void Cancel()
     {
@@ -426,6 +502,7 @@ public sealed class ConsentModel : ObservableModel
         {
             "consent.get" => failed.Id?.StartsWith($"consent.get:{feature}:", StringComparison.Ordinal) ?? false,
             "consent.allow" => failed.Id?.StartsWith($"consent.allow:{feature}:", StringComparison.Ordinal) ?? false,
+            "consent.revoke" => failed.Id?.StartsWith($"consent.revoke:{feature}:", StringComparison.Ordinal) ?? false,
             "setting.set" => failed.Id == SwitchSettingId,
             _ => false,
         };
@@ -463,7 +540,7 @@ public sealed class ConsentModel : ObservableModel
                 State = ConsentSnapshot.From(value);
                 beforeOff = null;
                 hasBeforeOff = false;
-                if (Failure is ConsentFailure.Read or ConsentFailure.Write)
+                if (Failure is ConsentFailure.Read or ConsentFailure.Write or ConsentFailure.Revoke)
                 {
                     Failure = null;
                 }
@@ -506,6 +583,9 @@ public sealed class ConsentModel : ObservableModel
                 return true;
             case CommandFailed failed when failed.Id is not null && failed.Id == newestAllow:
                 Failure = ConsentFailure.Allow;
+                return true;
+            case CommandFailed failed when failed.Id is not null && failed.Id == newestRevoke:
+                Failure = ConsentFailure.Revoke;
                 return true;
             case CommandFailed { Command: "llm.choose" } when Agreed is not null:
                 // The choice the agreement waits for was refused (CloudModel says why): it is
