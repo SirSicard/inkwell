@@ -496,8 +496,11 @@ public sealed class CloudModel : ObservableModel
                     .Where(p => p.Id != "on_device")
                     .Select(p => new CloudProvider(p.Id, ProviderName(p.Id), p.DefaultModel, p.Endpoint, p.CustomUrl, p.NeedsKey, p.HasKey))
                     .ToList();
-                var choiceChanged = Chosen != state.Chosen || ChosenModel != state.Model || ChosenBaseUrl != state.BaseUrl;
-                Chosen = state.Chosen;
+                // This PC's model chosen reads as no own-key provider chosen here: the local
+                // language model UI takes it over.
+                var chosen = state.Chosen == "on_device" ? null : state.Chosen;
+                var choiceChanged = Chosen != chosen || ChosenModel != state.Model || ChosenBaseUrl != state.BaseUrl;
+                Chosen = chosen;
                 ChosenModel = state.Model;
                 ChosenBaseUrl = state.BaseUrl;
                 ChosenEndpoint = state.Endpoint;

@@ -44,6 +44,7 @@ public class CatalogueModelTests
         var catalogue = new CatalogueModel(_ => { });
         catalogue.Apply(Ev.Of("""{"type":"models.listed","models":[{"id":"silero-vad-v6-16k","kind":"speech","licence":"MIT","size_bytes":1289603,"installed":false,"jobs":[{"job":"voice_activity","wer":1.5}]},{"id":"qwen3-4b-instruct-2507-q4km","kind":"language","name":"Qwen3 4B Instruct","licence":"Apache-2.0","size_bytes":2497281120,"installed":false,"jobs":[]},{"id":"qwen3-asr-1.7b-q8","licence":"Apache-2.0","size_bytes":2500000000,"installed":true,"jobs":[{"job":"dictation_final","wer":4.59}]}]}"""));
         Assert.Equal(["silero-vad-v6-16k", "qwen3-asr-1.7b-q8"], catalogue.Models.Select(m => m.Id));
+        Assert.Equal(["silero-vad-v6-16k"], catalogue.NotAskedFor.Select(m => m.Id)); // what Download all fetches
     }
 
     [Fact]

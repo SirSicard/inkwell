@@ -858,7 +858,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
         { Composed = true },
         // Windows only, and only when downloaded: the Mac uses Apple's on-device model.
         new("qwen3-4b-instruct", "Qwen3 4B Instruct", "the Qwen team, Alibaba Cloud", "Apache-2.0",
-            "Polish, voice edits and meeting summaries on this PC, once downloaded.",
+            "Polish, voice edits, meeting summaries and Ask on this PC, once downloaded.",
             "Qwen3-4B-Instruct-2507 by the Qwen team, Alibaba Cloud, licensed under the Apache License 2.0. Converted to GGUF by Unsloth on Hugging Face."),
     ];
 
