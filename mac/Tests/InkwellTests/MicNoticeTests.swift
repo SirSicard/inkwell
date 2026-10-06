@@ -43,7 +43,7 @@ final class MicNoticeStoreTests: XCTestCase {
         XCTAssertEqual(store.micFallback, CoreStore.MicFallback(wanted: "AirPods Pro", using: "MacBook Pro Microphone"))
         store.apply([event(#"{"type":"dictation.started","take":1,"edit":false}"#)])
         XCTAssertNotNil(store.micFallback, "said during the take it opened for")
-        store.apply([event(#"{"type":"dictation.discarded","take":1,"reason":"too_short"}"#)])
+        store.apply([event(#"{"type":"dictation.discarded","reason":"too_short"}"#)])
         XCTAssertNil(store.micFallback, "and let go of after it")
 
         store.apply([event(#"{"type":"audio.input_fallback","wanted":{"id":"pods"},"mic_name":"MacBook Pro Microphone","mic_transport":"built_in"}"#)])
