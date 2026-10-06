@@ -33,5 +33,8 @@ public sealed partial class ModelsSection : UserControl
         // Where the accuracy comes from, only when a line shows one.
         SourceLine.Visibility = lines.Any(l => l.Accuracy is not null) ? Visibility.Visible : Visibility.Collapsed;
         DownloadablePanel.Visibility = Model.Models.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        var free = Model.FreeSpaceText(System.Globalization.CultureInfo.CurrentCulture);
+        FreeSpaceLine.Text = free ?? "";
+        FreeSpaceLine.Visibility = free is null ? Visibility.Collapsed : Visibility.Visible;
     }
 }

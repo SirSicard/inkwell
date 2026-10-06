@@ -12,7 +12,7 @@ namespace Inkwell.Core.Screens;
 
 /// <param name="Library">The library database (transcripts, notes, summaries).</param>
 /// <param name="Recordings">Meeting recordings (everything else in the data folder).</param>
-/// <param name="Models">Speech models.</param>
+/// <param name="Models">Speech and language models.</param>
 public readonly record struct StorageSizes(long Library, long Recordings, long Models);
 
 /// <param name="dataDirectory">The core's data folder (InkConfig.DataDir).</param>
@@ -87,12 +87,13 @@ public sealed class StorageModel(
 
     /// <summary>
     /// Measures again when a model's files or a record's recording changed (a model installed, or
-    /// failed and removed what it downloaded; a record deleted): a download Settings started could
-    /// finish while it shows, and the sizes read stale. Only once Settings has measured: nobody
-    /// reads the sizes before. UI thread; the task ends with the measure.
+    /// failed and removed what it downloaded; a model removed, answered by a models.listed with a
+    /// ref; a record deleted): a download Settings started could finish while it shows, and the
+    /// sizes read stale. Only once Settings has measured: nobody reads the sizes before. UI thread;
+    /// the task ends with the measure.
     /// </summary>
     public Task Apply(InkEvent e) =>
-        e is ModelUpdateFinished or RecordDeleted && (Sizes is not null || Failed || measuring) ? Measure() : Task.CompletedTask;
+        e is ModelUpdateFinished or RecordDeleted or ModelsListed { Ref: not null } && (Sizes is not null || Failed || measuring) ? Measure() : Task.CompletedTask;
 
     /// <summary>
     /// Sums the files under <paramref name="data"/>: the library's database files, the models (under

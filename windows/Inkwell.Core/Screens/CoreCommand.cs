@@ -104,6 +104,31 @@ public abstract record CoreCommand
     }
 
     /// <summary>
+    /// Stops <paramref name="Model"/>'s download (one running or queued in the core), only when the
+    /// user asks: it ends with that update's model.update_finished, cancelled, and its part files
+    /// stay for the next download to resume. Its id names the model ("model.cancel:&lt;id&gt;"), so a
+    /// failure (not_downloading) is matched to its row.
+    /// </summary>
+    public sealed record ModelCancel(string Model) : CoreCommand
+    {
+        public override string Name => "model.cancel";
+        private protected override IEnumerable<(string, object)> Fields() =>
+            [("cmd", Name), ("model", Model), ("id", $"{Name}:{Model}")];
+    }
+
+    /// <summary>
+    /// Deletes <paramref name="Model"/>'s files, only after the user confirmed it: models.listed
+    /// with the id as its ref, or a command.failed with it (model_in_use: nothing was deleted). Its
+    /// id names the model ("model.remove:&lt;id&gt;").
+    /// </summary>
+    public sealed record ModelRemove(string Model) : CoreCommand
+    {
+        public override string Name => "model.remove";
+        private protected override IEnumerable<(string, object)> Fields() =>
+            [("cmd", Name), ("model", Model), ("id", $"{Name}:{Model}")];
+    }
+
+    /// <summary>
     /// Loads the job's model and keeps it loaded: answered by model.warmed, model.refused or
     /// model.warm_failed. Its id names the job ("model.warm:dictation_final"), as the Mac's.
     /// </summary>

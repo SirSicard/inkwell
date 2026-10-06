@@ -16,6 +16,14 @@
 // and Retry asks again (the core resumes what it has on disk). A model that does dictation is kept
 // warm once its download ends well (model.warm, as the Mac's), sent before the next download so it
 // never waits for that one.
+//
+// Every model also has Cancel while it downloads or waits (model.cancel for the one the core runs;
+// one still waiting here is only taken off the list) and Remove once it is installed (model.remove,
+// only after the user confirmed it). A cancelled download keeps its part files, so Download picks
+// up where it stopped. A refusal says why on the row: not enough room (the core's needed_bytes and
+// free_bytes, nothing fetched) or the model in use (nothing deleted). The list carries the free
+// space on the volume models go on, and the language model (Windows' polish, voice edit and
+// summaries on this PC) is a row like the speech models.
 using System.Collections.Immutable;
 using System.Globalization;
 using Inkwell.Core.Events;
@@ -56,6 +64,14 @@ public abstract record ModelDownload
 
     /// <summary>It stopped, and why (the core's words).</summary>
     public sealed record Failed(string Message) : ModelDownload;
+
+    /// <summary>The core refused it before fetching anything: the volume has too little room.</summary>
+    /// <param name="NeededBytes">What must be free: what the download still needs, plus the core's margin.</param>
+    /// <param name="FreeBytes">What is free now.</param>
+    public sealed record NoSpace(long NeededBytes, long FreeBytes) : ModelDownload;
+
+    /// <summary>The user cancelled it: its part files are kept, and Download resumes them.</summary>
+    public sealed record Cancelled : ModelDownload;
 }
 
 /// <summary>A catalogue model's row where it can be downloaded (Settings > Models and the first run's models step).</summary>
@@ -64,19 +80,47 @@ public sealed record ModelRow(CatalogueEntry Entry, ModelDownload? Download)
 {
     public string Id => Entry.Id;
 
-    public string Name => CatalogueModel.Name(Entry.Id);
+    public string Name => CatalogueModel.Name(Entry);
+
+    /// <summary>The language model (polish, voice edit and summaries on this PC), not a speech model.</summary>
+    public bool IsLanguage => Entry.Kind == ModelKind.Language;
+
+    /// <summary>Its Cancel was sent and the core has not ended the download yet.</summary>
+    public bool Cancelling { get; init; }
+
+    /// <summary>Its Remove was sent and the core has not answered yet.</summary>
+    public bool Removing { get; init; }
+
+    /// <summary>Why its last Cancel or Remove did nothing, in words; null when there is nothing to say.</summary>
+    public string? Note { get; init; }
+
+    /// <summary>The volume models go on ("C:"), for what a refusal for room says; null when not known.</summary>
+    public string? Volume { get; init; }
 
     /// <summary>Installed: as the catalogue listed it, or by a download this run (before the list is read again).</summary>
     public bool Installed => Entry.Installed || Download is ModelDownload.Installed;
 
-    /// <summary>Not installed and not asked for: its Download shows.</summary>
-    public bool CanDownload => !Installed && Download is null;
+    /// <summary>Not installed and not asked for (or cancelled): its Download shows.</summary>
+    public bool CanDownload => !Installed && Download is null or ModelDownload.Cancelled;
 
-    /// <summary>Its download failed: Retry shows.</summary>
-    public bool CanRetry => Download is ModelDownload.Failed;
+    /// <summary>Its download failed, or was refused for room: Retry shows.</summary>
+    public bool CanRetry => Download is ModelDownload.Failed or ModelDownload.NoSpace;
+
+    /// <summary>It downloads or waits to, and no Cancel is on its way: Cancel shows.</summary>
+    public bool CanCancel => Download is ModelDownload.Waiting or ModelDownload.Running && !Cancelling;
+
+    /// <summary>It is installed, no download of it runs, and no Remove is on its way: Remove shows.</summary>
+    public bool CanRemove => Installed && Download is not (ModelDownload.Waiting or ModelDownload.Running) && !Removing;
 
     /// <summary>Its line: name, licence, size, and whether it is installed.</summary>
     public string Text(IFormatProvider? format = null) => CatalogueModel.Downloadable(Entry with { Installed = Installed }, format);
+
+    /// <summary>
+    /// The first run's line and Settings > AI's: "Qwen3 4B Instruct · Apache-2.0 · 2.32 GB · from
+    /// huggingface.co" (sizes in Windows' units).
+    /// </summary>
+    public string Line(IFormatProvider? format = null) =>
+        $"{Name} · {Entry.Licence} · {StorageModel.Size(Entry.SizeBytes, format)} · from {CatalogueModel.Source(Id)}";
 
     /// <summary>Where it would come from, while it can be downloaded.</summary>
     public string? From => CanDownload ? $"From {CatalogueModel.Source(Id)}" : null;
@@ -84,11 +128,15 @@ public sealed record ModelRow(CatalogueEntry Entry, ModelDownload? Download)
     /// <summary>What its download is doing, or why it failed; null when there is nothing to say.</summary>
     public string? Status(IFormatProvider? format = null) => Download switch
     {
+        ModelDownload.Waiting when Cancelling => "Stopping…",
+        ModelDownload.Running when Cancelling => "Stopping the download…",
         ModelDownload.Waiting => "Waiting for the download before it",
         ModelDownload.Running { DoneBytes: <= 0 } => "Starting the download…",
         ModelDownload.Running running => $"{StorageModel.Size(running.DoneBytes, format)} of {StorageModel.Size(running.TotalBytes, format)}",
         ModelDownload.Failed failed => $"Couldn't download {Name}: {failed.Message}",
-        _ => null,
+        ModelDownload.NoSpace room => CatalogueModel.NoSpaceText(room.NeededBytes, room.FreeBytes, Volume, format),
+        ModelDownload.Cancelled => "Stopped. Download picks up where it left off.",
+        _ => Removing ? "Removing…" : null,
     };
 
     /// <summary>How far its download has got, 0 to 1, while it runs; null otherwise.</summary>
@@ -103,6 +151,21 @@ public sealed record ModelRow(CatalogueEntry Entry, ModelDownload? Download)
     public string RetryName => $"Retry downloading {Name}";
 
     public string ProgressName => $"Downloading {Name}";
+
+    public string CancelName => $"Cancel downloading {Name}";
+
+    public string RemoveName => $"Remove {Name} from this PC";
+
+    /// <summary>What Remove asks before it deletes anything.</summary>
+    public string RemoveQuestion => $"Remove {Name} from this PC?";
+
+    /// <summary>What Remove deletes, said with the question.</summary>
+    public string RemoveDetail(IFormatProvider? format = null) => IsLanguage
+        ? $"Its files ({StorageModel.Size(Entry.SizeBytes, format)}) are deleted. Polish, voice edit and summaries stop using it until it is downloaded again, and nothing else takes its place by itself."
+        : $"Its files ({StorageModel.Size(Entry.SizeBytes, format)}) are deleted. What it does stops until it is downloaded again.";
+
+    /// <summary>The question's button that deletes.</summary>
+    public const string RemoveConfirm = "Remove";
 }
 
 public sealed class CatalogueModel(Action<CoreCommand> send) : ObservableModel
@@ -129,6 +192,12 @@ public sealed class CatalogueModel(Action<CoreCommand> send) : ObservableModel
     private ImmutableList<string> waiting = [];
     /// <summary>The model whose model.update was sent and has not ended.</summary>
     private string? running;
+    /// <summary>Models whose model.cancel was sent, until their download ends.</summary>
+    private ImmutableHashSet<string> cancelling = [];
+    /// <summary>Models whose model.remove was sent, until the core answers.</summary>
+    private ImmutableHashSet<string> removing = [];
+    /// <summary>Why a row's last Cancel or Remove did nothing, by model.</summary>
+    private ImmutableDictionary<string, string> notes = ImmutableDictionary<string, string>.Empty;
 
     /// <summary>The catalogue's models for this OS.</summary>
     public IReadOnlyList<CatalogueEntry> Models { get; private set; } = [];
@@ -139,8 +208,39 @@ public sealed class CatalogueModel(Action<CoreCommand> send) : ObservableModel
     /// <summary>The last models.list failed: the list is not known, which is not the same as empty.</summary>
     public bool Failed { get; private set; }
 
+    /// <summary>The bytes free on the volume models go on, from the last list; null when the OS could not say.</summary>
+    public long? FreeBytes { get; private set; }
+
+    /// <summary>
+    /// The volume models go on, as Windows names it ("C:"): what the free-space line and a refusal
+    /// for room say. Null when it is not a drive letter (the lines then name no volume).
+    /// </summary>
+    public string? Volume { get; set; }
+
+    /// <summary>The drive letter of <paramref name="folder"/> ("C:"), or null for a folder that has none (a share, or none known).</summary>
+    public static string? VolumeOf(string? folder) =>
+        folder is { Length: >= 2 } f && char.IsAsciiLetter(f[0]) && f[1] == ':' ? $"{char.ToUpperInvariant(f[0])}:" : null;
+
+    /// <summary>"47.2 GB free on C:", under the models; null while the free space is not known.</summary>
+    public string? FreeSpaceText(IFormatProvider? format = null) => FreeBytes is long free
+        ? Volume is string volume ? $"{StorageModel.Size(free, format)} free on {volume}" : $"{StorageModel.Size(free, format)} free for models"
+        : null;
+
+    /// <summary>A download refused for room: "Needs 3.40 GB; 1.20 GB free on C:".</summary>
+    public static string NoSpaceText(long needed, long free, string? volume, IFormatProvider? format = null) =>
+        $"Needs {StorageModel.Size(needed, format)}; {StorageModel.Size(free, format)} free{(volume is null ? "" : $" on {volume}")}";
+
     /// <summary>The catalogue's models with their downloads, in the catalogue's order.</summary>
-    public IReadOnlyList<ModelRow> Rows => Models.Select(m => new ModelRow(m, downloads.GetValueOrDefault(m.Id))).ToList();
+    public IReadOnlyList<ModelRow> Rows => Models.Select(m => new ModelRow(m, downloads.GetValueOrDefault(m.Id))
+    {
+        Cancelling = cancelling.Contains(m.Id),
+        Removing = removing.Contains(m.Id),
+        Note = notes.GetValueOrDefault(m.Id),
+        Volume = Volume,
+    }).ToList();
+
+    /// <summary>The language model's row (Windows' own model for polish, voice edit and summaries); null when the catalogue has none.</summary>
+    public ModelRow? LanguageRow => Rows.FirstOrDefault(r => r.IsLanguage);
 
     /// <summary>The models not installed and not asked for yet: what the first run's Download fetches.</summary>
     public IReadOnlyList<CatalogueEntry> NotAskedFor => Rows.Where(r => r.CanDownload).Select(r => r.Entry).ToList();
@@ -177,14 +277,15 @@ public sealed class CatalogueModel(Action<CoreCommand> send) : ObservableModel
     }
 
     /// <summary>
-    /// Downloads every model not installed and not asked for yet, smallest first (the first run's
-    /// Download), as the Mac's does: voice detection and Parakeet (live words, and dictation on a
-    /// PC without a GPU) are in long before Qwen3-ASR's gigabytes.
+    /// Downloads every speech model not installed and not asked for yet, smallest first, as the
+    /// Mac's does: voice detection and Parakeet (live words, and dictation on a PC without a GPU)
+    /// are in long before Qwen3-ASR's gigabytes. Never the language model: that is the user's own
+    /// choice (the first run's, or its row's Download).
     /// </summary>
     public void DownloadMissing()
     {
         var asked = false;
-        foreach (var entry in NotAskedFor.OrderBy(m => m.SizeBytes))
+        foreach (var entry in NotAskedFor.Where(m => m.Kind != ModelKind.Language).OrderBy(m => m.SizeBytes))
         {
             asked |= Ask(entry.Id);
         }
@@ -240,7 +341,52 @@ public sealed class CatalogueModel(Action<CoreCommand> send) : ObservableModel
         }
         downloads = downloads.SetItem(id, new ModelDownload.Waiting());
         waiting = waiting.Add(id);
+        notes = notes.Remove(id);
         return true;
+    }
+
+    /// <summary>
+    /// A row's Cancel: one still waiting here is taken off the list (nothing was sent for it); the
+    /// one the core runs gets model.cancel, and its row says it is stopping until the update ends.
+    /// Nothing for a model that is not downloading.
+    /// </summary>
+    public void Cancel(string id)
+    {
+        ArgumentNullException.ThrowIfNull(id);
+        if (Rows.FirstOrDefault(r => r.Id == id) is not { CanCancel: true })
+        {
+            return;
+        }
+        notes = notes.Remove(id);
+        if (running == id)
+        {
+            cancelling = cancelling.Add(id);
+            send(new CoreCommand.ModelCancel(id));
+        }
+        else
+        {
+            waiting = waiting.Remove(id);
+            downloads = downloads.Remove(id);
+        }
+        Changed();
+    }
+
+    /// <summary>
+    /// A row's Remove, once the user confirmed it: model.remove, and the row says it is removing
+    /// until the core answers with the list (or refuses: the model in use). Nothing for a model
+    /// that is not installed, or downloads.
+    /// </summary>
+    public void Remove(string id)
+    {
+        ArgumentNullException.ThrowIfNull(id);
+        if (Rows.FirstOrDefault(r => r.Id == id) is not { CanRemove: true })
+        {
+            return;
+        }
+        notes = notes.Remove(id);
+        removing = removing.Add(id);
+        send(new CoreCommand.ModelRemove(id));
+        Changed();
     }
 
     /// <summary>Sends the next download when none runs: model == next, the first download of that model.</summary>
@@ -265,6 +411,7 @@ public sealed class CatalogueModel(Action<CoreCommand> send) : ObservableModel
     private void Ended(ModelDownload outcome)
     {
         downloads = downloads.SetItem(running!, outcome);
+        cancelling = cancelling.Remove(running!);
         running = null;
         Pump();
         Changed();
@@ -333,11 +480,18 @@ public sealed class CatalogueModel(Action<CoreCommand> send) : ObservableModel
         _ => id,
     };
 
+    /// <summary>A catalogue model's name: a language model's as the core names it, a speech model's by its id.</summary>
+    public static string Name(CatalogueEntry entry)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+        return entry.Kind == ModelKind.Language && !string.IsNullOrWhiteSpace(entry.Name) ? entry.Name : Name(entry.Id);
+    }
+
     /// <summary>A downloadable model's line: name, licence, size, and whether it is installed.</summary>
     public static string Downloadable(CatalogueEntry entry, IFormatProvider? format = null)
     {
         ArgumentNullException.ThrowIfNull(entry);
-        return $"{Name(entry.Id)} · {entry.Licence} · {StorageModel.Size(entry.SizeBytes, format)} · {(entry.Installed ? "installed" : "not installed")}";
+        return $"{Name(entry)} · {entry.Licence} · {StorageModel.Size(entry.SizeBytes, format)} · {(entry.Installed ? "installed" : "not installed")}";
     }
 
     /// <summary>
@@ -354,7 +508,14 @@ public sealed class CatalogueModel(Action<CoreCommand> send) : ObservableModel
     public static bool Handles(CommandFailed failed)
     {
         ArgumentNullException.ThrowIfNull(failed);
-        return failed.Command is "models.list" or "engine.route" or "model.update";
+        return failed.Command is "models.list" or "engine.route" or "model.update" or "model.cancel" or "model.remove";
+    }
+
+    /// <summary>The model a model.cancel or model.remove failure is about, from its id; null when it names none.</summary>
+    private static string? RowOf(CommandFailed failed)
+    {
+        var prefix = $"{failed.Command}:";
+        return failed.Id is string id && id.StartsWith(prefix, StringComparison.Ordinal) ? id[prefix.Length..] : null;
     }
 
     /// <summary>The job an engine.route failure is about, from its id; null when it names none.</summary>
@@ -366,12 +527,23 @@ public sealed class CatalogueModel(Action<CoreCommand> send) : ObservableModel
         switch (e)
         {
             case ModelsListed listed:
-                // Speech models only: the language models (Windows' on-device polish) have their
-                // own screens, which come with the local language model UI. A list from a core
-                // before them has no kind: speech.
-                Models = listed.Models.Where(m => m.Kind is null or ModelKind.Speech).ToList();
+                // Speech and language models alike (a list from a core before language models has
+                // no kind: speech).
+                Models = listed.Models;
+                FreeBytes = listed.FreeBytes;
                 Listed = true;
                 Failed = false;
+                if (listed.Ref is string reference && removing.FirstOrDefault(m => new CoreCommand.ModelRemove(m).CommandId == reference) is string removed)
+                {
+                    // Removed: the list says so; a download of it this run is history.
+                    removing = removing.Remove(removed);
+                    downloads = downloads.Remove(removed);
+                    // What serves each job may have changed with it.
+                    foreach (var job in Jobs)
+                    {
+                        send(new CoreCommand.EngineRoute(job));
+                    }
+                }
                 Changed();
                 break;
             case CommandFailed failed when failed.Command == "models.list":
@@ -411,12 +583,35 @@ public sealed class CatalogueModel(Action<CoreCommand> send) : ObservableModel
                     {
                         send(new CoreCommand.ModelWarm(Job.DictationFinal));
                     }
-                    Ended(finished.Ok ? new ModelDownload.Installed() : new ModelDownload.Failed(finished.Message ?? NoReasonText));
+                    Ended(finished.Ok ? new ModelDownload.Installed()
+                        : finished.Cancelled == true ? new ModelDownload.Cancelled()
+                        : new ModelDownload.Failed(finished.Message ?? NoReasonText));
                 }
                 break;
             case CommandFailed failed when failed.Command == "model.update" && running is string id && failed.Id == new CoreCommand.ModelUpdate(id, id).CommandId:
-                // Refused before it started (another update holds the model, or it never reached the core).
-                Ended(new ModelDownload.Failed(failed.Message));
+                // Refused before it started: no room (nothing fetched), another update holds the
+                // model, or it never reached the core.
+                Ended(failed is { Code: FailureCode.NotEnoughSpace, NeededBytes: long needed, FreeBytes: long free }
+                    ? new ModelDownload.NoSpace(needed, free)
+                    : new ModelDownload.Failed(failed.Message));
+                break;
+            case CommandFailed failed when failed.Command == "model.cancel" && RowOf(failed) is string cancelled:
+                // No download of it was running (it ended just before): its own end says how. Any
+                // other refusal leaves it running, and the row says so.
+                cancelling = cancelling.Remove(cancelled);
+                if (failed.Code != FailureCode.NotDownloading)
+                {
+                    notes = notes.SetItem(cancelled, $"Couldn't stop the download: {failed.Message}");
+                }
+                Changed();
+                break;
+            case CommandFailed failed when failed.Command == "model.remove" && RowOf(failed) is string kept && removing.Contains(kept):
+                removing = removing.Remove(kept);
+                var name = Models.FirstOrDefault(m => m.Id == kept) is { } entry ? Name(entry) : Name(kept);
+                notes = notes.SetItem(kept, failed.Code == FailureCode.ModelInUse
+                    ? $"{name} is in use, so it wasn't removed. Try again once it's done."
+                    : $"Couldn't remove {name}: {failed.Message}");
+                Changed();
                 break;
             case CoreStopped:
                 shellEngines = shellEngines.Clear();
@@ -429,6 +624,9 @@ public sealed class CatalogueModel(Action<CoreCommand> send) : ObservableModel
                 }
                 waiting = waiting.Clear();
                 running = null;
+                cancelling = cancelling.Clear();
+                // A removal the core never answered: the next list says whether it happened.
+                removing = removing.Clear();
                 Changed();
                 break;
             default:

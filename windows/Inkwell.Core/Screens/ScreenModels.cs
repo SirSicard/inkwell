@@ -48,7 +48,8 @@ public sealed class ScreenModels
         var cal = NoCalendar.Instance;
         Permissions = new PermissionsModel(send, cal);
         Polish = new PolishModel(send);
-        Catalogue = new CatalogueModel(send);
+        // Models go under the library's folder unless kept elsewhere: that volume's free space.
+        Catalogue = new CatalogueModel(send) { Volume = CatalogueModel.VolumeOf(modelsDirectory ?? dataDirectory) };
         // A mode's own OK is one of polish's consents; its chip reads polish's switch.
         Modes = new ModesModel(send, apps, runningApps, Polish.Consent, () => Polish.Preference);
         Owed = new OwedModel(send);

@@ -122,7 +122,7 @@ public sealed class ModelChoices : ObservableModel
             return "Installed";
         }
         var rows = Rows(choice, catalogue);
-        if (rows.FirstOrDefault(r => r.Download is ModelDownload.Failed) is { } failed)
+        if (rows.FirstOrDefault(r => r.CanRetry) is { } failed)
         {
             return failed.Status(format);
         }
@@ -170,7 +170,8 @@ public sealed class ModelChoices : ObservableModel
     private static bool Taken(ModelChoice choice, CatalogueModel catalogue)
     {
         var rows = Rows(choice, catalogue);
-        return rows.Count > 0 && rows.All(r => r.Installed || r.Download is not null and not ModelDownload.Failed);
+        // A failed, refused or cancelled download is not taken: its box can be unticked.
+        return rows.Count > 0 && rows.All(r => r.Installed || r.Download is ModelDownload.Waiting or ModelDownload.Running);
     }
 
     private static List<ModelRow> Rows(ModelChoice choice, CatalogueModel catalogue)
