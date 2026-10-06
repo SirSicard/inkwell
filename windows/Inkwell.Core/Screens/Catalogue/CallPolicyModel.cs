@@ -111,6 +111,10 @@ public sealed class CallPolicyModel(Action<CoreCommand> send, IAppDirectory? app
     public const string StartOverTitle = "Start the list over?";
     public const string StartOverDetail = "Inkwell couldn't read what you chose for each app. Saving this choice starts the list over: every other app follows the default until you choose again.";
     public const string StartOverButton = "Start over and save";
+    /// <summary>Asked each time Always is chosen as the default (an app's own Always is not asked about).</summary>
+    public const string ConfirmAlwaysTitle = "Inkwell will record every call without asking.";
+    public const string ConfirmAlwaysDetail = "Tell the people on your calls.";
+    public const string ConfirmAlwaysButton = "Record Without Asking";
 
     /// <summary>The id of the default's setting commands (CoreCommand gives each setting command one).</summary>
     public static string DefaultSettingId => ShellSetting.MeetingsCallsDefault.CommandId();
@@ -157,7 +161,13 @@ public sealed class CallPolicyModel(Action<CoreCommand> send, IAppDirectory? app
 
     public void Load() => send(new CoreCommand.MeetingsCallsList(NextRef()));
 
-    /// <summary>The default for apps not chosen for.</summary>
+    /// <summary>
+    /// Whether choosing <paramref name="policy"/> as the default asks first: Always records every
+    /// call without asking, so it is confirmed each time it is chosen. Cancelled, the default stays.
+    /// </summary>
+    public bool AsksBeforeDefault(CallPolicy policy) => policy == CallPolicy.Always && Default != CallPolicy.Always;
+
+    /// <summary>The default for apps not chosen for (Settings asks first for Always: <see cref="AsksBeforeDefault"/>).</summary>
     public void SetDefault(CallPolicy policy)
     {
         Failure = null;
