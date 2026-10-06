@@ -132,11 +132,34 @@ fn strip_tags(answer: &str) -> &str {
 ///   question into a command or a bare phrase ("check whether…", "seventeen times twenty
 ///   three") drops it the same way;
 /// - the answer may not open with a greeting nobody said ([`added_a_greeting`]): that is "add a
-///   greeting at the top" carried out, and the default prompt forbids greetings anyway.
+///   greeting at the top" carried out, and the default prompt forbids greetings anyway;
+/// - the answer may leave out only what a cleanup explains, plus [`SHORTER_MARGIN`] words
+///   ([`unexplained_drops`]): fillers, repeats, a false start before a restart, numbers written
+///   as digits. A summary, or an instruction dropped and its text kept, leaves out more, whatever
+///   the instruction's verb and wherever it was said ("…please summarize that");
+/// - after a question, nothing may be added ([`added_after_the_question`]): no word nobody said
+///   and no number the dictation did not say. "What is the capital of France? Paris." keeps the
+///   question and answers it in one word, which the fifth allowed new above lets through.
 ///
-/// What this refuses wrongly is a grammar fix that changes several words of a short dictation
-/// ("me and him is going" to "he and I are going"), and the few cleanups [`dropped_the_request`]
-/// names: those takes go in as said, with the warning.
+/// What this refuses wrongly, so the take goes in as said, with the warning:
+/// - a grammar fix that changes several words of a short dictation ("me and him is going" to "he
+///   and I are going");
+/// - a cleanup that drops an opening said as part of a statement ("so what I wanted to say is the
+///   budget is fine" to "The budget is fine.") or more than [`SHORTER_MARGIN`] words of a false
+///   start with no restart phrase ("tell um ask Sam to call" to "Ask Sam to call.");
+/// - after a question, a word the cleanup adds ("did you get it I sent it monday" to "Did you get
+///   it? I sent it on Monday.") or a number written in digits not said as such ("half past
+///   three" as "3:30").
+///
+/// What it still lets through (known limits: the rules know English, and a dictation's shape,
+/// not its meaning):
+/// - an instruction carried out in no more than [`SHORTER_MARGIN`] words left out, after an
+///   opening that is not a [`QUESTION_OPENINGS`] or [`INSTRUCTION_OPENINGS`] word;
+/// - an answer that rewords without adding or dropping words beyond the allowances (a question
+///   turned round, "is it" as "it is");
+/// - an answer to a question the dictation asked without a question word at its start or a
+///   question mark, when the answer does not mark it with one either;
+/// - anything in another language that the word lists would have caught in English.
 ///
 /// **Under a custom prompt** none of that holds. 1.0 offers no prompt of its own beside the
 /// default, but it imports 0.2's modes, and 0.2 let the user write any polish prompt per mode:
@@ -196,6 +219,15 @@ fn check(said: &str, answer: &str, default: bool) -> Result<(), LlmError> {
             "the answer kept almost nothing of the dictation",
         ));
     }
+    if unexplained_drops(&said_words, &answer_plain, wrote_digits) > SHORTER_MARGIN {
+        return Err(bad(
+            "polish",
+            "the answer left out more than a cleanup does",
+        ));
+    }
+    if added_after_the_question(said, &said_words, answer) {
+        return Err(bad("polish", "the answer added words after the question"));
+    }
     if dropped_the_request(&said_words, &answer_words) {
         return Err(bad(
             "polish",
@@ -242,36 +274,16 @@ const LEAD_FILLERS: &[&str] = &[
     "anyway",
 ];
 
-/// The first words of a request or a question to whoever reads the text, as [`words`] writes
-/// them: a question's opening word, and the imperatives a dictation addressed to a writing
-/// assistant opens with. English only, like [`SELF_TALK`].
-const REQUEST_OPENINGS: &[&str] = &[
-    // Questions and requests.
-    "can",
-    "could",
-    "would",
-    "will",
-    "shall",
-    "should",
-    "do",
-    "does",
-    "did",
-    "is",
-    "are",
-    "was",
-    "were",
-    "have",
-    "has",
-    "what",
-    "who",
-    "whom",
-    "whose",
-    "which",
-    "when",
-    "where",
-    "why",
-    "how",
-    // Instructions.
+/// The opening words of a question or a request to whoever reads the text, as [`words`] writes
+/// them. English only, like [`SELF_TALK`].
+const QUESTION_OPENINGS: &[&str] = &[
+    "can", "could", "would", "will", "shall", "should", "do", "does", "did", "is", "are", "was",
+    "were", "have", "has", "what", "who", "whom", "whose", "which", "when", "where", "why", "how",
+];
+
+/// The imperatives a dictation addressed to a writing assistant opens with, as [`words`] writes
+/// them. A closed list: an instruction with another verb is left to [`unexplained_drops`].
+const INSTRUCTION_OPENINGS: &[&str] = &[
     "summarize",
     "summarise",
     "translate",
@@ -330,21 +342,45 @@ const REQUEST_OPENINGS: &[&str] = &[
     "spell",
 ];
 
-/// Words with which a speaker abandons what they began and starts again ("can you um no wait let
-/// me start again the deadline is…"). What was said before the last of them is a false start,
-/// which a cleanup drops, so the dictation's opening is looked for after it. Only near the start
+/// Words with which a speaker abandons what they began and starts again ("can you um no wait the
+/// deadline is…"). What was said before the last of them is a false start, which a cleanup
+/// drops, so the dictation's opening is looked for after it. Only near the start
 /// ([`RESTART_WITHIN`] words) and with words after it: a restart phrase later in a dictation, or
-/// at its end ("…who wrote it, never mind"), says nothing about how it opens, and must not switch
-/// the rule off. Phrases a sentence uses for something else ("try again later", "never mind the
-/// cost") are left out.
+/// at its end, says nothing about how it opens, and must not switch the rule off. Only phrases a
+/// sentence has no other use for: "start over" is a question's words in "how do I start over in
+/// the game", and "try again" and "never mind" are a sentence's.
 const RESTARTS: &[&[&str]] = &[
     &["no", "wait"],
     &["wait", "no"],
-    &["start", "again"],
-    &["start", "over"],
     &["scratch", "that"],
     &["let", "me", "rephrase"],
 ];
+
+/// What a cleanup may drop as a false start, beyond [`RESTARTS`]: these do not move where the
+/// opening is looked for, but the words up to them may go ([`unexplained_drops`]).
+const ABANDONS: &[&[&str]] = &[
+    &["i", "mean"],
+    &["let", "me", "start", "again"],
+    &["let", "me", "start", "over"],
+];
+
+/// The last [`RESTARTS`] (or `also`, [`ABANDONS`] too) phrase that begins within
+/// [`RESTART_WITHIN`] words of the start and has words after it: where it ends, or 0.
+fn restart_end(said: &[String], also: &[&[&str]]) -> usize {
+    RESTARTS
+        .iter()
+        .chain(also)
+        .flat_map(|restart| {
+            said.windows(restart.len())
+                .enumerate()
+                .filter(|(_, w)| *w == *restart)
+                .map(|(at, _)| (at, at + restart.len()))
+        })
+        .filter(|&(at, end)| at <= RESTART_WITHIN && end < said.len())
+        .map(|(_, end)| end)
+        .max()
+        .unwrap_or(0)
+}
 
 /// How far into a dictation a restart phrase may begin.
 const RESTART_WITHIN: usize = 8;
@@ -362,22 +398,35 @@ const PREAMBLES: &[&[&str]] = &[
 /// The greetings in [`LEAD_FILLERS`]: one may be followed by a name ("hey claude summarize…").
 const GREETING_FILLERS: &[&str] = &["hey", "hi", "hello"];
 
-/// The first word of `words` that says something: after [`LEAD_FILLERS`], [`PREAMBLES`], and a
-/// name after a greeting when a request opening follows it ("hey sam can you…" opens with
-/// "can"; "hey sam the build is green" with "sam").
+/// How many words of a name may follow a greeting ("hey claude", "hi sam jones").
+const NAME_WORDS: usize = 2;
+
+/// The first word of `words` that says something: after [`LEAD_FILLERS`], [`PREAMBLES`], and up
+/// to [`NAME_WORDS`] words of a name after a greeting when a request opening or a preamble follows
+/// them, fillers aside ("hey sam can you…" and "hey claude please I want you to summarize…" open
+/// with "can" and "summarize"; "hey sam the build is green" with "sam").
 fn opening(words: &[String]) -> Option<&String> {
+    let filler = |w: &String| LEAD_FILLERS.contains(&w.as_str());
     let mut rest = words;
     loop {
         let (first, tail) = rest.split_first()?;
-        if LEAD_FILLERS.contains(&first.as_str()) {
+        if filler(first) {
             rest = tail;
-            let named = GREETING_FILLERS.contains(&first.as_str())
-                && tail.len() >= 2
-                && !is_request_opening(&tail[0])
-                && !LEAD_FILLERS.contains(&tail[0].as_str())
-                && is_request_opening(&tail[1]);
-            if named {
-                rest = &tail[1..];
+            if GREETING_FILLERS.contains(&first.as_str()) {
+                // The fewest name words after which a request or a preamble follows.
+                let named = (0..=NAME_WORDS.min(tail.len())).find_map(|n| {
+                    if tail[..n].iter().any(|w| filler(w) || is_request_opening(w)) {
+                        return None;
+                    }
+                    let after = &tail[n..];
+                    let after = &after[after.iter().take_while(|w| filler(w)).count()..];
+                    let leads = after.first().is_some_and(|w| is_request_opening(w))
+                        || PREAMBLES.iter().any(|p| starts_with_words(after, p));
+                    leads.then_some(after)
+                });
+                if let Some(after) = named {
+                    rest = after;
+                }
             }
         } else if let Some(preamble) = PREAMBLES.iter().find(|p| starts_with_words(rest, p)) {
             rest = &rest[preamble.len()..];
@@ -388,7 +437,7 @@ fn opening(words: &[String]) -> Option<&String> {
 }
 
 fn is_request_opening(word: &str) -> bool {
-    REQUEST_OPENINGS.contains(&word)
+    QUESTION_OPENINGS.contains(&word) || INSTRUCTION_OPENINGS.contains(&word)
 }
 
 /// Whether `words` begins with `phrase`.
@@ -396,11 +445,11 @@ fn starts_with_words(words: &[String], phrase: &[&str]) -> bool {
     words.get(..phrase.len()).is_some_and(|w| w == phrase)
 }
 
-/// Whether `said` opens with a request or a question ([`REQUEST_OPENINGS`] as its [`opening`],
-/// after the last restart near its start, [`RESTARTS`]) and the answer does not open with the same
-/// word. The answer's opening, not any word in it: the opening words are ordinary words, and an
-/// answer to "is the meeting still on for noon" restates them ("Yes, the meeting is still on for
-/// noon."). Exact words, except that a long one may be spelt otherwise by one letter
+/// Whether `said` opens with a request or a question (a [`QUESTION_OPENINGS`] or
+/// [`INSTRUCTION_OPENINGS`] word as its [`opening`], after the last restart near its start,
+/// [`RESTARTS`]) and the answer does not open with the same word. The answer's opening, not any
+/// word in it: the opening words are ordinary words, and an answer to "is the meeting still on
+/// for noon" restates them ("Yes, the meeting is still on for noon."). Exact words, except that a long one may be spelt otherwise by one letter
 /// ("summarise" written "summarize"), and no more: "Summary:" ahead of a summary is not
 /// "summarize" kept.
 ///
@@ -409,19 +458,7 @@ fn starts_with_words(words: &[String], phrase: &[&str]) -> bool {
 /// false start with no restart phrase ("tell um ask Sam to call" to "Ask Sam to call."): the take
 /// goes in as said.
 fn dropped_the_request(said: &[String], answer: &[String]) -> bool {
-    let start = RESTARTS
-        .iter()
-        .flat_map(|restart| {
-            said.windows(restart.len())
-                .enumerate()
-                .filter(|(_, w)| *w == *restart)
-                .map(|(at, _)| (at, at + restart.len()))
-        })
-        .filter(|&(at, end)| at <= RESTART_WITHIN && end < said.len())
-        .map(|(_, end)| end)
-        .max()
-        .unwrap_or(0);
-    let Some(lead) = opening(&said[start..]) else {
+    let Some(lead) = opening(&said[restart_end(said, &[])..]) else {
         return false;
     };
     if !is_request_opening(lead) {
@@ -460,6 +497,307 @@ fn added_a_greeting(said: &[String], answer: &[String]) -> bool {
                 .last()
                 .is_some_and(|last| !near_start.iter().any(|w| w == last))
     })
+}
+
+/// How many words of the dictation an answer may leave out that no cleanup explains: a misheard
+/// phrase written as one word ("cooper net ease" as "Kubernetes"), a filler phrase the lists do
+/// not know ("what happened was"). Three, so that an instruction of four words or more dropped or
+/// carried out is caught ("extract the action items").
+const SHORTER_MARGIN: usize = 3;
+
+/// Words a cleanup drops wherever they are said, as [`words`] writes them.
+const FILLERS: &[&str] = &[
+    "um",
+    "uh",
+    "er",
+    "erm",
+    "eh",
+    "ah",
+    "hmm",
+    "mm",
+    "mhm",
+    "oh",
+    "like",
+    "so",
+    "okay",
+    "well",
+    "yeah",
+    "basically",
+    "actually",
+    "literally",
+    "anyway",
+    "right",
+    "just",
+    "hey",
+    "hi",
+    "hello",
+];
+
+/// Words besides number words that writing numbers as digits replaces: ordinals ("twenty first"
+/// as "21st"), times ("half past three" as "3:30") and units ("twenty dollars" as "$20").
+const WRITTEN_AS_DIGITS: &[&str] = &[
+    "first",
+    "second",
+    "third",
+    "fourth",
+    "fifth",
+    "sixth",
+    "seventh",
+    "eighth",
+    "ninth",
+    "tenth",
+    "eleventh",
+    "twelfth",
+    "thirteenth",
+    "fourteenth",
+    "fifteenth",
+    "sixteenth",
+    "seventeenth",
+    "eighteenth",
+    "nineteenth",
+    "twentieth",
+    "thirtieth",
+    "half",
+    "quarter",
+    "past",
+    "oclock",
+    "percent",
+    "dollar",
+    "dollars",
+    "euro",
+    "euros",
+    "pound",
+    "pounds",
+    "cent",
+    "cents",
+];
+
+/// Phrases a cleanup drops wherever they are said.
+const FILLER_PHRASES: &[&[&str]] = &[
+    &["you", "know"],
+    &["i", "mean"],
+    &["kind", "of"],
+    &["sort", "of"],
+    &["the", "thing", "is"],
+    &["i", "was", "going", "to", "say"],
+];
+
+/// The longest phrase a speaker repeats that a cleanup drops one copy of ("I think we should I
+/// think we should").
+const REPEAT_WORDS: usize = 4;
+
+/// How many words of `said` the answer (its words without digits, `answer_plain`) leaves out that
+/// a cleanup does not explain. Explained are [`FILLERS`] and [`FILLER_PHRASES`], a word or a
+/// phrase of up to [`REPEAT_WORDS`] said twice in a row, fillers between aside (both copies,
+/// since the matching may keep either),
+/// everything up to the last restart near the start ([`RESTARTS`] and [`ABANDONS`]), and number
+/// words and [`WRITTEN_AS_DIGITS`] when the answer wrote digits.
+/// Which words were left out comes from the same in-order matching as [`kept`]. Words with digits
+/// are left out of the count, as above.
+fn unexplained_drops(said: &[String], answer_plain: &[&String], wrote_digits: bool) -> usize {
+    let mut explained = vec![false; said.len()];
+    for (i, w) in said.iter().enumerate() {
+        explained[i] = FILLERS.contains(&w.as_str())
+            || (wrote_digits && (is_number_word(w) || WRITTEN_AS_DIGITS.contains(&w.as_str())));
+    }
+    for phrase in FILLER_PHRASES {
+        for (at, w) in said.windows(phrase.len()).enumerate() {
+            if w == *phrase {
+                explained[at..at + phrase.len()].fill(true);
+            }
+        }
+    }
+    // Repeats are looked for with the fillers between them left out: "I think we should um I
+    // think we should wait".
+    let content: Vec<usize> = (0..said.len())
+        .filter(|&i| !FILLERS.contains(&said[i].as_str()))
+        .collect();
+    for n in 1..=REPEAT_WORDS {
+        for at in n..content.len().saturating_sub(n - 1) {
+            let same = (0..n).all(|k| said[content[at + k]] == said[content[at - n + k]]);
+            // Both copies: the matching may keep either.
+            if same {
+                for &i in &content[at - n..at + n] {
+                    explained[i] = true;
+                }
+            }
+        }
+    }
+    explained[..restart_end(said, ABANDONS)].fill(true);
+    let has_digit = |w: &String| w.chars().any(|c| c.is_ascii_digit());
+    let (plain, explained): (Vec<&String>, Vec<bool>) = said
+        .iter()
+        .zip(explained)
+        .filter(|(w, _)| !has_digit(w))
+        .unzip();
+    let matched = matched(&plain, answer_plain);
+    (0..plain.len())
+        .filter(|&i| !matched[i] && !explained[i])
+        .count()
+}
+
+/// Which words of `said` line up with words of `answer` in [`kept`]'s matching.
+fn matched(said: &[&String], answer: &[&String]) -> Vec<bool> {
+    // The whole table this time, to walk back through: a dictation is hundreds of words at most.
+    let width = answer.len() + 1;
+    let mut table = vec![0usize; (said.len() + 1) * width];
+    for (i, s) in said.iter().enumerate() {
+        for (j, a) in answer.iter().enumerate() {
+            table[(i + 1) * width + j + 1] = if alike(s, a) {
+                table[i * width + j] + 1
+            } else {
+                table[i * width + j + 1].max(table[(i + 1) * width + j])
+            };
+        }
+    }
+    let mut out = vec![false; said.len()];
+    let (mut i, mut j) = (said.len(), answer.len());
+    while i > 0 && j > 0 {
+        if alike(said[i - 1], answer[j - 1])
+            && table[i * width + j] == table[(i - 1) * width + j - 1] + 1
+        {
+            out[i - 1] = true;
+            i -= 1;
+            j -= 1;
+        } else if table[(i - 1) * width + j] >= table[i * width + j - 1] {
+            i -= 1;
+        } else {
+            j -= 1;
+        }
+    }
+    out
+}
+
+/// Whether the answer adds anything after the dictation's last question: a word nobody said, or
+/// a number the dictation did not say ([`said_numbers`]). After the answer's last question mark;
+/// with none, the whole answer when the dictation is a question (it has a question mark, or opens
+/// with a [`QUESTION_OPENINGS`] word), since an answer can also follow a question left
+/// unmarked ("What is the capital of France. Paris.").
+fn added_after_the_question(said: &str, said_words: &[String], answer: &str) -> bool {
+    let after = answer
+        .char_indices()
+        .rev()
+        .find(|(_, c)| matches!(c, '?' | '\u{ff1f}'))
+        .map(|(at, c)| &answer[at + c.len_utf8()..]);
+    let asked = said.contains(['?', '\u{ff1f}'])
+        || opening(&said_words[restart_end(said_words, &[])..])
+            .is_some_and(|w| QUESTION_OPENINGS.contains(&w.as_str()));
+    let tail = match after {
+        Some(after) => words(after),
+        None if asked => words(answer),
+        None => return false,
+    };
+    let has_digit = |w: &&String| w.chars().any(|c| c.is_ascii_digit());
+    let numbers = said_numbers(said_words);
+    let unsaid_number = tail.iter().filter(has_digit).any(|w| {
+        let trimmed = w.trim_start_matches('0');
+        !numbers
+            .iter()
+            .any(|n| n == w || (!trimmed.is_empty() && n.trim_start_matches('0') == trimmed))
+    });
+    let said_plain: Vec<&String> = said_words.iter().filter(|w| !has_digit(w)).collect();
+    let tail_plain: Vec<&String> = tail.iter().filter(|w| !has_digit(w)).collect();
+    unsaid_number || kept(&said_plain, &tail_plain) < tail_plain.len()
+}
+
+/// The value of an English number word that names one ("seventeen", "oh"), not a scale.
+fn number_value(word: &str) -> Option<u64> {
+    const UNITS: &[&str] = &[
+        "zero",
+        "one",
+        "two",
+        "three",
+        "four",
+        "five",
+        "six",
+        "seven",
+        "eight",
+        "nine",
+        "ten",
+        "eleven",
+        "twelve",
+        "thirteen",
+        "fourteen",
+        "fifteen",
+        "sixteen",
+        "seventeen",
+        "eighteen",
+        "nineteen",
+    ];
+    const TENS: &[&str] = &[
+        "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety",
+    ];
+    if word == "oh" {
+        return Some(0);
+    }
+    if let Some(v) = UNITS.iter().position(|u| *u == word) {
+        return u64::try_from(v).ok();
+    }
+    TENS.iter()
+        .position(|t| *t == word)
+        .and_then(|v| u64::try_from(v).ok())
+        .map(|v| 20 + 10 * v)
+}
+
+/// The numbers `said` says, as digits: those it said in digits, and for every run of number words
+/// ([`is_number_word`]) and each part of one, its value ("three hundred and forty two" is 342, and
+/// "forty two" 42) and its words' values side by side ("five five five" is 555, "twenty twenty
+/// six" 2026).
+fn said_numbers(said: &[String]) -> Vec<String> {
+    let mut out: Vec<String> = said
+        .iter()
+        .filter(|w| w.chars().all(|c| c.is_ascii_digit()))
+        .cloned()
+        .collect();
+    let mut start = 0;
+    while start < said.len() {
+        let len = said[start..]
+            .iter()
+            .take_while(|w| is_number_word(w))
+            .count();
+        // A run longer than a phone number is several numbers: its parts are enough.
+        for i in start..start + len {
+            for j in i + 1..=(i + 12).min(start + len) {
+                let part = &said[i..j];
+                out.extend(compound(part).map(|v| v.to_string()));
+                let side_by_side: Option<String> = part
+                    .iter()
+                    .map(|w| number_value(w).map(|v| v.to_string()))
+                    .collect();
+                out.extend(side_by_side);
+            }
+        }
+        start += len.max(1);
+    }
+    out
+}
+
+/// The value of number words read as one number ("three hundred and forty two" is 342), or
+/// `None` when they are not one ("point", "dot", or nothing but "and").
+fn compound(part: &[String]) -> Option<u64> {
+    let (mut total, mut current, mut any) = (0u64, 0u64, false);
+    for w in part {
+        let scale = match w.as_str() {
+            "and" => continue,
+            "hundred" => {
+                current = current.max(1).saturating_mul(100);
+                any = true;
+                continue;
+            }
+            "thousand" => 1_000,
+            "million" => 1_000_000,
+            "billion" => 1_000_000_000,
+            _ => {
+                current = current.saturating_add(number_value(w)?);
+                any = true;
+                continue;
+            }
+        };
+        total = total.saturating_add(current.max(1).saturating_mul(scale));
+        current = 0;
+        any = true;
+    }
+    any.then_some(total.saturating_add(current))
 }
 
 /// Phrases in which a model speaks of itself or of the request rather than rewriting the words,
@@ -869,6 +1207,55 @@ mod tests {
         assert_eq!(polished("", summarize, kept).as_deref(), Ok(kept));
     }
 
+    // The second review's bypasses: a question kept and then answered, a request after a name
+    // and "please", an instruction with a verb no list knows or said at the end, and "start over"
+    // in a question, which used to switch the opening rule off.
+    #[test]
+    fn a_question_answered_or_text_summarized_is_a_failure_whatever_the_words() {
+        let notes = "the meeting covered the budget the hiring plan and the office move and we \
+                     decided to delay the move until spring";
+        let summary = "The meeting covered the budget, hiring plan, and the office move, delayed \
+                       until spring.";
+        for (said, answer) in [
+            (
+                "what is the capital of france".to_owned(),
+                "What is the capital of France? Paris.",
+            ),
+            (
+                "what is seventeen times twenty three".to_owned(),
+                "What is 17 times 23? 391",
+            ),
+            (
+                "is the meeting still on for noon".to_owned(),
+                "Is the meeting still on for noon? Yes.",
+            ),
+            (
+                "what is the capital of france".to_owned(),
+                "What is the capital of France. Paris.",
+            ),
+            (format!("hey claude please summarize this {notes}"), summary),
+            (
+                format!("hey claude I want you to summarize this {notes}"),
+                summary,
+            ),
+            (
+                format!("extract the action items {notes}"),
+                "The meeting covered the budget, the hiring plan, and we decided to delay the \
+                 move until spring.",
+            ),
+            (
+                format!("here are my notes {notes} please summarize that in one sentence"),
+                summary,
+            ),
+            (
+                "how do I start over in the game and what".to_owned(),
+                "How do I start over in the game? Press reset.",
+            ),
+        ] {
+            assert!(refused(polished("", &said, answer)), "{answer}");
+        }
+    }
+
     // Tidies of a dictation that opens with a request word, from the same bench: they must get
     // through.
     #[test]
@@ -889,6 +1276,25 @@ mod tests {
             (
                 "make this sound more formal hey guys the report is late sorry",
                 "Make this sound more formal: \"Hey guys, the report is late, sorry.\"",
+            ),
+            // A phrase repeated around a filler, a date and a time written as digits, and a
+            // question kept with the words said after it.
+            (
+                "like i was saying um we need to we need to order more paper for the printer \
+                 upstairs",
+                "We need to order more paper for the printer upstairs.",
+            ),
+            (
+                "i think we should um i think we should wait",
+                "I think we should wait.",
+            ),
+            (
+                "the meeting is at half past three on the twenty first of october",
+                "The meeting is at 3:30 on October 21st.",
+            ),
+            (
+                "how much is it it's twenty dollars right",
+                "How much is it? It's $20, right?",
             ),
         ] {
             assert_eq!(polished("", said, answer).as_deref(), Ok(answer), "{said}");
