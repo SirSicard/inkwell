@@ -184,3 +184,38 @@ fn what_is_not_a_chat_model_is_refused_at_load() {
         Err(EngineError::ModelMissing(_))
     ));
 }
+
+/// A structured answer with the grammar applied only to the tokens that break it: still one JSON
+/// object, and timed (printed) for a comparison with the grammar on every token.
+#[test]
+#[ignore = "needs the Qwen3-ASR model under $INK_BENCH_DIR; run locally"]
+fn a_long_json_answer_is_one_object() {
+    let _serial = serial();
+    let llm = LlamaLlm::load(&asr_decoder(), "qwen3-asr-decoder").unwrap();
+    let request = LlmRequest {
+        system: "Answer with one JSON object with a field \"items\": an array of twenty short \
+                 strings, each naming a fruit."
+            .into(),
+        user: "List twenty fruits.".into(),
+        max_tokens: 400,
+        temperature: 0.0,
+        json_schema: Some(r#"{"type":"object"}"#.to_owned()),
+    };
+    let cancel = CancelToken::new();
+    // Once to warm the GPU's kernels, then timed.
+    llm.complete(&request, &cancel).unwrap();
+    let started = std::time::Instant::now();
+    let answer = llm.complete(&request, &cancel).unwrap();
+    let took = started.elapsed();
+    assert!(is_json_object(&answer.text), "not one JSON object");
+    println!(
+        "json answer: {} bytes in {:.2} s; sha of text {:x}",
+        answer.text.len(),
+        took.as_secs_f64(),
+        answer
+            .text
+            .bytes()
+            .fold(0xcbf29ce484222325_u64, |h, b| (h ^ u64::from(b))
+                .wrapping_mul(0x100000001b3))
+    );
+}

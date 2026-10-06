@@ -99,6 +99,8 @@ use llama_cpp_2::model::LlamaModel;
 use llama_cpp_2::model::params::LlamaModelParams;
 use llama_cpp_2::sampling::LlamaSampler;
 use llama_cpp_2::token::LlamaToken;
+use llama_cpp_2::token::data::LlamaTokenData;
+use llama_cpp_2::token::data_array::LlamaTokenDataArray;
 use llama_cpp_2::{
     LlamaBackendDeviceType, LogOptions, TokenToStringError, list_llama_ggml_backend_devices,
     send_logs_to_tracing,
@@ -281,6 +283,62 @@ enum GenerateError {
     Failed(String),
 }
 
+/// Picks the next token from the logits of the last position decoded, and advances its state.
+trait NextToken {
+    fn next(&mut self, ctx: &LlamaContext<'_>) -> LlamaToken;
+}
+
+impl NextToken for LlamaSampler {
+    fn next(&mut self, ctx: &LlamaContext<'_>) -> LlamaToken {
+        // Samples from the last decoded position's logits and advances the sampler's state.
+        self.sample(ctx, -1)
+    }
+}
+
+/// A grammar applied only where it is needed, as llama.cpp's own common sampler does (its
+/// `grammar_first` off): each token is sampled freely by `chain`, then checked against `grammar`
+/// alone; only a token the grammar refuses makes it sample again, with the grammar applied to
+/// every candidate first. Greedy, the answer is exactly the one with the grammar always first
+/// (the most likely token the grammar allows either way); sampled, the grammar still refuses
+/// every token it would have. Checking one token costs far less than masking the whole
+/// vocabulary, which is most of a constrained token's time.
+struct GrammarOnRejection {
+    grammar: LlamaSampler,
+    chain: LlamaSampler,
+}
+
+impl GrammarOnRejection {
+    /// The token `chain` picks from `candidates`, if it picks one.
+    fn pick(chain: &LlamaSampler, candidates: &mut LlamaTokenDataArray) -> Option<LlamaToken> {
+        candidates.apply_sampler(chain);
+        candidates.selected_token()
+    }
+}
+
+impl NextToken for GrammarOnRejection {
+    fn next(&mut self, ctx: &LlamaContext<'_>) -> LlamaToken {
+        // One row of logits is kept per decode here (the prompt's last token, then each answer
+        // token), so the last decoded position's are the context's first row.
+        let free = Self::pick(&self.chain, &mut ctx.token_data_array());
+        let allowed = free.filter(|&token| {
+            let mut one =
+                LlamaTokenDataArray::new(vec![LlamaTokenData::new(token, 1.0, 0.0)], false);
+            self.grammar.apply(&mut one);
+            one.data[0].logit().is_finite()
+        });
+        let token = allowed.unwrap_or_else(|| {
+            let mut all = ctx.token_data_array();
+            self.grammar.apply(&mut all);
+            // A grammar that allows nothing leaves every logit at minus infinity; the chain still
+            // picks, and the answer then fails its parse, as with the grammar first.
+            Self::pick(&self.chain, &mut all).unwrap_or(LlamaToken(0))
+        });
+        self.grammar.accept(token);
+        self.chain.accept(token);
+        token
+    }
+}
+
 /// Samples and decodes one token at a time from `n_past`, until the model ends its turn or
 /// `budget` tokens have been produced. Checks `cancel` before every token.
 ///
@@ -290,7 +348,7 @@ enum GenerateError {
 fn generate(
     model: &LlamaModel,
     ctx: &mut LlamaContext<'_>,
-    sampler: &mut LlamaSampler,
+    sampler: &mut dyn NextToken,
     mut n_past: i32,
     budget: u32,
     cancel: &CancelToken,
@@ -302,8 +360,7 @@ fn generate(
         if cancel.is_cancelled() {
             return Err(GenerateError::Cancelled);
         }
-        // Samples from the last decoded position's logits and advances the sampler's state.
-        let token = sampler.sample(ctx, -1);
+        let token = sampler.next(ctx);
         if model.is_eog_token(token) {
             stop = Stop::EndOfText;
             break;
