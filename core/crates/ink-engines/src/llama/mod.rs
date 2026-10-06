@@ -283,15 +283,16 @@ enum GenerateError {
     Failed(String),
 }
 
-/// Picks the next token from the logits of the last position decoded, and advances its state.
+/// Picks the next token from the logits of the last position decoded, and advances its state; or
+/// says why there is none (the message names the step, never the text).
 trait NextToken {
-    fn next(&mut self, ctx: &LlamaContext<'_>) -> LlamaToken;
+    fn next(&mut self, ctx: &LlamaContext<'_>) -> Result<LlamaToken, String>;
 }
 
 impl NextToken for LlamaSampler {
-    fn next(&mut self, ctx: &LlamaContext<'_>) -> LlamaToken {
+    fn next(&mut self, ctx: &LlamaContext<'_>) -> Result<LlamaToken, String> {
         // Samples from the last decoded position's logits and advances the sampler's state.
-        self.sample(ctx, -1)
+        Ok(self.sample(ctx, -1))
     }
 }
 
@@ -315,27 +316,35 @@ impl GrammarOnRejection {
     }
 }
 
+impl GrammarOnRejection {
+    /// Whether the grammar allows `token` next.
+    fn allows(&self, token: LlamaToken) -> bool {
+        let mut one = LlamaTokenDataArray::new(vec![LlamaTokenData::new(token, 1.0, 0.0)], false);
+        self.grammar.apply(&mut one);
+        one.data[0].logit().is_finite()
+    }
+}
+
 impl NextToken for GrammarOnRejection {
-    fn next(&mut self, ctx: &LlamaContext<'_>) -> LlamaToken {
+    fn next(&mut self, ctx: &LlamaContext<'_>) -> Result<LlamaToken, String> {
         // One row of logits is kept per decode here (the prompt's last token, then each answer
         // token), so the last decoded position's are the context's first row.
         let free = Self::pick(&self.chain, &mut ctx.token_data_array());
-        let allowed = free.filter(|&token| {
-            let mut one =
-                LlamaTokenDataArray::new(vec![LlamaTokenData::new(token, 1.0, 0.0)], false);
-            self.grammar.apply(&mut one);
-            one.data[0].logit().is_finite()
-        });
-        let token = allowed.unwrap_or_else(|| {
-            let mut all = ctx.token_data_array();
-            self.grammar.apply(&mut all);
-            // A grammar that allows nothing leaves every logit at minus infinity; the chain still
-            // picks, and the answer then fails its parse, as with the grammar first.
-            Self::pick(&self.chain, &mut all).unwrap_or(LlamaToken(0))
-        });
+        let token = match free.filter(|&t| self.allows(t)) {
+            Some(token) => token,
+            None => {
+                let mut all = ctx.token_data_array();
+                self.grammar.apply(&mut all);
+                Self::pick(&self.chain, &mut all)
+                    .filter(|&t| self.allows(t))
+                    // Never accepted: llama.cpp's grammar aborts the process on a token it does
+                    // not allow (a dead grammar leaves every logit at minus infinity).
+                    .ok_or("the JSON grammar allows no next token")?
+            }
+        };
         self.grammar.accept(token);
         self.chain.accept(token);
-        token
+        Ok(token)
     }
 }
 
@@ -360,7 +369,7 @@ fn generate(
         if cancel.is_cancelled() {
             return Err(GenerateError::Cancelled);
         }
-        let token = sampler.next(ctx);
+        let token = sampler.next(ctx).map_err(GenerateError::Failed)?;
         if model.is_eog_token(token) {
             stop = Stop::EndOfText;
             break;
