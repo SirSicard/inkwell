@@ -223,6 +223,28 @@ impl<M: Send + Sync + 'static> Residency<M> {
         due
     }
 
+    /// **Any thread except realtime.** When the next [`tick`](Self::tick) will have something to
+    /// unload, on the clock's timebase, if nothing is used meanwhile: the earliest moment a loaded
+    /// model that is neither warm nor held reaches [`IDLE_UNLOAD`]. `None` when no such model is
+    /// loaded. A held model is not counted: its idle time starts when its last lease drops. For a
+    /// thread that sleeps until then instead of ticking on a timer.
+    pub fn next_unload_ns(&self) -> Option<u64> {
+        let state = self.shared.lock();
+        state
+            .slots
+            .iter()
+            .filter_map(|(id, slot)| match slot {
+                Slot::Resident {
+                    model,
+                    idle_since_ns,
+                } if Arc::strong_count(model) == 1 && state.warm.as_ref() != Some(id) => {
+                    Some(idle_since_ns.saturating_add(IDLE_NS))
+                }
+                _ => None,
+            })
+            .min()
+    }
+
     /// **Worker.** Unloads the model `id` now, for an update that replaces its files: it stops
     /// being kept warm and is dropped, with no lock held (its drop may take seconds, or call back
     /// into residency). Waits out a load or unload of the same model already under way.
