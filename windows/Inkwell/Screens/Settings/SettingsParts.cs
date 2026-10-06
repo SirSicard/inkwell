@@ -225,16 +225,6 @@ public static class RowFocus
     }
 }
 
-/// <summary>A mode's row as the template shows it.</summary>
-public sealed record ModeRowItem(ModeRow Row, string Title)
-{
-    public IReadOnlyList<string> Traits => Row.Traits;
-    public IReadOnlyList<AppLabel> Apps => Row.Apps;
-    public string AppsText => Row.AppsText;
-    /// <summary>The apps' names follow their tiles; an empty list says what it means instead.</summary>
-    public bool HasApps => Row.Apps.Count > 0;
-}
-
 /// <summary>A voice command's row as the template shows it.</summary>
 public sealed record VoiceCommandItem(VoiceCommandDraft Row)
 {

@@ -16,6 +16,7 @@ public sealed class ScreenModels
     /// <param name="modelsDirectory">The models' folder when it is not under the library's.</param>
     /// <param name="reveal">Opens a folder in File Explorer (Storage).</param>
     /// <param name="apps">Names the apps modes are for.</param>
+    /// <param name="runningApps">The apps with a window now (the mode editor's Running now).</param>
     /// <param name="wake">Up next's one-shot wake (the view's clock).</param>
     /// <param name="makePlayer">Makes a record's player over the app's audio output (null: no player).</param>
     /// <param name="search">Waits for typing to pause before a Library search (null: at once).</param>
@@ -36,7 +37,8 @@ public sealed class ScreenModels
         ScreenLog? log = null,
         IUpdater? updater = null,
         IUpdatePreference? updatePreference = null,
-        IStartupEntry? startup = null)
+        IStartupEntry? startup = null,
+        IRunningApps? runningApps = null)
     {
         ArgumentNullException.ThrowIfNull(send);
         this.send = send;
@@ -47,7 +49,8 @@ public sealed class ScreenModels
         Permissions = new PermissionsModel(send, cal);
         Polish = new PolishModel(send);
         Catalogue = new CatalogueModel(send);
-        Modes = new ModesModel(send, apps);
+        // A mode's own OK is one of polish's consents; its chip reads polish's switch.
+        Modes = new ModesModel(send, apps, runningApps, Polish.Consent, () => Polish.Preference);
         Owed = new OwedModel(send);
         Live = new LiveModel(send, log: this.log);
         Meetings = new MeetingModel(send, cal, log: this.log);

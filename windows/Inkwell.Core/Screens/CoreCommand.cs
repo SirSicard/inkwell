@@ -137,10 +137,41 @@ public abstract record CoreCommand
             [("cmd", Name), ("key", Key.Key()), ("value", Value), ("id", Key.CommandId())];
     }
 
-    public sealed record ModesList : CoreCommand
+    /// <summary>
+    /// Settings > Modes: each answered by modes.listed with <paramref name="Ref"/> (a save's with
+    /// saved), or a command.failed with it as the id and, for a refusal the editor shows, a code.
+    /// </summary>
+    public sealed record ModesList(string Ref) : CoreCommand
     {
         public override string Name => "modes.list";
-        private protected override IEnumerable<(string, object)> Fields() => [("cmd", Name)];
+        private protected override IEnumerable<(string, object)> Fields() => [("cmd", Name), ("id", Ref)];
+    }
+
+    /// <summary>A mode added or changed: only the fields <paramref name="Save"/> sets are named.</summary>
+    public sealed record ModesSave(ModeSave Save, string Ref) : CoreCommand
+    {
+        public override string Name => "modes.save";
+        private protected override IEnumerable<(string, object)> Fields()
+        {
+            yield return ("cmd", Name);
+            yield return ("mode", Save.ModeFields());
+            yield return ("id", Ref);
+            if (Save.TakeApps)
+            {
+                yield return ("take_apps", true);
+            }
+            if (Save.ReplaceUnreadable)
+            {
+                yield return ("replace_unreadable", true);
+            }
+        }
+    }
+
+    /// <summary>A mode deleted, only after the user confirmed it: its apps go back to the default mode.</summary>
+    public sealed record ModesDelete(string Mode, string Ref) : CoreCommand
+    {
+        public override string Name => "modes.delete";
+        private protected override IEnumerable<(string, object)> Fields() => [("cmd", Name), ("mode", Mode), ("id", Ref)];
     }
 
     /// <summary>
@@ -707,7 +738,15 @@ public static class Wire
 [System.Text.Json.Serialization.JsonSerializable(typeof(string))]
 internal sealed partial class WireJson : System.Text.Json.Serialization.JsonSerializerContext;
 
-/// <summary>Writes a command's fields as one JSON object: strings, numbers, booleans, lists and objects of them.</summary>
+/// <summary>A field written as JSON's null (a mode's polish_model: the AI setting's).</summary>
+internal sealed class JsonNull
+{
+    public static JsonNull Value { get; } = new();
+
+    private JsonNull() { }
+}
+
+/// <summary>Writes a command's fields as one JSON object: strings, numbers, booleans, null, lists and objects of them.</summary>
 internal static class JsonFields
 {
     public static string Write(IEnumerable<(string Key, object Value)> fields)
@@ -729,6 +768,9 @@ internal static class JsonFields
     {
         switch (value)
         {
+            case JsonNull:
+                w.WriteNullValue();
+                break;
             case string s:
                 w.WriteStringValue(s);
                 break;

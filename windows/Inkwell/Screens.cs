@@ -49,7 +49,9 @@ internal sealed class AppScreens(CoreStore store, ScreenModels models, Router ro
             updater: updater,
             // "Check for updates automatically" beside the library, as the terms' record is.
             updatePreference: data is null ? null : new UpdatePreferenceFile(Path.Combine(data, UpdatePreferenceFile.FileName)),
-            startup: new WindowsStartup());
+            startup: new WindowsStartup(),
+            // The mode editor's Running now: the apps with a window, named as Settings > Modes names them.
+            runningApps: new RunningApps(InstalledApps.Shared));
         // A moved library (development, tests, scripts) never looks at this PC's Inkwell 0.2 data.
         screens.Import02.Looks = !DataLocation.IsMoved();
         return screens;
@@ -107,7 +109,7 @@ internal sealed class AppScreens(CoreStore store, ScreenModels models, Router ro
             new("Appearance", new AppearanceSection(theme)),
             new("Permissions", new PermissionsSection(models.Permissions)),
             new("Dictation", new VoiceSection(models.Ai, models.Recorder, importNote)),
-            new("Modes", new ModesSection(models.Modes)),
+            new("Modes", new ModesSection(models.Modes, WindowHandle)),
             new("Snippets", new SnippetsSection(models.Snippets)),
             new("Voice commands", new VoiceCommandsSection(models.VoiceCommands)),
             new("AI", new AiSection(models.Ai, models.Cloud)),

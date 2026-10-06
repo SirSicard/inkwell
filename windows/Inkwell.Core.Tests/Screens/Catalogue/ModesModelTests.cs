@@ -65,9 +65,10 @@ public partial class ModesModelTests
             ["Example Writer", "WhatsApp", "Unknowntool", "Slack", "An app not on this PC", "Zoom", "Slack", "Microsoft Teams"],
             model.Rows[0].Apps.Select(a => a.Name));
         Assert.Equal(["Casual", "Clean up speech"], model.Rows[0].Traits);
-        Assert.Equal(["Formal", "Clean up speech", "Polish"], model.Rows[1].Traits);
+        Assert.Equal(["Formal", "Clean up speech"], model.Rows[1].Traits);
+        Assert.Null(model.Rows[1].Polish.Chip); // polish is on for it, but there is no model: no chip
         Assert.True(model.Rows[1].IsDefault); // the default is listed last
-        Assert.Equal("Everywhere else", model.Title(model.Rows[1]));
+        Assert.Equal("Everywhere else", model.Rows[1].Title);
         Assert.Equal("Every app without a mode of its own", model.Rows[1].AppsText);
     }
 
@@ -95,7 +96,7 @@ public partial class ModesModelTests
         var sent = new Sent();
         var modes = new ModesModel(sent.Send);
         modes.Load();
-        Assert.Equal([new CoreCommand.ModesList()], sent.Commands);
+        Assert.Equal([new CoreCommand.ModesList("modes:1")], sent.Commands);
         var failed = Ev.Of<Inkwell.Core.Events.CommandFailed>("""{"type":"command.failed","command":"modes.list","message":"x"}""");
         modes.Apply(failed);
         Assert.True(modes.Failed);

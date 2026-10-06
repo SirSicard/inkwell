@@ -278,7 +278,7 @@ public class Import02ModelTests
         screens.Apply([Finished()]);
         Assert.Contains(new CoreCommand.SnippetsList("snippets:2"), sent.Commands);
         Assert.Contains(new CoreCommand.VoiceCommandsList("voice_commands:1"), sent.Commands);
-        Assert.Contains(new CoreCommand.ModesList(), sent.Commands);
+        Assert.Contains(new CoreCommand.ModesList("modes:1"), sent.Commands);
 
         screens.Apply([Ev.Of("""{"type":"snippets.listed","from_import":true,"ref":"snippets:2","snippets":[{"id":"s1","trigger":"my sig","expansion":"Kind regards","category":"","enabled":true}]}""")]);
         Assert.True(screens.Snippets.FromImport);
