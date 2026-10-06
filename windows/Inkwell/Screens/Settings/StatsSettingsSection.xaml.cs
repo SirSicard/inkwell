@@ -90,7 +90,8 @@ public sealed partial class StatsSettingsSection : UserControl
             button.IsEnabled = rest || Model.RestDays.Count < 6;
             // The name is the day; the toggle pattern says whether it is pressed.
             AutomationProperties.SetName(button, day.Name);
-            AutomationProperties.SetHelpText(button, button.IsEnabled ? StatsModel.RestDaysDetail : StatsModel.LastRestDayHelp);
+            // The group carries the sentence (RestDays' HelpText); each day only what is its own.
+            AutomationProperties.SetHelpText(button, button.IsEnabled ? "" : StatsModel.LastRestDayHelp);
             ToolTipService.SetToolTip(button, button.IsEnabled ? day.Name : StatsModel.LastRestDayHelp);
         }
     }

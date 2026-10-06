@@ -108,7 +108,6 @@ public sealed class StatsModel : ObservableModel
     public static string StreakFailure(StreakChange change) =>
         change == StreakChange.Pausing ? "Couldn't pause the streak. Try again." : "Couldn't resume the streak. Try again.";
 
-
     /// <summary>The typing speed as Narrator reads it.</summary>
     public static string TypingSpoken(int wpm) => $"{wpm} words per minute";
 

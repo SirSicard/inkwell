@@ -93,9 +93,14 @@ public sealed partial class StatsScreen : UserControl
         }
     }
 
-    /// <summary>The review's Dismiss button as last built, and whether focus goes to it (or on) after a rebuild.</summary>
+    /// <summary>The review's Dismiss button as last built.</summary>
     private Button? reviewDismiss;
+
+    /// <summary>Dismiss was just pressed: the next rebuild moves focus, once.</summary>
     private bool focusAfterDismiss;
+
+    /// <summary>The week just dismissed, until its save is known to have failed or another review shows.</summary>
+    private string? awaitingWeek;
 
     private void Render()
     {
@@ -130,12 +135,16 @@ public sealed partial class StatsScreen : UserControl
     /// </summary>
     private void RestoreFocus()
     {
-        if (!focusAfterDismiss)
+        var showing = stats.WeekReview?.Week;
+        if (awaitingWeek is not null && showing is not null && showing != awaitingWeek)
         {
-            return;
+            // Another week's review: the one dismissed is no longer waited for.
+            awaitingWeek = null;
         }
-        if (reviewDismiss is { } dismiss && stats.ReviewDismissFailed)
+        if (awaitingWeek is not null && reviewDismiss is { } dismiss && stats.ReviewDismissFailed && showing == awaitingWeek)
         {
+            // Its save failed (at once, or later): back to its Dismiss, said aloud, once.
+            awaitingWeek = null;
             focusAfterDismiss = false;
             dismiss.Focus(FocusState.Programmatic);
             if ((FrameworkElementAutomationPeer.FromElement(dismiss) ?? FrameworkElementAutomationPeer.CreatePeerForElement(dismiss)) is { } peer)
@@ -143,9 +152,10 @@ public sealed partial class StatsScreen : UserControl
                 peer.RaiseNotificationEvent(AutomationNotificationKind.ActionAborted, AutomationNotificationProcessing.ImportantMostRecent, StatsModel.ReviewDismissFailedText, "stats-review");
             }
         }
-        else if (reviewDismiss is null)
+        else if (focusAfterDismiss && reviewDismiss is null)
         {
-            // Kept for a failure that may still come back, until the next dismissal.
+            // The card went: on to the Share card button, once; a refresh later moves nothing.
+            focusAfterDismiss = false;
             ShareButton.Focus(FocusState.Programmatic);
         }
     }
@@ -185,6 +195,7 @@ public sealed partial class StatsScreen : UserControl
         {
             // The cards are built again: focus goes where the user can carry on (RestoreFocus).
             focusAfterDismiss = true;
+            awaitingWeek = review.Week;
             stats.DismissReview(review);
         };
         reviewDismiss = dismiss;
