@@ -1,7 +1,12 @@
-// Settings > AI's language model (Windows): an own-key (BYOK) provider. Windows has no language
-// model on the device, so polish, voice edit, summaries and Ask need one the user brings: a
-// provider (OpenAI, Anthropic, Groq, OpenRouter, or any OpenAI-compatible server), its API key,
-// and a model. The Mac has no such screen.
+// Settings > AI's language model (Windows): this PC's own model (on_device: the core's, once
+// downloaded; LocalLlmModel has its download), or an own-key (BYOK) provider (OpenAI, Anthropic,
+// Groq, OpenRouter, or any OpenAI-compatible server), its API key, and a model. The Mac has no such
+// screen.
+//
+// With no provider chosen, the core uses this PC's model once it is downloaded: the status says
+// so, and Try it asks that model. Choosing a provider later takes over from it; choosing on_device
+// keeps this PC's model even when a provider's key is stored, and while it is chosen nothing
+// stands in for it (removed, the features have no model).
 //
 // The core holds everything: llm.providers says which providers there are, whether each has a key
 // stored (asked without reading it), which one is chosen and whether it is ready. The key goes
@@ -30,7 +35,12 @@ namespace Inkwell.Core.Screens;
 /// <param name="CustomUrl">Whether the user names the address (custom only).</param>
 /// <param name="NeedsKey">Whether it needs an API key.</param>
 /// <param name="HasKey">Whether a key is stored for it.</param>
-public sealed record CloudProvider(string Id, string Name, string DefaultModel, string Endpoint, bool CustomUrl, bool NeedsKey, bool HasKey);
+/// <param name="Installed">For this PC's model, whether it is downloaded; null for a provider.</param>
+public sealed record CloudProvider(string Id, string Name, string DefaultModel, string Endpoint, bool CustomUrl, bool NeedsKey, bool HasKey, bool? Installed = null)
+{
+    /// <summary>This PC's own model (on_device), not a provider.</summary>
+    public bool IsOnDevice => Id == CloudModel.OnDeviceId;
+}
 
 /// <summary>Where a key test is.</summary>
 public enum CloudTestState
@@ -45,6 +55,10 @@ public sealed class CloudModel : ObservableModel
 {
     private readonly Action<CoreCommand> send;
     private int requests;
+    /// <summary>The newest Use of this PC's model: its answer raises <see cref="ChoseOnDevice"/>.</summary>
+    private string? onDeviceChooseRef;
+    /// <summary>The newest answer chose this PC's model in reply to its Use: raised after the change.</summary>
+    private bool choseOnDevice;
     /// <summary>The newest test's ref: only its answer is shown, and none once the provider, model or key changed.</summary>
     private string? testRef;
 
@@ -54,9 +68,21 @@ public sealed class CloudModel : ObservableModel
         this.send = send;
     }
 
+    /// <summary>llm.choose's provider, and llm.providers' entry, for this PC's own model.</summary>
+    public const string OnDeviceId = "on_device";
+
+    /// <summary>
+    /// Raised once the core has chosen this PC's model in answer to its Use (the features' states
+    /// arrive before it): Settings > AI then asks polish's one-tap consent (LocalLlmModel).
+    /// </summary>
+    public event Action? ChoseOnDevice;
+
+    /// <summary>The name of the language model with a registry id (the catalogue's), for this PC's model's lines.</summary>
+    public Func<string, string?> ModelName { get; set; } = _ => null;
+
     // What the core says.
 
-    /// <summary>The providers, in the core's order (empty until read).</summary>
+    /// <summary>The providers, in the core's order (empty until read); this PC's model among them where the core offers one.</summary>
     public IReadOnlyList<CloudProvider> Providers { get; private set; } = [];
 
     /// <summary>Whether the core has answered once.</summary>
@@ -111,6 +137,26 @@ public sealed class CloudModel : ObservableModel
     /// <summary>The chosen provider, if any.</summary>
     public CloudProvider? ChosenProvider => Providers.FirstOrDefault(p => p.Id == Chosen);
 
+    /// <summary>This PC's own model, where the core offers one (Windows).</summary>
+    public CloudProvider? OnDevice => Providers.FirstOrDefault(p => p.IsOnDevice);
+
+    /// <summary>The own-key providers (the first run's other providers).</summary>
+    public IEnumerable<CloudProvider> OwnKeyProviders => Providers.Where(p => !p.IsOnDevice);
+
+    /// <summary>This PC's model is downloaded.</summary>
+    public bool OnDeviceInstalled => OnDevice?.Installed == true;
+
+    /// <summary>
+    /// What the features use is this PC's model: chosen and downloaded, or downloaded with no
+    /// provider chosen (the core then uses it).
+    /// </summary>
+    public bool OnDeviceInUse => OnDeviceInstalled && ReadError is null && (Chosen == OnDeviceId || Chosen is null);
+
+    /// <summary>This PC's model's name: the catalogue's (Qwen3 4B Instruct), else "this PC's model".</summary>
+    public string OnDeviceName => (ChosenModel is string chosen && Chosen == OnDeviceId ? ModelName(chosen) : null)
+        ?? (OnDevice is CloudProvider local ? ModelName(local.DefaultModel) : null)
+        ?? "this PC's model";
+
     /// <summary>A name for people.</summary>
     public static string ProviderName(string id) => id switch
     {
@@ -119,11 +165,12 @@ public sealed class CloudModel : ObservableModel
         "groq" => "Groq",
         "openrouter" => "OpenRouter",
         "custom" => "OpenAI-compatible server",
+        OnDeviceId => "This PC's model",
         _ => id,
     };
 
-    /// <summary>Whether the provider in the picker, with the address typed, is off this PC.</summary>
-    public bool SelectedIsCloud => SelectedProvider is CloudProvider p && (!p.CustomUrl || !IsOnThisPc(BaseUrlFor(p)));
+    /// <summary>Whether the provider in the picker, with the address typed, is off this PC (this PC's own model never is).</summary>
+    public bool SelectedIsCloud => SelectedProvider is CloudProvider p && !p.IsOnDevice && (!p.CustomUrl || !IsOnThisPc(BaseUrlFor(p)));
 
     /// <summary>Whether Use would change anything: another provider, model or address than the chosen one.</summary>
     public bool CanUse
@@ -138,6 +185,11 @@ public sealed class CloudModel : ObservableModel
             {
                 return Selected is null && Chosen is not null;
             }
+            if (p.IsOnDevice)
+            {
+                // Only once it is downloaded: the core refuses to choose a model it doesn't have.
+                return p.Installed == true && Chosen != OnDeviceId;
+            }
             if (p.CustomUrl && string.IsNullOrWhiteSpace(DraftBaseUrl))
             {
                 return false;
@@ -146,11 +198,24 @@ public sealed class CloudModel : ObservableModel
         }
     }
 
-    /// <summary>Whether Test can be pressed: the provider in the picker is the chosen one, and no test is running.</summary>
-    public bool CanTest => Chosen is not null && Selected == Chosen && TestState != CloudTestState.Testing;
+    /// <summary>
+    /// Whether Test (Try it, for this PC's model) can be pressed: the provider in the picker is
+    /// what the features use (chosen, or this PC's model downloaded with none chosen), and no test
+    /// is running.
+    /// </summary>
+    public bool CanTest => TestState != CloudTestState.Testing
+        && ((Chosen is not null && Selected == Chosen) || (Selected == OnDeviceId && Chosen is null && OnDeviceInstalled));
 
     /// <summary>What the Use button says.</summary>
-    public string UseLabel => SelectedProvider is CloudProvider p ? $"Use {ProviderName(p.Id)}" : "Stop using a language model";
+    public string UseLabel => SelectedProvider is CloudProvider p
+        ? p.IsOnDevice ? "Use this PC's model" : $"Use {ProviderName(p.Id)}"
+        : "Stop using a language model";
+
+    /// <summary>What the Test button says: Try it for this PC's model, which loads it first.</summary>
+    public string TestLabel => SelectedProvider?.IsOnDevice == true ? "Try it" : "Test";
+
+    /// <summary>The Test button's name for Narrator.</summary>
+    public string TestName => SelectedProvider?.IsOnDevice == true ? $"Try {OnDeviceName} on this PC" : "Test the language model";
 
     /// <summary>What choosing the provider in the picker means, said before the user presses Use.</summary>
     public string UseNote
@@ -159,9 +224,25 @@ public sealed class CloudModel : ObservableModel
         {
             if (SelectedProvider is not CloudProvider p)
             {
-                return Chosen is null
-                    ? "No language model is chosen. Nothing you say leaves this PC."
+                if (Chosen is null)
+                {
+                    return OnDeviceInstalled
+                        ? $"No provider is chosen, so the features below use {OnDeviceName}, on this PC. Nothing you say leaves this PC."
+                        : "No language model is chosen. Nothing you say leaves this PC.";
+                }
+                return OnDeviceInstalled
+                    ? $"Stopping goes back to {OnDeviceName}, on this PC, and turns local-only mode back on: nothing you say leaves this PC."
                     : "Stopping turns local-only mode back on: nothing you say leaves this PC.";
+            }
+            if (p.IsOnDevice)
+            {
+                if (p.Installed != true)
+                {
+                    return "Download it first. It runs on this PC, so nothing you say leaves it.";
+                }
+                return Chosen == OnDeviceId
+                    ? $"{Sentence(OnDeviceName)} is in use. It runs on this PC, so local-only mode stays on and your words stay here."
+                    : $"{Sentence(OnDeviceName)} runs on this PC, so local-only mode stays on and your words stay here. Use asks once before polish uses it.";
             }
             var name = ProviderName(p.Id);
             return SelectedIsCloud
@@ -199,7 +280,7 @@ public sealed class CloudModel : ObservableModel
     {
         get
         {
-            if (SelectedProvider is not CloudProvider p)
+            if (SelectedProvider is not CloudProvider p || p.IsOnDevice)
             {
                 return "";
             }
@@ -254,9 +335,17 @@ public sealed class CloudModel : ObservableModel
             {
                 return "Reading the language model settings…";
             }
+            if (Chosen == OnDeviceId)
+            {
+                return OnDeviceInstalled && Ready
+                    ? $"In use: {OnDeviceName}, on this PC. Local-only mode is on."
+                    : "This PC's model is chosen, but it isn't downloaded, so nothing can use it. Download it, or choose another.";
+            }
             if (ChosenProvider is not CloudProvider p)
             {
-                return "No language model is in use. Local-only mode is on.";
+                return OnDeviceInstalled
+                    ? $"In use: {OnDeviceName}, on this PC, as no provider is chosen. Local-only mode is on."
+                    : "No language model is in use. Local-only mode is on.";
             }
             var name = ProviderName(p.Id);
             var where = ChosenIsCloud ? name : $"{name}, on this PC";
@@ -352,9 +441,17 @@ public sealed class CloudModel : ObservableModel
         }
         Failure = null;
         ForgetTest();
+        // Only the newest Use's answer can ask polish's one tap.
+        onDeviceChooseRef = null;
         if (SelectedProvider is not CloudProvider p)
         {
             send(new CoreCommand.LlmChoose("none", null, null, false, NextRef("choose")));
+        }
+        else if (p.IsOnDevice)
+        {
+            // Whichever model is downloaded: no model named, no address, local-only mode stays on.
+            onDeviceChooseRef = NextRef("choose");
+            send(new CoreCommand.LlmChoose(OnDeviceId, null, null, false, onDeviceChooseRef));
         }
         else
         {
@@ -372,7 +469,8 @@ public sealed class CloudModel : ObservableModel
     /// </summary>
     public void Suggest(string id)
     {
-        if (Chosen is null && Selected is null && Providers.Any(p => p.Id == id))
+        // This PC's model in the picker is no own key picked: the first run's own key still starts on Groq.
+        if (Chosen is null or OnDeviceId && Selected is null or OnDeviceId && Providers.Any(p => p.Id == id))
         {
             Select(id);
         }
@@ -383,7 +481,7 @@ public sealed class CloudModel : ObservableModel
     /// or model is behind "Other providers or models…". Those open first when another provider is
     /// chosen, or picked here or in Settings > AI: the user's pick stands.
     /// </summary>
-    public bool FirstRunStartsOnOthers => Selected is not null && Selected != "groq";
+    public bool FirstRunStartsOnOthers => Selected is not null && Selected != "groq" && Selected != OnDeviceId;
 
     /// <summary>Back from the other providers to Groq's free model: Groq in the picker. Nothing is sent.</summary>
     public void PickGroq()
@@ -428,7 +526,7 @@ public sealed class CloudModel : ObservableModel
         }
         testRef = NextRef("test");
         TestState = CloudTestState.Testing;
-        TestMessage = $"Asking {ProviderName(Chosen!)}…";
+        TestMessage = Selected == OnDeviceId ? $"Loading {OnDeviceName} and asking it…" : $"Asking {ProviderName(Chosen!)}…";
         Changed();
         send(new CoreCommand.LlmTest(testRef));
     }
@@ -482,6 +580,11 @@ public sealed class CloudModel : ObservableModel
         {
             Changed();
         }
+        if (choseOnDevice)
+        {
+            choseOnDevice = false;
+            ChoseOnDevice?.Invoke();
+        }
     }
 
     private bool Fold(InkEvent e)
@@ -490,15 +593,17 @@ public sealed class CloudModel : ObservableModel
         {
             case LlmProviders state:
                 var first = !Loaded;
-                // The own-key providers. This PC's model (on_device) is chosen from its own row,
-                // which comes with the local language model UI.
+                // The own-key providers, and this PC's model where the core offers one.
                 Providers = state.Providers
-                    .Where(p => p.Id != "on_device")
-                    .Select(p => new CloudProvider(p.Id, ProviderName(p.Id), p.DefaultModel, p.Endpoint, p.CustomUrl, p.NeedsKey, p.HasKey))
+                    .Select(p => new CloudProvider(p.Id, ProviderName(p.Id), p.DefaultModel, p.Endpoint, p.CustomUrl, p.NeedsKey, p.HasKey, p.Installed))
                     .ToList();
-                // This PC's model chosen reads as no own-key provider chosen here: the local
-                // language model UI takes it over.
-                var chosen = state.Chosen == "on_device" ? null : state.Chosen;
+                var chosen = state.Chosen;
+                // The answer to this PC's model's Use, having chosen it: polish's one tap follows.
+                if (state.Ref is not null && state.Ref == onDeviceChooseRef)
+                {
+                    onDeviceChooseRef = null;
+                    choseOnDevice = chosen == OnDeviceId;
+                }
                 var choiceChanged = Chosen != chosen || ChosenModel != state.Model || ChosenBaseUrl != state.BaseUrl;
                 Chosen = chosen;
                 ChosenModel = state.Model;
@@ -517,11 +622,18 @@ public sealed class CloudModel : ObservableModel
                 return true;
             case LlmTested tested when tested.Ref is not null && tested.Ref == testRef:
                 TestState = tested.Ok ? CloudTestState.Passed : CloudTestState.Failed;
-                TestMessage = tested.Ok
-                    ? $"{ProviderName(tested.Provider)} answered with {tested.Model}."
-                    : $"{Sentence(tested.Error ?? "couldn't get an answer")}.";
+                TestMessage = !tested.Ok
+                    ? $"{Sentence(tested.Error ?? "couldn't get an answer")}."
+                    : tested.Provider == OnDeviceId
+                        ? OnDeviceAnswered(tested)
+                        : $"{ProviderName(tested.Provider)} answered with {tested.Model}.";
                 return true;
             case CommandFailed failed when Handles(failed):
+                if (failed.Id is not null && failed.Id == onDeviceChooseRef)
+                {
+                    // That Use was refused (nothing downloaded, say): no one tap follows it.
+                    onDeviceChooseRef = null;
+                }
                 if (failed.Command == "llm.test")
                 {
                     if (failed.Id != testRef)
@@ -563,6 +675,23 @@ public sealed class CloudModel : ObservableModel
                 return false;
         }
     }
+
+    /// <summary>
+    /// Try it's answer from this PC's model: "Qwen3 4B Instruct loaded in 1.2 s and answered in
+    /// 0.4 s." (a load near 0 when it was in memory already). A dictation's polish reads and writes more.
+    /// </summary>
+    private string OnDeviceAnswered(LlmTested tested)
+    {
+        var name = Sentence(ModelName(tested.Model) ?? OnDeviceName);
+        var answered = tested.AnswerMs is long answer ? $"answered in {Seconds(answer)}" : "answered";
+        return tested.LoadMs is long load
+            ? $"{name} loaded in {Seconds(load)} and {answered}."
+            : $"{name} {answered}.";
+    }
+
+    /// <summary>Milliseconds as seconds, one decimal: "1.2 s".</summary>
+    public static string Seconds(long ms) =>
+        string.Format(System.Globalization.CultureInfo.CurrentCulture, "{0:0.0} s", Math.Max(0, ms) / 1000.0);
 
     private string ModelFor(CloudProvider p)
     {

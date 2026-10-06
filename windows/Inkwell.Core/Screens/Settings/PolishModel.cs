@@ -9,8 +9,9 @@
 // same write.
 //
 // The toggle reads "on" only when the switch is on, the consent covers the model, and the core has
-// a working language model: one registered (engine.registered, kind llm, not let go of since), or
-// an own-key provider chosen and ready (llm.providers, Settings > AI's language model). With no
+// a working language model: one registered (engine.registered, kind llm, not let go of since), a
+// provider chosen and ready (llm.providers, Settings > AI's language model: an own-key one, or this
+// PC's model), or this PC's model downloaded with none chosen, which the core then uses. With no
 // working model it reads off, cannot be switched, and says so. Windows has no Apple Intelligence:
 // which models exist is the core's to say (its engines), so the Mac's Apple-engine reasons are gone.
 //
@@ -35,7 +36,10 @@ public sealed class PolishModel : ObservableModel
     private readonly Action<CoreCommand> send;
     /// <summary>Language models the core confirmed and still holds, by id.</summary>
     private readonly HashSet<string> models = new(StringComparer.Ordinal);
-    /// <summary>An own-key provider is chosen and can be called (llm.providers' ready).</summary>
+    /// <summary>
+    /// A provider is chosen and can be called (llm.providers' ready), or none is and this PC's model
+    /// is downloaded: the core uses it then.
+    /// </summary>
     private bool cloudReady;
     private bool takeTimedOut;
 
@@ -168,7 +172,8 @@ public sealed class PolishModel : ObservableModel
     public static bool CanUseOwnKey(CloudModel cloud)
     {
         ArgumentNullException.ThrowIfNull(cloud);
-        return cloud.CanUse && cloud.SelectedProvider is CloudProvider provider && (!provider.NeedsKey || provider.HasKey);
+        // An own key: this PC's model is the Polish step's own offer, never one of its keys.
+        return cloud.CanUse && cloud.SelectedProvider is CloudProvider provider && !provider.IsOnDevice && (!provider.NeedsKey || provider.HasKey);
     }
 
     /// <summary>
@@ -223,7 +228,9 @@ public sealed class PolishModel : ObservableModel
                 return models.Remove(engine.Id);
             case LlmProviders providers:
                 var was = cloudReady;
-                cloudReady = providers.Ready;
+                cloudReady = providers.Ready
+                    || (providers.Chosen is null && providers.Error is null
+                        && providers.Providers.Any(p => p.Id == CloudModel.OnDeviceId && p.Installed == true));
                 return was != cloudReady;
             case CoreStopped:
                 models.Clear();

@@ -1,7 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- The language model (CloudModel), as Settings > AI shows it and the first run's Polish step shows
      it under "Other providers or models…": the provider picker, the server's address, the key, the
-     model, Use and Test, and what is in use. -->
+     model, Use and Test, and what is in use. In Settings the picker also holds this PC's own model
+     (LocalLlmModel): its line, Download, Cancel or Remove, the download's progress and the free
+     space, then Use and Try it. -->
 <UserControl
     x:Class="Inkwell.Screens.LanguageModelRows"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -57,6 +59,19 @@
                 IsEditable="True"
                 SelectionChanged="OnModelChosen" />
         </StackPanel>
+        <!-- This PC's own model, while it is in the picker (Settings only). -->
+        <StackPanel x:Name="LocalPanel" Spacing="6" Visibility="Collapsed">
+            <TextBlock x:Name="LocalLine" Style="{StaticResource InkCaptionStyle}" />
+            <ProgressBar x:Name="LocalProgress" MaxWidth="360" HorizontalAlignment="Stretch" Maximum="1" />
+            <TextBlock x:Name="LocalStatus" Style="{StaticResource InkCaptionStyle}" />
+            <TextBlock x:Name="LocalFreeSpace" Style="{StaticResource InkCaptionStyle}" />
+            <StackPanel Orientation="Horizontal" Spacing="8">
+                <Button x:Name="LocalDownload" Click="OnLocalDownload" Content="Download" />
+                <Button x:Name="LocalRetry" Click="OnLocalDownload" Content="Retry" />
+                <Button x:Name="LocalCancel" Click="OnLocalCancel" Content="Cancel" />
+                <Button x:Name="LocalRemove" Click="OnLocalRemove" Content="Remove&#x2026;" />
+            </StackPanel>
+        </StackPanel>
         <TextBlock x:Name="UseNote" Style="{StaticResource InkCaptionStyle}" />
         <StackPanel Orientation="Horizontal" Spacing="8">
             <Button
@@ -65,7 +80,6 @@
                 Style="{StaticResource InkAccentButtonStyle}" />
             <Button
                 x:Name="TestButton"
-                AutomationProperties.Name="Test the language model"
                 Click="OnTest"
                 Content="Test" />
         </StackPanel>

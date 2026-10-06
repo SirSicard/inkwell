@@ -65,7 +65,12 @@ public sealed class ScreenModels
         MeetingsConsent = AiSettings.NewMeetingsConsent(send);
         Ai = new AiSettings(Polish, Dictation, EditConsent, MeetingsConsent, send);
         Recorder = new ShortcutRecorderModel(send, Dictation, token => Ai.ChooseEditKey(token), wake ?? NoWake.Instance);
-        Cloud = new CloudModel(send);
+        Cloud = new CloudModel(send)
+        {
+            // This PC's model by the catalogue's name for it.
+            ModelName = id => Catalogue.Models.FirstOrDefault(m => m.Id == id) is { Kind: ModelKind.Language } entry ? CatalogueModel.Name(entry) : null,
+        };
+        Local = new LocalLlmModel(Catalogue, Cloud, Ai);
         Snippets = new SnippetsModel(send);
         VoiceCommands = new VoiceCommandsModel(send);
         ImportNote = new ImportNoteModel(send);
@@ -103,8 +108,10 @@ public sealed class ScreenModels
     public ConsentModel MeetingsConsent { get; }
     /// <summary>Settings > AI: the three switches and the voice-edit key's consent.</summary>
     public AiSettings Ai { get; }
-    /// <summary>Settings > AI's language model: an own-key provider (Windows has none on the device).</summary>
+    /// <summary>Settings > AI's language model: this PC's own model, or an own-key provider.</summary>
     public CloudModel Cloud { get; }
+    /// <summary>Settings > AI's "On this PC": the core's own language model's download, Use and one tap.</summary>
+    public LocalLlmModel Local { get; }
     public SnippetsModel Snippets { get; }
     public VoiceCommandsModel VoiceCommands { get; }
     public ImportNoteModel ImportNote { get; }
@@ -173,6 +180,7 @@ public sealed class ScreenModels
             EditConsent.Apply(e);
             MeetingsConsent.Apply(e);
             Cloud.Apply(e);
+            Local.Apply(e);
             Snippets.Apply(e);
             VoiceCommands.Apply(e);
             ImportNote.Apply(e);

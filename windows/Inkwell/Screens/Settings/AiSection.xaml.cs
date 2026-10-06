@@ -3,9 +3,10 @@
 // core has recorded the consent. The section owns the Settings screen's ConsentDialog, for all
 // three features (Dictation's edit-key picker asks through it too): WinUI shows one dialog at a time.
 //
-// Above them, the language model (LanguageModelRows, over CloudModel: the provider, its key, its
-// model, Use and Test) and how to get a free Groq key (GroqKeyGuideView); then Local only, the
-// explicit switch over llm.local_only.
+// Above them, the language model (LanguageModelRows, over CloudModel: this PC's own model with its
+// download, Use and Try it (LocalLlmModel, whose Use asks polish's one tap through this section's
+// dialog); or the provider, its key, its model, Use and Test) and how to get a free Groq key
+// (GroqKeyGuideView); then Local only, the explicit switch over llm.local_only.
 using Inkwell.Core.Screens;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
@@ -20,7 +21,8 @@ public sealed partial class AiSection : UserControl
     private readonly CloudModel cloud;
     private bool rendering;
 
-    public AiSection(AiSettings ai, CloudModel cloud, ScreenLog? log = null)
+    /// <param name="local">This PC's own model (the picker's "On this PC"); null: own-key providers only.</param>
+    public AiSection(AiSettings ai, CloudModel cloud, LocalLlmModel? local = null, ScreenLog? log = null)
     {
         ArgumentNullException.ThrowIfNull(ai);
         ArgumentNullException.ThrowIfNull(cloud);
@@ -28,7 +30,7 @@ public sealed partial class AiSection : UserControl
         this.cloud = cloud;
         polish = ai.Polish;
         InitializeComponent();
-        LanguageModelHost.Content = new LanguageModelRows(cloud);
+        LanguageModelHost.Content = new LanguageModelRows(cloud, local: local);
         GroqGuideExpander.Header = GroqKeyGuide.Title;
         GroqGuideExpander.Content = new GroqKeyGuideView(GroqKeyGuidePlace.Settings);
         _ = new ConsentDialog(this, ConsentHost.Settings, [polish.Consent, ai.EditConsent, ai.MeetingsConsent], log);
@@ -92,6 +94,7 @@ public sealed partial class AiSection : UserControl
     private void RenderCloud()
     {
         // Local only: on unless the user turned it off, or chose a provider off this PC.
+        LanguageModelCaption.Text = LocalLlmModel.Caption(cloud);
         LocalOnlySwitch.IsOn = cloud.LocalOnly;
         LocalOnlySwitch.IsEnabled = cloud.Loaded;
         LocalOnlyCaption.Text = cloud.LocalOnly
