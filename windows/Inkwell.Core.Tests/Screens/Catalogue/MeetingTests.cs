@@ -22,7 +22,7 @@ public class MeetingSettingsTests
         meetings.Load();
         // The old "Offer to record calls" switch is the call policies' default now (CallPolicyModel).
         Assert.Equal(
-            [new CoreCommand.SettingGet(ShellSetting.RetentionDays)],
+            [new CoreCommand.SettingGet(ShellSetting.RetentionDays), new CoreCommand.SettingGet(ShellSetting.MeetingsAutoReminderShown)],
             sent.Commands);
         Assert.Null(meetings.Retention); // not known until the core answers
         meetings.Apply(Ev.Of("""{"type":"setting.value","key":"retention.days"}"""));

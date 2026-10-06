@@ -160,6 +160,9 @@ public static class MeetingDrop
     /// <summary>An Always app's start that failed (any other meeting.detected message): the platform's words are the core's log's.</summary>
     public const string StartFailedLine = "Inkwell couldn't start recording it by itself. Tell the others you are recording.";
 
+    /// <summary>A meeting's line before its first, with nothing else to say.</summary>
+    public const string RecordingLine = "Recording this meeting";
+
     public const string DiscardingTitle = "Stop and delete";
     public const string DiscardingLine = "Deleting this recording";
 
@@ -176,14 +179,15 @@ public static class MeetingDrop
     /// A live meeting's lines for <paramref name="ink"/> (meeting, problem or blotting).
     /// <paramref name="micFallback"/>: the chosen mic isn't connected and another records (said
     /// until the first line); a mic that went mid-call is said over the latest line until a line
-    /// comes after it. A call its app's Always recorded says so, keeps the reminder to tell the
-    /// others, and offers Stop, and Stop and delete while <paramref name="deletable"/> (its first
-    /// minute); <paramref name="discarding"/> once that was pressed. <paramref name="failure"/>: a
-    /// Drop button that failed, in words.
+    /// comes after it. A call its app's Always recorded says so, and offers Stop, and Stop and
+    /// delete while <paramref name="deletable"/> (its first minute); <paramref name="discarding"/>
+    /// once that was pressed. While <paramref name="reminds"/> (the first such call), that minute
+    /// says to tell the others, over everything but a failure. <paramref name="failure"/>: a Drop
+    /// button that failed, in words.
     /// </summary>
     public static DropLine Live(
         LiveMeeting meeting, DropInk ink, MicFallback? micFallback = null, bool deletable = false, bool discarding = false,
-        string? failure = null)
+        string? failure = null, bool reminds = true)
     {
         ArgumentNullException.ThrowIfNull(meeting);
         if (discarding)
@@ -205,13 +209,18 @@ public static class MeetingDrop
             case DropInk.Meeting when meeting.Auto:
             {
                 var newest = meeting.Finals.Count > 0 ? meeting.Finals[^1].Text.Trim() : "";
-                var reminder = AutoReminder(meeting.AppName);
-                // A mic that went mid-call is said over everything but a failure, as for any meeting.
+                // The first automatic call's reminder holds its first minute, while Stop and delete
+                // is there, over a mic that went too. Otherwise a mic that went mid-call is said
+                // first, as for any meeting, then the latest line (before one, the stand-in mic if
+                // there is one).
+                var reminder = reminds ? AutoReminder(meeting.AppName) : null;
                 var changed = meeting.MicSwitch is { } micChange && micChange.AtLine == meeting.Ledger.Seen ? SwitchLine(micChange) : null;
-                // The reminder holds the first minute, while Stop and delete is there; then the
-                // latest line, as any meeting's (before one, the stand-in mic if there is one).
-                var detail = changed
-                    ?? (deletable ? reminder : newest.Length > 0 ? newest : micFallback is { } standIn ? FallbackLine(standIn) : reminder);
+                var detail = (deletable ? reminder : null)
+                    ?? changed
+                    ?? (newest.Length > 0 ? newest : null)
+                    ?? (micFallback is { } standIn ? FallbackLine(standIn) : null)
+                    ?? reminder
+                    ?? RecordingLine;
                 return new(AutoTitle(meeting.AppName), failure ?? detail, failure is null ? DropLineTone.Recording : DropLineTone.Alert,
                     Actions: stops);
             }
@@ -221,7 +230,7 @@ public static class MeetingDrop
                 // Said until the first line arrives: other apps' sound is in this recording.
                 var waiting = meeting.FarEndFallback
                     ? $"Inkwell couldn't hear {meeting.AppName ?? "the call"} alone, so it is recording everything this PC plays"
-                    : micFallback is { } fallback ? FallbackLine(fallback) : "Recording this meeting";
+                    : micFallback is { } fallback ? FallbackLine(fallback) : RecordingLine;
                 var title = source is null ? "● REC" : $"● REC · {source}";
                 var switched = meeting.MicSwitch is { } change && change.AtLine == meeting.Ledger.Seen ? SwitchLine(change) : null;
                 return new(title, switched ?? (latest.Length > 0 ? latest : waiting), DropLineTone.Recording);
@@ -411,6 +420,7 @@ public sealed class DropModel
     private readonly Func<string?> offerFailure;
     private readonly Func<string, bool> deletable;
     private readonly Func<string, bool> discarding;
+    private readonly Func<string, bool> reminds;
     private readonly Func<string, CallPolicy?> policyOf;
     private DropLine? live;
     private DropLine? noteShowing;
@@ -425,9 +435,11 @@ public sealed class DropModel
     /// <param name="deletable">Whether Stop and delete is offered for a record now (the meetings model's).</param>
     /// <param name="discarding">Whether a record is being stopped and deleted (the meetings model's).</param>
     /// <param name="policyOf">An app's call policy, when known (the call policies' model).</param>
+    /// <param name="reminds">Whether an automatic record's Drop says to tell the others (the meetings model's; yes when not given).</param>
     public DropModel(
         IWakeScheduler wake, Func<bool>? hasLanguageModel = null, Func<string?>? offerFailure = null, Func<bool>? noSpeechModel = null,
-        Func<string, bool>? deletable = null, Func<string, bool>? discarding = null, Func<string, CallPolicy?>? policyOf = null)
+        Func<string, bool>? deletable = null, Func<string, bool>? discarding = null, Func<string, CallPolicy?>? policyOf = null,
+        Func<string, bool>? reminds = null)
     {
         ArgumentNullException.ThrowIfNull(wake);
         this.wake = wake;
@@ -436,6 +448,7 @@ public sealed class DropModel
         this.offerFailure = offerFailure ?? (() => null);
         this.deletable = deletable ?? (_ => false);
         this.discarding = discarding ?? (_ => false);
+        this.reminds = reminds ?? (_ => true);
         this.policyOf = policyOf ?? (_ => null);
     }
 
@@ -522,7 +535,7 @@ public sealed class DropModel
         DropInk.Dictating => DictationDrop.Live(store.Dictation, store.LiveDictation, store.MicFallback),
         _ => MeetingDrop.Live(
             store.Meeting!, Ink, store.MicFallback, deletable(store.Meeting!.Record), discarding(store.Meeting!.Record),
-            store.Meeting!.Auto || discarding(store.Meeting!.Record) ? offerFailure() : null),
+            store.Meeting!.Auto || discarding(store.Meeting!.Record) ? offerFailure() : null, reminds(store.Meeting!.Record)),
     };
 
     private DropLine? OfferLine(CoreStore store) =>

@@ -176,7 +176,8 @@ public partial class App : Application
             () => models.DropFailure, noSpeechModel: () => models.Catalogue.HasSpeechModel == false,
             deletable: record => models.Meetings.CanDiscard(record),
             discarding: record => models.Meetings.Discarding == record,
-            policyOf: app => models.Calls.PolicyOf(app));
+            policyOf: app => models.Calls.PolicyOf(app),
+            reminds: record => models.Meetings.Reminds(record));
         dropModel = drop;
         var shellInk = ink;
         drop.Changed += () =>

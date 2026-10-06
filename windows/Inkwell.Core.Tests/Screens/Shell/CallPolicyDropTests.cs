@@ -62,7 +62,8 @@ public sealed class CallPolicyDropTests
                 new HeldWakes(), offerFailure: () => Screens.DropFailure,
                 deletable: record => Screens.Meetings.CanDiscard(record),
                 discarding: record => Screens.Meetings.Discarding == record,
-                policyOf: app => Screens.Calls.PolicyOf(app));
+                policyOf: app => Screens.Calls.PolicyOf(app),
+                reminds: record => Screens.Meetings.Reminds(record));
             // As the app: a change outside a batch (a wake, a press) shows at once; one during a
             // batch is the batch's.
             Screens.Meetings.PropertyChanged += (_, _) => Refresh();
@@ -224,6 +225,35 @@ public sealed class CallPolicyDropTests
         rig.Apply("""{"type":"meeting.stopped","record":"r2"}""");
         Assert.False(rig.Screens.Meetings.CanDiscard("r2"));
         Assert.Equal(0, rig.Wakes.Pending);
+    }
+
+    /// <summary>
+    /// The reminder to tell the others shows on the first call Always records, for its first
+    /// minute, and the library remembers it did: a later one (this launch or the next) has none.
+    /// </summary>
+    [Fact]
+    public void TheReminderShowsOnTheFirstAutomaticRecordingOnly()
+    {
+        var shown = new CoreCommand.SettingSet(ShellSetting.MeetingsAutoReminderShown, "on");
+        var rig = new Rig();
+        rig.Screens.Meetings.Load();
+        Assert.Contains(new CoreCommand.SettingGet(ShellSetting.MeetingsAutoReminderShown), rig.Sent.Commands);
+        rig.Apply("""{"type":"setting.value","key":"meetings.auto_reminder_shown"}""");
+
+        rig.Apply(Started(auto: true, InAMinute, "r1"));
+        Assert.Equal(MeetingDrop.AutoReminder("Zoom"), rig.Line.Detail); // the first: the reminder
+        Assert.Single(rig.Sent.Commands, c => c == shown); // remembered
+
+        rig.Apply("""{"type":"meeting.finished","record":"r1","revision":2}""", Started(auto: true, InAMinute, "r2"));
+        Assert.Equal(MeetingDrop.RecordingLine, rig.Line.Detail); // the second: no reminder
+        Assert.Equal(["Stop", "Stop and delete"], rig.Titles); // its minute's buttons stay
+        Assert.Single(rig.Sent.Commands, c => c == shown);
+
+        // The next launch reads it as shown.
+        var later = new Rig();
+        later.Apply("""{"type":"setting.value","key":"meetings.auto_reminder_shown","value":"on"}""", Started(auto: true, InAMinute, "r3"));
+        Assert.Equal(MeetingDrop.RecordingLine, later.Line.Detail);
+        Assert.DoesNotContain(shown, later.Sent.Commands);
     }
 
     [Fact]
@@ -434,7 +464,7 @@ public sealed class CallPolicyDropTests
 
         store.Apply([Ev.Of("""{"type":"meeting.mic_switched","record":"r1","from_name":"Microphone (Realtek Audio)","from_transport":"built_in","mic_name":"Studio Mic","mic_transport":"usb","mic_reason":"default_input"}""")]);
         const string Switched = "Microphone (Realtek Audio) went. Now recording with Studio Mic.";
-        Assert.Equal(Switched, Line(deletable: true));
+        Assert.Equal(MeetingDrop.AutoReminder("Zoom"), Line(deletable: true)); // the first minute: the reminder over the switch
         Assert.Equal(Switched, Line(deletable: false));
 
         // A line after the switch: the switch is old news.
