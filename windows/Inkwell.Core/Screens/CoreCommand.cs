@@ -719,6 +719,8 @@ public enum ShellSetting
     /// replaced "meetings.detect" ("Offer to record calls"), which the core migrates.
     /// </summary>
     MeetingsCallsDefault,
+    /// <summary>"on" once the reminder to tell the others has been shown during a call its app's Always recorded: it shows on the first such call only (MeetingModel).</summary>
+    MeetingsAutoReminderShown,
     /// <summary>"on" or "off": the switch for a meeting's summary and Ask. Only "off" is set this way.</summary>
     MeetingsLlm,
     /// <summary>The microphone for dictation, meetings and the test: "auto" (the default) or a device's id from audio.devices, connected when set.</summary>
@@ -777,6 +779,7 @@ public static class ShellSettings
         ShellSetting.OnboardingDone => "onboarding.done",
         ShellSetting.DictationPolish => "dictation.polish",
         ShellSetting.MeetingsCallsDefault => "meetings.calls.default",
+        ShellSetting.MeetingsAutoReminderShown => "meetings.auto_reminder_shown",
         ShellSetting.MeetingsLlm => "meetings.llm",
         ShellSetting.AudioInput => "audio.input",
         ShellSetting.AudioOutput => "audio.output",

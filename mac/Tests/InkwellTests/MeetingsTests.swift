@@ -317,7 +317,7 @@ final class MeetingSettingsTests: XCTestCase {
         meetings.load()
         // The old "Offer to record calls" switch is the call policies' default now (CallPolicyModel);
         // the microphone is Settings > Sound's.
-        XCTAssertEqual(sent.commands, [.settingGet(.retentionDays)])
+        XCTAssertEqual(sent.commands, [.settingGet(.retentionDays), .settingGet(.meetingsAutoReminderShown)])
         XCTAssertNil(meetings.retention, "not known until the core answers")
         meetings.apply(event(#"{"type":"setting.value","key":"retention.days"}"#))
         XCTAssertEqual(meetings.retention, .forever, "never set: forever")

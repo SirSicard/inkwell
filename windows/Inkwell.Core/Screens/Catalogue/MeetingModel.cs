@@ -5,7 +5,9 @@
 //
 // Recording starts when the user asks (Today's "Record now", the menu, and the Drop's "Record
 // this call"), or for an app the user chose Always for: the core starts that one itself, and the
-// Drop shows it with Stop, and Stop and delete for its first minute (one wake ends it). A
+// Drop shows it with Stop, and Stop and delete for its first minute (one wake ends it). The first
+// call Always records also says, for that minute, to tell the others; the library remembers it
+// was said (meetings.auto_reminder_shown), and later ones do not say it. A
 // meeting's title comes from the calendar when a call is on it now, read without prompting
 // (Windows: NoCalendar until packaging, so none); otherwise the summary's headline names it later.
 using Inkwell.Core.Events;
@@ -126,6 +128,18 @@ public sealed class MeetingModel(
     /// <summary>The meeting being stopped and deleted, until the core says it is gone (or refuses). Live reads it: its notes are never saved.</summary>
     public string? Discarding { get; private set; }
 
+    /// <summary>
+    /// Whether the reminder has been shown on an automatic meeting before; null until the store
+    /// answers (or when it can't: the next automatic meeting shows it).
+    /// </summary>
+    private bool? reminderShown;
+
+    /// <summary>
+    /// An automatic meeting started after the reminder to tell the others had been shown: its Drop
+    /// does not say it. Every other meeting's does (fails safe: unknown is shown).
+    /// </summary>
+    public string? Unreminded { get; private set; }
+
     /// <summary>How long the library keeps records; null until the store answers (the picker is disabled then).</summary>
     public Retention? Retention { get; private set; }
 
@@ -143,12 +157,16 @@ public sealed class MeetingModel(
         _ => null,
     };
 
+    /// <summary>Whether the Drop of <paramref name="record"/>, started by its app's Always, says to tell the others: only on the first such meeting.</summary>
+    public bool Reminds(string? record) => record is null || record != Unreminded;
+
     /// <summary>Whether Stop and delete is offered for <paramref name="record"/> now.</summary>
     public bool CanDiscard(string? record) => record is not null && Deletable == record && Discarding is null;
 
     public void Load()
     {
         send(new CoreCommand.SettingGet(ShellSetting.RetentionDays));
+        send(new CoreCommand.SettingGet(ShellSetting.MeetingsAutoReminderShown));
     }
 
     /// <summary>Records now, the whole of what this PC plays as the far end.</summary>
@@ -246,6 +264,8 @@ public sealed class MeetingModel(
     {
         EndDeleteWindow();
         Discarding = null;
+        // After the reminder was shown once, an automatic meeting does not say it.
+        Unreminded = started.Auto == true && reminderShown == true ? started.Record : null;
         if (started.Auto != true || started.DeleteUntilUnixMs is not long until || wake is null)
         {
             return;
@@ -257,6 +277,13 @@ public sealed class MeetingModel(
         }
         var record = started.Record;
         Deletable = record;
+        if (Unreminded is null)
+        {
+            // The first with its minute: it says to tell the others then, and the library
+            // remembers it did. One with no minute does not use the reminder up.
+            reminderShown = true;
+            send(new CoreCommand.SettingSet(ShellSetting.MeetingsAutoReminderShown, "on"));
+        }
         IDisposable? mine = null;
         mine = wake.After(left, () =>
         {
@@ -361,6 +388,13 @@ public sealed class MeetingModel(
             case SettingValue value when value.Key == ShellSetting.RetentionDays.Key():
                 Retention = Retentions.Parse(value.Value) ?? Screens.Retention.Forever;
                 Changed();
+                break;
+            case SettingValue value when value.Key == ShellSetting.MeetingsAutoReminderShown.Key():
+                // Never back to unshown once shown here (an answer to an older read).
+                if (reminderShown != true)
+                {
+                    reminderShown = value.Value == "on";
+                }
                 break;
             case MeetingStarted started:
                 offered = null;

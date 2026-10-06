@@ -1,5 +1,6 @@
 // Settings > Meetings. The call policies are their model's (the default, each app's choice, and a
-// stored list that can't be read, started over only after the user agrees); the microphone is
+// stored list that can't be read, started over only after the user agrees; Always as the default,
+// set only after the user agrees, each time it is chosen); the microphone is
 // Settings > Sound's (SoundModel). A failed read or save is said where it was asked. The models
 // read at core.ready (the aggregator's), so nothing loads here.
 using Inkwell.Core.Events;
@@ -16,6 +17,7 @@ public sealed partial class MeetingsSection : UserControl
     private CallPolicy? shownDefault;
     private bool rendering;
     private bool askingStartOver;
+    private bool askingAlways;
 
     public MeetingsSection(MeetingModel meetings, CallPolicyModel calls)
     {
@@ -92,7 +94,11 @@ public sealed partial class MeetingsSection : UserControl
         if (!rendering && DefaultChoice.SelectedIndex is >= 0 and < 3)
         {
             var policy = CallPolicies.All[DefaultChoice.SelectedIndex];
-            if (policy != calls.Default)
+            if (calls.AsksBeforeDefault(policy))
+            {
+                AskAlways();
+            }
+            else if (policy != calls.Default)
             {
                 shownDefault = policy;
                 calls.SetDefault(policy);
@@ -157,6 +163,65 @@ public sealed partial class MeetingsSection : UserControl
             calls.CancelStartOver();
         }
         Relayout();
+    }
+
+    /// <summary>Always as the default records every call without asking: set only after the user agrees. Cancelled, the old default shows again.</summary>
+    private async void AskAlways()
+    {
+        if (askingAlways)
+        {
+            return;
+        }
+        if (XamlRoot is null)
+        {
+            ShowStoredDefault();
+            return;
+        }
+        askingAlways = true;
+        var dialog = new ContentDialog
+        {
+            XamlRoot = XamlRoot,
+            Title = CallPolicyModel.ConfirmAlwaysTitle,
+            Content = new TextBlock { Text = CallPolicyModel.ConfirmAlwaysDetail, TextWrapping = TextWrapping.Wrap },
+            PrimaryButtonText = CallPolicyModel.ConfirmAlwaysButton,
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+        };
+        ContentDialogResult result;
+        try
+        {
+            result = await dialog.ShowAsync();
+        }
+        catch (Exception e)
+        {
+            // Another dialog is up: nothing was agreed to, so nothing is sent.
+            ScreenLog.System.Write($"the default's Always step could not be shown ({e.GetType().Name}); cancelled");
+            askingAlways = false;
+            ShowStoredDefault();
+            return;
+        }
+        askingAlways = false;
+        if (result == ContentDialogResult.Primary)
+        {
+            calls.SetDefault(CallPolicy.Always);
+        }
+        // The radio shows what is stored now: Always when agreed, else the default it kept.
+        ShowStoredDefault();
+    }
+
+    /// <summary>The default's choice shown again as stored (an Always not agreed to goes back).</summary>
+    private void ShowStoredDefault()
+    {
+        rendering = true;
+        try
+        {
+            shownDefault = calls.Default;
+            DefaultChoice.SelectedIndex = calls.Default is CallPolicy policy ? CallPolicies.All.ToList().IndexOf(policy) : -1;
+        }
+        finally
+        {
+            rendering = false;
+        }
     }
 
     /// <summary>The rows laid out again from the model: a pick not saved (the start over cancelled) goes back to what is stored.</summary>

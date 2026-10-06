@@ -5,7 +5,9 @@
 //
 // Recording starts when the user asks (the Drop's "Record this call", Today's "Record now", the
 // menu), or for an app the user chose Always for: the core starts that one itself, and the Drop
-// shows it with Stop, and Stop and delete for its first minute. A meeting's title comes from the
+// shows it with Stop, and Stop and delete for its first minute. The first call Always records
+// also says, for that minute, to tell the others; the library remembers it was said
+// (meetings.auto_reminder_shown), and later ones do not say it. A meeting's title comes from the
 // calendar when a call is on it now, read without prompting; otherwise the summary's headline
 // names it later.
 import EventKit
@@ -109,6 +111,12 @@ final class MeetingModel {
     /// The meeting being stopped and deleted, until the core says it is gone (or refuses). Live
     /// reads it: notes typed in it are never saved into a record being deleted.
     private(set) var discarding: String?
+    /// An automatic meeting started after the reminder to tell the others had been shown: its Drop
+    /// does not say it. Every other meeting's does (fails safe: unknown is shown).
+    private(set) var unreminded: String?
+    /// Whether the reminder has been shown on an automatic meeting before; nil until the store
+    /// answers (or when it can't: the next automatic meeting shows it).
+    @ObservationIgnored private var reminderShown: Bool?
     /// How long the library keeps records; nil until the store answers.
     private(set) var retention: Retention?
     /// A setting could not be read or saved: its control says so.
@@ -169,6 +177,7 @@ final class MeetingModel {
 
     func load() {
         send(.settingGet(.retentionDays))
+        send(.settingGet(.meetingsAutoReminderShown))
     }
 
     /// Records now, the whole of what this Mac plays as the far end.
@@ -207,6 +216,12 @@ final class MeetingModel {
         send(.meetingDiscard)
     }
 
+    /// Whether the Drop of `record`, started by its app's Always, says to tell the others: only on
+    /// the first such meeting.
+    func reminds(_ record: String?) -> Bool {
+        record == nil || record != unreminded
+    }
+
     /// Whether Stop and delete is offered for `record` now.
     func canDiscard(_ record: String?) -> Bool {
         record != nil && deletable == record && discarding == nil
@@ -238,6 +253,8 @@ final class MeetingModel {
     private func started(_ started: MeetingStarted) {
         endDeleteWindow()
         discarding = nil
+        // After the reminder was shown once, an automatic meeting does not say it.
+        unreminded = started.auto == true && reminderShown == true ? started.record : nil
         // Only a start the policy made: one the user made has Live's Stop, and the library's
         // delete afterwards.
         guard started.auto == true, let until = started.deleteUntilUnixMs else { return }
@@ -245,6 +262,12 @@ final class MeetingModel {
         guard left > 0 else { return }
         let record = started.record
         deletable = record
+        if unreminded == nil {
+            // The first with its minute: it says to tell the others then, and the library
+            // remembers it did. One with no minute does not use the reminder up.
+            reminderShown = true
+            send(.settingSet(.meetingsAutoReminderShown, "on"))
+        }
         let sleep = self.sleep
         deleteDeadline = Task { @MainActor [weak self] in
             do { try await sleep(.milliseconds(Int64((left * 1000).rounded(.up)))) } catch { return }
@@ -291,6 +314,9 @@ final class MeetingModel {
             switch value.key {
             case ShellSetting.retentionDays.rawValue:
                 retention = value.value.flatMap(Retention.init(rawValue:)) ?? .forever
+            case ShellSetting.meetingsAutoReminderShown.rawValue:
+                // Never back to unshown once shown here (an answer to an older read).
+                if reminderShown != true { reminderShown = value.value == "on" }
             default: break
             }
         case .meetingStarted(let meeting):

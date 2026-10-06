@@ -1,6 +1,7 @@
 // Settings > Meetings' call policies: the default for apps not chosen for (Always, Ask or Never),
 // with a warning under Always and a hint under Never, then each app the core has seen with its own
-// choice. Rows as the rest of Settings: label | control | caption.
+// choice. Rows as the rest of Settings: label | control | caption. Always as the default asks
+// first, each time it is chosen; an app's own Always does not.
 import InkBridge
 import SwiftUI
 
@@ -40,12 +41,14 @@ struct CallPolicyRows: View {
                     // A closure literal for the setter (Swift 6.3 crashes on some closure forms here).
                     Picker(
                         CallPolicyModel.defaultTitle,
-                        selection: Binding(get: { calls.defaultPolicy ?? .ask }, set: { calls.setDefault($0) })
+                        selection: Binding(get: { calls.defaultPolicy ?? .ask }, set: { calls.chooseDefault($0) })
                     ) {
                         ForEach(CallPolicy.allCases, id: \.self) { Text($0.title).tag($0) }
                     }
                     .labelsHidden()
                     .disabled(calls.defaultPolicy == nil)
+                    // Made again after a cancelled Always, so it shows the default it kept.
+                    .id(calls.alwaysPromptEpoch)
                     .accessibilityHint(CallPolicyModel.defaultCaption)
                 }
                 Text(CallPolicyModel.defaultCaption)
@@ -83,6 +86,17 @@ struct CallPolicyRows: View {
             }
         }
         .font(Typography.body)
+        // Its own view's alert: the start over's dialog is on the rows'. The button acts whatever
+        // the binding does first.
+        .alert(
+            CallPolicyModel.confirmAlwaysTitle,
+            isPresented: Binding(get: { calls.confirmingAlways }, set: { if !$0 { calls.cancelAlwaysDefault() } })
+        ) {
+            Button(CallPolicyModel.confirmAlwaysButton) { calls.confirmAlwaysDefault() }
+            Button("Cancel", role: .cancel) { calls.cancelAlwaysDefault() }
+        } message: {
+            Text(CallPolicyModel.confirmAlwaysDetail)
+        }
     }
 
     @ViewBuilder
