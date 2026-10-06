@@ -80,7 +80,7 @@ pub const SHELL_SETTINGS: &[(&str, &[&str])] = &[
     ),
     // The output a meeting's far end is to record (Windows): the default output, or a device
     // connected when it is set. Only `default` where the platform has no output picker (macOS).
-    // Stored and shown; the far end follows the default until the Windows device branch pins it.
+    // The Windows far end of all output records it (crate::capture's Windows module docs).
     (
         crate::devices::OUTPUT_KEY,
         &[crate::devices::DEFAULT, ANY_DEVICE],

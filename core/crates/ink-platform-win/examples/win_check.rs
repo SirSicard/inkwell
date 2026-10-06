@@ -213,7 +213,7 @@ mod win {
                 return 1;
             }
         }
-        match capture.far_end_plan(&target(options.app.as_ref())) {
+        match capture.far_end_plan(&target(options.app.as_ref()), None) {
             Ok(plan) => println!("far end: {plan:?}"),
             Err(e) => println!("far end: {e}"),
         }
@@ -357,11 +357,11 @@ mod win {
             }
         };
         let target = target(options.app.as_ref());
-        match capture.far_end_plan(&target) {
+        match capture.far_end_plan(&target, None) {
             Ok(plan) => println!("far end plan: {plan:?}"),
             Err(e) => println!("far end plan: {e}"),
         }
-        let mut far = match capture.open_far_end_source(&target) {
+        let mut far = match capture.open_far_end_source(&target, None) {
             Ok(far) => far,
             Err(e) => {
                 println!("FAIL open far end: {e}");

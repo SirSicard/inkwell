@@ -18,7 +18,11 @@
 //! plays to for every other app (per-process loopback is silent on new Teams), which hears
 //! everything that device plays, Inkwell's own sounds included, and is said as such (`far_end`
 //! "everything"). Device loopback is bound to one output, so it moves with the call ([`Follow`]):
-//! a headset plugged in mid-call, an output unplugged, a new default under Record now.
+//! a headset plugged in mid-call, an output unplugged, a new default under Record now. All output
+//! (Record now, and an app that could not be heard alone) records the output chosen in Settings >
+//! Sound (`audio.output`, [`crate::devices::pinned_output`]) instead of the default: it stays there
+//! when the default changes, records the default while the chosen one is unplugged, and goes back
+//! when it returns.
 
 use std::sync::Arc;
 
@@ -108,8 +112,8 @@ pub trait Follow: Send {
 pub trait MeetingCapture: Send + Sync {
     /// **Worker.** The mic and the far end for a meeting with `app` (`None`: everything this
     /// machine plays), opened and not started. The mic is `choices`' input, read now; a mic that
-    /// goes mid-meeting reads it again ([`FollowMic`]). `choices`' output is for the Windows far
-    /// end to pin its loopback to (the Windows device branch; until then it follows the default).
+    /// goes mid-meeting reads it again ([`FollowMic`]). `choices`' output is what the Windows far
+    /// end of all output records (the module docs); the Mac's tap has no output to pick.
     fn open(&self, app: Option<&AppRef>, choices: &Choices) -> Result<Opened, String>;
 
     /// **Worker.** What the far end of `app` would record, when the platform knows without
@@ -282,11 +286,11 @@ pub use win::{FarHears, WinDevices, WinMeetingCapture};
 #[cfg(windows)]
 mod win {
     use ink_audio::DEFAULT_RING_DURATION;
-    use ink_core::{AppRef, AudioSource, DeviceId, FarEndTarget, PlatformError};
+    use ink_core::{AppRef, AudioSource, CaptureControl, DeviceId, FarEndTarget, PlatformError};
     use ink_platform_win::WinCapture;
 
     use super::*;
-    use crate::devices::Picked;
+    use crate::devices::{OutputChoice, Picked};
 
     /// What a far end opened by [`WinDevices::open_far`] hears.
     #[derive(Clone, Debug, PartialEq, Eq)]
@@ -311,14 +315,25 @@ mod win {
         fn pick_mic(&self, choice: &InputChoice) -> Result<Picked, String>;
         /// Opens the mic `device`, not started.
         fn open_mic(&self, device: &DeviceId) -> Result<Box<dyn AudioSource>, PlatformError>;
-        /// Opens the far end for `target`, not started, and what it hears.
+        /// The output all output is pinned to for the user's `choice`, while it is connected
+        /// ([`crate::devices::pinned_output`]); `None`: the default.
+        fn pinned_output(&self, choice: &OutputChoice) -> Result<Option<String>, PlatformError>;
+        /// Opens the far end for `target`, not started, and what it hears; all output on `pinned`
+        /// when given.
         fn open_far(
             &self,
             target: &FarEndTarget,
+            pinned: Option<&str>,
         ) -> Result<(Box<dyn AudioSource>, FarHears), PlatformError>;
         /// Whether a device-loopback far end opened for `target` on the output `endpoint` should
-        /// be opened again (the platform's `far_end_moved`). Opens nothing.
-        fn far_moved(&self, target: &FarEndTarget, endpoint: &str) -> Result<bool, PlatformError>;
+        /// be opened again (the platform's `far_end_moved`, with all output's `pinned` output).
+        /// Opens nothing.
+        fn far_moved(
+            &self,
+            target: &FarEndTarget,
+            endpoint: &str,
+            pinned: Option<&str>,
+        ) -> Result<bool, PlatformError>;
     }
 
     impl WinDevices for WinCapture {
@@ -330,11 +345,19 @@ mod win {
             Ok(Box::new(self.open_mic_source(Some(device))?))
         }
 
+        fn pinned_output(&self, choice: &OutputChoice) -> Result<Option<String>, PlatformError> {
+            if *choice == OutputChoice::Default {
+                return Ok(None);
+            }
+            Ok(crate::devices::pinned_output(&self.output_devices()?, choice).map(|id| id.0))
+        }
+
         fn open_far(
             &self,
             target: &FarEndTarget,
+            pinned: Option<&str>,
         ) -> Result<(Box<dyn AudioSource>, FarHears), PlatformError> {
-            let far = self.open_far_end_source(target)?;
+            let far = self.open_far_end_source(target, pinned)?;
             let hears = match far.endpoint() {
                 Some(id) if !far.is_process_loopback() => FarHears::Device {
                     id: id.to_owned(),
@@ -345,8 +368,13 @@ mod win {
             Ok((Box::new(far), hears))
         }
 
-        fn far_moved(&self, target: &FarEndTarget, endpoint: &str) -> Result<bool, PlatformError> {
-            self.far_end_moved(target, endpoint)
+        fn far_moved(
+            &self,
+            target: &FarEndTarget,
+            endpoint: &str,
+            pinned: Option<&str>,
+        ) -> Result<bool, PlatformError> {
+            self.far_end_moved(target, endpoint, pinned)
         }
     }
 
@@ -366,7 +394,8 @@ mod win {
     }
 
     /// A device-loopback far end, moved with its call ([`Follow`]): to where the app plays now,
-    /// or to the new default output when it records all output.
+    /// or, when it records all output, to the chosen output (back to it when it returns) or the
+    /// new default output.
     struct FollowOutput {
         devices: Arc<dyn WinDevices>,
         /// What it was opened for: the app, or all output (Record now, or an app that could not
@@ -374,14 +403,49 @@ mod win {
         target: FarEndTarget,
         /// The output it records now.
         endpoint: String,
+        /// The user's output choice, read again at every question (all output only).
+        choices: Choices,
+        /// The output all output was last pinned to; kept when the outputs cannot be read.
+        pinned: Option<String>,
         /// Why the last question could not be answered, logged once until it can.
         unasked: Option<String>,
     }
 
+    impl FollowOutput {
+        /// The pinned output now, for all output (an app keeps its own output); the last one
+        /// known when the outputs cannot be read. Says when the chosen output goes or comes back.
+        fn pinned_now(&mut self) -> Option<String> {
+            if self.target != FarEndTarget::AllOutput {
+                return None;
+            }
+            let choice = self.choices.output();
+            match self.devices.pinned_output(&choice) {
+                Ok(now) => {
+                    match (&self.pinned, &now) {
+                        (Some(_), None) if choice != OutputChoice::Default => {
+                            log::warn!(
+                                "meeting: the chosen output is not connected; recording the default output until it is"
+                            );
+                        }
+                        (None, Some(_)) => log::info!("meeting: back on the chosen output"),
+                        _ => {}
+                    }
+                    self.pinned = now;
+                }
+                Err(e) => log::warn!("meeting: the outputs could not be read: {e}"),
+            }
+            self.pinned.clone()
+        }
+    }
+
     impl Follow for FollowOutput {
         fn moved(&mut self, again: bool) -> Result<Option<Reopened>, String> {
+            let pinned = self.pinned_now();
             if !again {
-                match self.devices.far_moved(&self.target, &self.endpoint) {
+                match self
+                    .devices
+                    .far_moved(&self.target, &self.endpoint, pinned.as_deref())
+                {
                     Ok(moved) => {
                         self.unasked = None;
                         if !moved {
@@ -403,7 +467,10 @@ mod win {
                 }
             }
             let theirs = |e: PlatformError| format!("the other side's sound: {e}");
-            let (far, hears) = self.devices.open_far(&self.target).map_err(theirs)?;
+            let (far, hears) = self
+                .devices
+                .open_far(&self.target, pinned.as_deref())
+                .map_err(theirs)?;
             let what = match hears {
                 FarHears::Device { id, name } => {
                     self.endpoint = id;
@@ -438,20 +505,27 @@ mod win {
                 .then_some(FarScope::Everything)
         }
 
-        /// `choices`' output is not read yet: the far end follows the default output until the
-        /// Windows device branch pins it.
+        /// All output records `choices`' output while it is connected, else the default.
         fn open(&self, app: Option<&AppRef>, choices: &Choices) -> Result<Opened, String> {
             let (mic, info) = open_mic(self.devices.as_ref(), &choices.input())?;
             let transport = info.transport;
+            // Read once for the start; a far end of all output reads it again as it follows.
+            let pinned = match self.devices.pinned_output(&choices.output()) {
+                Ok(pinned) => pinned,
+                Err(e) => {
+                    log::warn!("meeting: the outputs could not be read ({e}); the default output");
+                    None
+                }
+            };
             let everything = || {
                 self.devices
-                    .open_far(&FarEndTarget::AllOutput)
+                    .open_far(&FarEndTarget::AllOutput, pinned.as_deref())
                     .map(|opened| (opened, FarEndTarget::AllOutput))
             };
             let (far, scope) = match app {
                 Some(app) => {
                     let target = FarEndTarget::Apps(vec![app.clone()]);
-                    match self.devices.open_far(&target) {
+                    match self.devices.open_far(&target, None) {
                         Ok(opened @ (_, FarHears::App)) => (Ok((opened, target)), FarScope::App),
                         // Device loopback of the output the app plays to (Teams, and every app
                         // but Zoom and the browsers): by plan, not a fallback, and it hears
@@ -478,8 +552,12 @@ mod win {
             let follow = match hears {
                 FarHears::Device { id, .. } => Some(Box::new(FollowOutput {
                     devices: Arc::clone(&self.devices),
+                    pinned: (target == FarEndTarget::AllOutput)
+                        .then(|| pinned.clone())
+                        .flatten(),
                     target,
                     endpoint: id,
+                    choices: choices.clone(),
                     unasked: None,
                 }) as Box<dyn Follow>),
                 FarHears::App => None,
@@ -567,6 +645,8 @@ mod win {
             all_output_fails: AtomicBool,
             /// What `far_moved` answers.
             moved: AtomicBool,
+            /// Whether a chosen output is connected (`pinned_output`).
+            pinned_connected: AtomicBool,
             /// Device-loopback far ends opened so far: each is on the output "out-N".
             outputs: AtomicUsize,
             /// What was asked: the mic picked (for which choice), the mic opened, each far-end
@@ -608,6 +688,7 @@ mod win {
                 app_far,
                 all_output_fails: AtomicBool::new(false),
                 moved: AtomicBool::new(false),
+                pinned_connected: AtomicBool::new(true),
                 outputs: AtomicUsize::new(0),
                 asked: Mutex::new(Vec::new()),
             }
@@ -630,14 +711,32 @@ mod win {
                 Ok(Box::new(Stub(Channel::Mic)))
             }
 
+            fn pinned_output(
+                &self,
+                choice: &OutputChoice,
+            ) -> Result<Option<String>, PlatformError> {
+                Ok(match choice {
+                    OutputChoice::Default => None,
+                    OutputChoice::Device(w) => self
+                        .pinned_connected
+                        .load(Ordering::Relaxed)
+                        .then(|| w.id.0.clone()),
+                })
+            }
+
             fn open_far(
                 &self,
                 target: &FarEndTarget,
+                pinned: Option<&str>,
             ) -> Result<(Box<dyn AudioSource>, FarHears), PlatformError> {
                 let far = || Box::new(Stub(Channel::Far)) as Box<dyn AudioSource>;
                 match target {
                     FarEndTarget::AllOutput => {
-                        self.asked.lock().unwrap().push("far all output".into());
+                        let what = match pinned {
+                            Some(p) => format!("far all output on {p}"),
+                            None => "far all output".into(),
+                        };
+                        self.asked.lock().unwrap().push(what);
                         if self.all_output_fails.load(Ordering::Relaxed) {
                             return Err(PlatformError::Device("no output device".into()));
                         }
@@ -661,10 +760,12 @@ mod win {
                 &self,
                 target: &FarEndTarget,
                 endpoint: &str,
+                pinned: Option<&str>,
             ) -> Result<bool, PlatformError> {
-                let what = match target {
-                    FarEndTarget::AllOutput => "all output".to_owned(),
-                    FarEndTarget::Apps(apps) => apps[0].id.clone(),
+                let what = match (target, pinned) {
+                    (FarEndTarget::AllOutput, Some(p)) => format!("all output pinned {p}"),
+                    (FarEndTarget::AllOutput, None) => "all output".to_owned(),
+                    (FarEndTarget::Apps(apps), _) => apps[0].id.clone(),
                 };
                 self.asked
                     .lock()
@@ -854,6 +955,59 @@ mod win {
                 let err = follow.moved(true).err().unwrap();
                 assert!(err.starts_with("the other side's sound: "), "{err}");
             }
+        }
+
+        /// Record now with an output chosen: opened on it, asked about it at every interval, on
+        /// the default while it is unplugged (the platform decides where; asked unpinned), and
+        /// pinned again when it is back. An app's own output is never pinned.
+        #[test]
+        fn record_now_records_the_chosen_output_while_it_is_connected() {
+            use ink_core::Store;
+            let store = Arc::new(MemStore::default());
+            store
+                .set_setting(crate::devices::OUTPUT_KEY, "dock")
+                .unwrap();
+            store
+                .set_setting(
+                    crate::devices::OUTPUT_DEVICE_KEY,
+                    r#"{"id":"dock","name":"Dock","transport":"usb"}"#,
+                )
+                .unwrap();
+            let choices = Choices::new(store);
+            let d = leak(devices(AppFar::Device));
+            let mut opened = WinMeetingCapture::new(d).open(None, &choices).unwrap();
+            let follow = opened.sides[1].follow.as_mut().expect("it moves");
+            assert!(follow.moved(false).unwrap().is_none());
+            d.pinned_connected.store(false, Ordering::Relaxed);
+            assert!(follow.moved(false).unwrap().is_none());
+            d.pinned_connected.store(true, Ordering::Relaxed);
+            d.moved.store(true, Ordering::Relaxed);
+            follow.moved(false).unwrap().expect("back to the dock");
+            assert_eq!(
+                d.asked.lock().unwrap()[2..],
+                [
+                    "far all output on dock",
+                    "moved? all output pinned dock on out-0",
+                    "moved? all output on out-0",
+                    "moved? all output pinned dock on out-0",
+                    "far all output on dock",
+                ]
+            );
+
+            let d = leak(devices(AppFar::Device));
+            let mut teams = WinMeetingCapture::new(d)
+                .open(Some(&app("ms-teams.exe")), &choices)
+                .unwrap();
+            teams.sides[1]
+                .follow
+                .as_mut()
+                .unwrap()
+                .moved(false)
+                .unwrap();
+            assert_eq!(
+                d.asked.lock().unwrap()[2..],
+                ["far [\"ms-teams.exe\"]", "moved? ms-teams.exe on out-0"]
+            );
         }
 
         /// A Bluetooth mic's routing reaches the watchdog, which then takes its zeros for the

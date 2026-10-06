@@ -497,8 +497,8 @@ public struct AudioDevices: Codable, Sendable, Equatable {
     /// The output choice (audio.output), with outputs: default, or the chosen device's id.
     public let output: String?
     /// The output a meeting's far end is to record, and why; absent when there is no output.
-    /// Stored and shown now; meetings record it once the Windows far end is pinned to it, and
-    /// until then follow the default output.
+    /// Record now, and a call whose app could not be heard alone, record it; an app heard from
+    /// its own output keeps that output.
     public let outputUsing: AudioOutput?
     /// The chosen output as remembered, when output is a device.
     public let outputWanted: AudioWanted?
@@ -547,8 +547,8 @@ public struct AudioDevicesChanged: Codable, Sendable, Equatable {
     /// The output choice (audio.output), with outputs: default, or the chosen device's id.
     public let output: String?
     /// The output a meeting's far end is to record, and why; absent when there is no output.
-    /// Stored and shown now; meetings record it once the Windows far end is pinned to it, and
-    /// until then follow the default output.
+    /// Record now, and a call whose app could not be heard alone, record it; an app heard from
+    /// its own output keeps that output.
     public let outputUsing: AudioOutput?
     /// The chosen output as remembered, when output is a device.
     public let outputWanted: AudioWanted?
@@ -630,9 +630,8 @@ public struct AudioInputFallback: Codable, Sendable, Equatable {
     }
 }
 
-/// The output a meeting's far end is to record (Windows), and why. Stored and shown now;
-/// meetings record it once the Windows far end is pinned to it, and until then follow the
-/// default output.
+/// The output a meeting's far end is to record (Windows), and why. Record now, and a call whose
+/// app could not be heard alone, record it; an app heard from its own output keeps that output.
 public struct AudioOutput: Codable, Sendable, Equatable {
     /// The OS's id for it.
     public let id: String

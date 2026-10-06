@@ -393,8 +393,8 @@ impl PickedOutput {
 }
 
 /// The output for `choice` among `outputs` (default marked): the chosen one, by id or by name and
-/// transport, else the default. `None`: no output at all. For the Windows far end, which pins its
-/// loopback to it (feat/audio-devices-win).
+/// transport, else the default. `None`: no output at all. The Windows far end pins all output to
+/// the chosen one ([`pinned_output`]).
 pub fn resolve_output(outputs: &[DeviceInfo], choice: &OutputChoice) -> Option<PickedOutput> {
     let default = || outputs.iter().find(|d| d.is_default).or(outputs.first());
     match choice {
@@ -408,6 +408,15 @@ pub fn resolve_output(outputs: &[DeviceInfo], choice: &OutputChoice) -> Option<P
         device: device.clone(),
         reason,
     })
+}
+
+/// The output a far end of all output is pinned to for `choice`: the chosen output's id while it
+/// is connected (by id, or by name and transport); `None` for the default, or while the chosen one
+/// is not connected (the far end then records the default until it is back).
+pub fn pinned_output(outputs: &[DeviceInfo], choice: &OutputChoice) -> Option<DeviceId> {
+    resolve_output(outputs, choice)
+        .filter(|picked| picked.reason == OutputReason::Chosen)
+        .map(|picked| picked.device.id)
 }
 
 /// A device's JSON in the events (`AudioDevice`).
@@ -637,6 +646,29 @@ mod tests {
         assert_eq!(resolve_output(&[], &OutputChoice::Default), None);
     }
 
+    #[test]
+    fn all_output_is_pinned_only_to_a_chosen_output_that_is_connected() {
+        let speakers = device("speakers", "Speakers", Transport::BuiltIn, true);
+        let dock = device("dock", "Dock", Transport::Usb, false);
+        let outputs = vec![speakers, dock.clone()];
+        assert_eq!(pinned_output(&outputs, &OutputChoice::Default), None);
+        assert_eq!(
+            pinned_output(&outputs, &OutputChoice::Device(Wanted::of(&dock))),
+            Some(DeviceId("dock".into()))
+        );
+        // The same dock on another port, under a new id: still pinned, to its new id.
+        let moved = device("dock-2", "Dock", Transport::Usb, false);
+        assert_eq!(
+            pinned_output(&[moved], &OutputChoice::Device(Wanted::of(&dock))),
+            Some(DeviceId("dock-2".into()))
+        );
+        let speakers_only = vec![device("speakers", "Speakers", Transport::BuiltIn, true)];
+        assert_eq!(
+            pinned_output(&speakers_only, &OutputChoice::Device(Wanted::of(&dock))),
+            None,
+            "unplugged: the default, not a pin"
+        );
+    }
     #[test]
     fn a_device_token_is_one_printable_line_of_at_most_512_bytes() {
         assert!(is_device_token("BuiltInMicrophoneDevice"));
