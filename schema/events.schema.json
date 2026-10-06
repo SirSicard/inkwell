@@ -3668,7 +3668,7 @@
         },
         "default_model": {
           "type": "string",
-          "description": "The model used when llm.choose names none; for on_device, the registry id of the language model downloaded, else of the size the core suggests (models.listed)."
+          "description": "The model used when llm.choose names none; for on_device, the registry id of the language model downloaded, else of the one this OS offers (models.listed)."
         },
         "endpoint": {
           "type": "string",
@@ -4218,10 +4218,6 @@
         "name": {
           "type": "string",
           "description": "For a language model, its name for the user (Qwen3 4B Instruct); absent for a speech model, which the shell names itself."
-        },
-        "suggested": {
-          "type": "boolean",
-          "description": "For a language model, whether it is the size the core suggests for this computer: the Default, or the Small one with under 12 GB of memory (12 × 10⁹ bytes as the OS reports it). Exactly one language model is suggested where there are any; absent for a speech model."
         },
         "licence": {
           "type": "string",

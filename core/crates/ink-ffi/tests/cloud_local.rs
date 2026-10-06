@@ -9,11 +9,11 @@ use std::ffi::{CString, c_char, c_void};
 
 use cloud_support::{Rig, WAIT, entry};
 use common::*;
-use ink_engines::{EngineRow, LanguageSize};
+use ink_engines::EngineRow;
 use serde_json::{Value, json};
 
 fn chat_row() -> EngineRow {
-    language_row("test-chat", LanguageSize::Default, "Test Chat")
+    language_row("test-chat", "Test Chat")
 }
 
 fn local_rig(label: &str) -> Rig {

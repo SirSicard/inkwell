@@ -14,9 +14,10 @@
 //! - **Budget.** An answer that has not ended when [`LlmRequest::max_tokens`] runs out is an
 //!   error, not a shorter answer: a cut-off answer must not look like a finished one.
 //! - **Errors.** Failures of this model are [`LlmError::Engine`], naming the step, never the text.
-//! - **Thinking off.** A hybrid thinking model loaded with [`ChatQuirks::no_think`] gets the empty
-//!   think block its own template writes for `enable_thinking=false` at the start of its answer,
-//!   and a think block it writes anyway is taken off ([`crate::chat`]).
+//! - **No reasoning in the answer.** A think block at the start of an answer is taken off, and one
+//!   never closed is an error ([`crate::chat`]). A hybrid thinking model loaded with
+//!   [`ChatQuirks::no_think`] also gets the empty think block its own template writes for
+//!   `enable_thinking=false` at the start of its answer.
 
 use std::path::Path;
 
@@ -166,20 +167,16 @@ impl Llm for LlamaLlm {
 }
 
 impl LlamaLlm {
-    /// The answer as the caller gets it: for a model with thinking off, without a think block it
-    /// wrote anyway.
+    /// The answer as the caller gets it: without a think block at its start. A model that should
+    /// not think (Qwen3-4B-Instruct-2507 never does, a hybrid one has it turned off) may still
+    /// write one, and reasoning must never be typed into the user's text.
     fn answer(&self, text: String) -> Result<LlmResponse, LlmError> {
-        if !self.chat.no_think {
-            return Ok(LlmResponse { text });
-        }
         match strip_think(&text) {
             Ok(answer) if answer.len() == text.len() => Ok(LlmResponse { text }),
             Ok(answer) => Ok(LlmResponse {
                 text: answer.to_owned(),
             }),
-            Err(ThinkError::Unclosed) => Err(engine(
-                "the answer was reasoning that never ended (thinking is off for this model)",
-            )),
+            Err(ThinkError::Unclosed) => Err(engine("the answer was reasoning that never ended")),
         }
     }
 

@@ -3,9 +3,10 @@
 //! polish, voice edit, a meeting's summary and Ask. The Mac has no such row: Apple's on-device
 //! model, which the shell registers, does that there.
 //!
-//! - **One installed at a time.** The model in use is the installed language row the core last
-//!   finished installing ([`CURRENT_KEY`]); installing the other size replaces it once its
-//!   download has verified ([`installed`]), so there is never a moment with none.
+//! - **One installed at a time.** 1.0 offers one language row (Qwen3-4B-Instruct-2507). Should a
+//!   registry offer more, the model in use is the installed language row the core last finished
+//!   installing ([`CURRENT_KEY`]), and installing another replaces it once its download has
+//!   verified ([`installed`]), so there is never a moment with none.
 //! - **Its own residency**, apart from the speech models', so it never evicts Qwen3-ASR. Loaded on
 //!   first use, or warmed when a take starts that will use it ([`LocalLlms::take_started`]), and
 //!   unloaded after [`IDLE_UNLOAD`](ink_engines::IDLE_UNLOAD) unused. No timer ticks: one thread,
@@ -13,8 +14,8 @@
 //! - **Behind the model gate.** Every call registers its use ([`ModelGate::enter`]) before it
 //!   loads, so an update or a removal ([`remove`]) never replaces or deletes files under a call,
 //!   and a call never loads files being replaced.
-//! - **One alias.** It is `engine:local` ([`LOCAL_ID`]) whichever size is installed, so a mode
-//!   pinned to it follows a size change, and two modes never load two sizes.
+//! - **One alias.** It is `engine:local` ([`LOCAL_ID`]) whichever row is installed, so a mode
+//!   pinned to it follows a change of model, and two modes never load two models.
 //! - **On this machine:** its endpoint is [`Endpoint::InProcess`], so local-only mode lets it
 //!   through, and the on-device consent covers it. A feature still needs that consent: the core
 //!   fails closed without it.
@@ -39,7 +40,7 @@ use crate::runtime::{Shared, lock};
 pub type LocalModel = Box<dyn Llm>;
 
 /// The local model's id among the language models the core holds: `engine:local` in a mode's
-/// `polish_model`, whichever size is installed.
+/// `polish_model`, whichever row is installed.
 pub const LOCAL_ID: &str = "local";
 
 /// The context the local model is given, in tokens: the same as Apple's on-device model, so a
@@ -524,7 +525,7 @@ mod tests {
     }
 
     fn row() -> EngineRow {
-        let mut row = ink_engines::qwen3_1_7b_q8();
+        let mut row = ink_engines::qwen3_4b_instruct_2507_q4km();
         row.oses = vec![Os::MacOs, Os::Windows];
         row
     }
@@ -552,7 +553,7 @@ mod tests {
         ));
         let llm = local.handle(&row()).unwrap();
         assert_eq!(llm.info().endpoint, Endpoint::InProcess);
-        assert_eq!(llm.info().model, "Qwen3 1.7B");
+        assert_eq!(llm.info().model, "Qwen3 4B Instruct");
         for _ in 0..3 {
             let answer = llm.complete(&request(), &CancelToken::new()).unwrap();
             assert_eq!(answer.text, "ok");

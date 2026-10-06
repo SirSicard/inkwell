@@ -233,33 +233,30 @@ pub fn test_row(id: &str) -> EngineRow {
 
 /// A language model row (polish, edit, summaries on this machine) with one 4-byte GGUF, on both
 /// OSes so the tests run on either (the real ones are Windows only).
-pub fn language_row(id: &str, size: ink_engines::LanguageSize, name: &str) -> EngineRow {
+pub fn language_row(id: &str, name: &str) -> EngineRow {
     let mut row = test_row(id);
     row.scores.clear();
     row.files[0].name = "chat.gguf".into();
     row.files[0].url = row.files[0].url.replace("model.bin", "chat.gguf");
     row.kind = ink_engines::RowKind::Language(ink_engines::LanguageRow {
         name: name.into(),
-        size,
         chat: ink_engines::ChatQuirks::default(),
     });
     row
 }
 
-/// The machine's free space and memory as a test sets them; `None` reads as the OS not saying.
+/// The machine's free space as a test sets it; `None` reads as the OS not saying.
 #[derive(Default)]
 pub struct FakeSystem {
     pub free: Mutex<Option<u64>>,
-    pub memory: Mutex<Option<u64>>,
     /// The paths free space was asked for.
     pub asked: Mutex<Vec<PathBuf>>,
 }
 
 impl FakeSystem {
-    pub fn new(free: Option<u64>, memory: Option<u64>) -> Arc<Self> {
+    pub fn new(free: Option<u64>) -> Arc<Self> {
         Arc::new(Self {
             free: Mutex::new(free),
-            memory: Mutex::new(memory),
             asked: Mutex::default(),
         })
     }
@@ -276,13 +273,6 @@ impl ink_core::SystemInfo for FakeSystem {
             .lock()
             .unwrap()
             .ok_or(ink_core::PlatformError::Unsupported("free space"))
-    }
-
-    fn total_memory_bytes(&self) -> Result<u64, ink_core::PlatformError> {
-        self.memory
-            .lock()
-            .unwrap()
-            .ok_or(ink_core::PlatformError::Unsupported("memory"))
     }
 }
 
@@ -699,7 +689,7 @@ impl MockLocalLoader {
         self.journal.calls.load(Ordering::SeqCst)
     }
 
-    /// Local parts with this loader and `system` (unknown free space and memory when `None`).
+    /// Local parts with this loader and `system` (unknown free space when `None`).
     pub fn parts(
         self: &Arc<Self>,
         system: Option<Arc<FakeSystem>>,

@@ -2267,7 +2267,7 @@ fn a_snippet_saved_in_settings_reaches_a_running_dictation_at_once() {
 // on-device consent like Apple's model on the Mac: one tap, and the core fails closed without it.
 
 fn chat_row() -> EngineRow {
-    language_row("test-chat", ink_engines::LanguageSize::Default, "Test Chat")
+    language_row("test-chat", "Test Chat")
 }
 
 impl VoiceRig {

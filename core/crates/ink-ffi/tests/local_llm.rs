@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use common::*;
 use ink_core::{CancelToken, EventSink, LlmRequest};
-use ink_engines::{DownloadError, DownloadProgress, EngineRow, LanguageSize, ModelDir, Registry};
+use ink_engines::{DownloadError, DownloadProgress, EngineRow, ModelDir, Registry};
 use ink_ffi::runtime::{Core, Parts};
 use ink_pipeline::update::ModelInstaller;
 use serde_json::{Value, json};
@@ -18,11 +18,11 @@ use serde_json::{Value, json};
 const WAIT: Duration = Duration::from_secs(10);
 
 fn default_row() -> EngineRow {
-    language_row("test-chat", LanguageSize::Default, "Test Chat")
+    language_row("test-chat", "Test Chat")
 }
 
 fn small_row() -> EngineRow {
-    language_row("test-chat-small", LanguageSize::Small, "Test Chat Small")
+    language_row("test-chat-small", "Test Chat Small")
 }
 
 /// Installs as the downloader would: every file at its place, and the marker.

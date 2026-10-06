@@ -1,14 +1,13 @@
-//! Windows' language model rows against real files, locally: their sizes and hashes are the
-//! files', and the Small model's thinking stays off. Every test here is `#[ignore]`: CI has no
-//! model.
+//! Windows' language model row against the real file, locally: its size and hash are the file's,
+//! and its answers hold no reasoning. Every test here is `#[ignore]`: CI has no model.
 //!
-//! `$INK_LLM_MODELS` names a directory holding the rows' GGUF files, at any depth, under the names
-//! the rows give them (`Qwen3-4B-Instruct-2507-Q4_K_M.gguf`, `Qwen3-1.7B-Q8_0.gguf`).
+//! `$INK_LLM_MODELS` names a directory holding the row's GGUF file, at any depth, under the name
+//! the row gives it (`Qwen3-4B-Instruct-2507-Q4_K_M.gguf`).
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use ink_engines::{EngineRow, qwen3_1_7b_q8, qwen3_4b_instruct_2507_q4km};
+use ink_engines::{EngineRow, qwen3_4b_instruct_2507_q4km};
 use sha2::{Digest, Sha256};
 
 fn models_dir() -> PathBuf {
@@ -62,34 +61,32 @@ fn size_and_sha256(path: &Path) -> (u64, String) {
 
 #[test]
 #[ignore = "hashes the language models' files under $INK_LLM_MODELS; run locally"]
-fn the_language_rows_match_the_local_model_files() {
-    for row in [qwen3_4b_instruct_2507_q4km(), qwen3_1_7b_q8()] {
-        let path = file_of(&row);
-        let (size, sha) = size_and_sha256(&path);
-        let f = &row.files[0];
-        assert_eq!(
-            (size, sha.as_str()),
-            (f.size, f.sha256.as_str()),
-            "{}",
-            f.name
-        );
-        println!("{}: {} bytes, sha256 {sha}: matches", f.name, size);
-    }
+fn the_language_row_matches_the_local_model_file() {
+    let row = qwen3_4b_instruct_2507_q4km();
+    let path = file_of(&row);
+    let (size, sha) = size_and_sha256(&path);
+    let f = &row.files[0];
+    assert_eq!(
+        (size, sha.as_str()),
+        (f.size, f.sha256.as_str()),
+        "{}",
+        f.name
+    );
+    println!("{}: {size} bytes, sha256 {sha}: matches", f.name);
 }
 
 #[cfg(feature = "engine-llama")]
 #[test]
-#[ignore = "runs the Small model from $INK_LLM_MODELS; run locally"]
-fn the_small_models_answers_hold_no_reasoning() {
+#[ignore = "runs the language model from $INK_LLM_MODELS; run locally"]
+fn the_language_models_answers_hold_no_reasoning() {
     use ink_core::{CancelToken, Llm, LlmRequest};
     use ink_engines::RowKind;
     use ink_engines::llama::LlamaLlm;
 
-    let row = qwen3_1_7b_q8();
+    let row = qwen3_4b_instruct_2507_q4km();
     let RowKind::Language(language) = &row.kind else {
         panic!("a language row")
     };
-    assert!(language.chat.no_think);
     let llm = LlamaLlm::load_with(&file_of(&row), &language.name, language.chat).unwrap();
     let request = LlmRequest {
         system: "Rewrite the user's text with correct punctuation. Reply with the text only."

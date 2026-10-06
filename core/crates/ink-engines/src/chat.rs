@@ -1,13 +1,14 @@
-//! A language model's chat format, beyond what llama.cpp's built-in templates write: turning a
-//! hybrid thinking model's thinking off ([`ChatQuirks::no_think`]).
+//! A language model's chat format, beyond what llama.cpp's built-in templates write: keeping
+//! reasoning out of an answer, and turning a hybrid thinking model's thinking off
+//! ([`ChatQuirks::no_think`]).
 //!
 //! The llama.cpp adapter applies the model's template through llama.cpp's built-in formats, not
 //! Jinja (llama-cpp-2's `common` is off), so a template's `enable_thinking=false` cannot be passed.
 //! What Qwen3's own template writes for it is an empty think block at the start of the answer:
 //! `<|im_start|>assistant\n<think>\n\n</think>\n\n`. So the prompt gets the same block after the
-//! assistant's turn opens ([`with_no_think`]), and, as a safety net, a think block the model writes
-//! anyway is taken off the answer ([`strip_think`]). Plain string work, compiled in every build so
-//! CI tests it without a model.
+//! assistant's turn opens ([`with_no_think`]). As a safety net for every model, a think block at the
+//! start of an answer is taken off it ([`strip_think`]). Plain string work, compiled in every build
+//! so CI tests it without a model.
 //!
 //! [`ChatQuirks::no_think`]: crate::ChatQuirks::no_think
 

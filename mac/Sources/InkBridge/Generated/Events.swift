@@ -832,11 +832,6 @@ public struct CatalogueEntry: Codable, Sendable, Equatable {
     public let name: String?
     /// Its download size.
     public let sizeBytes: Int64
-    /// For a language model, whether it is the size the core suggests for this computer: the
-    /// Default, or the Small one with under 12 GB of memory (12 × 10⁹ bytes as the OS
-    /// reports it). Exactly one language model is suggested where there are any; absent for a
-    /// speech model.
-    public let suggested: Bool?
 
     private enum CodingKeys: String, CodingKey {
         case id
@@ -846,7 +841,6 @@ public struct CatalogueEntry: Codable, Sendable, Equatable {
         case licence
         case name
         case sizeBytes = "size_bytes"
-        case suggested
     }
 }
 
@@ -2014,7 +2008,7 @@ public struct LlmProviderEntry: Codable, Sendable, Equatable {
     /// Whether llm.choose may name another address (custom only).
     public let customUrl: Bool
     /// The model used when llm.choose names none; for on_device, the registry id of the
-    /// language model downloaded, else of the size the core suggests (models.listed).
+    /// language model downloaded, else of the one this OS offers (models.listed).
     public let defaultModel: String
     /// Its address: fixed for a built-in provider; for custom, the address used when llm.choose
     /// names none.

@@ -1,5 +1,4 @@
-//! The machine's free disk space (`GetDiskFreeSpaceExW`) and physical memory
-//! (`GlobalMemoryStatusEx`).
+//! The machine's free disk space (`GetDiskFreeSpaceExW`).
 #![cfg(windows)]
 
 use std::os::windows::ffi::OsStrExt;
@@ -7,7 +6,6 @@ use std::path::Path;
 
 use ink_core::{PlatformError, SystemInfo};
 use windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
-use windows::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
 use windows::core::PCWSTR;
 
 /// [`SystemInfo`] on Windows. Stateless: each call asks the OS.
@@ -50,17 +48,6 @@ impl SystemInfo for WinSystemInfo {
         // The bytes free to this caller (its quota), not the volume's total free.
         Ok(available)
     }
-
-    fn total_memory_bytes(&self) -> Result<u64, PlatformError> {
-        let mut status = MEMORYSTATUSEX {
-            dwLength: u32::try_from(size_of::<MEMORYSTATUSEX>()).unwrap_or(u32::MAX),
-            ..Default::default()
-        };
-        // SAFETY: `status` is a live MEMORYSTATUSEX whose dwLength is its size, as the call asks.
-        unsafe { GlobalMemoryStatusEx(&raw mut status) }
-            .map_err(|e| PlatformError::Failed(format!("memory: GlobalMemoryStatusEx: {e}")))?;
-        Ok(status.ullTotalPhys)
-    }
 }
 
 #[cfg(test)]
@@ -81,10 +68,5 @@ mod tests {
             .free_disk_bytes(Path::new(r"C:\no\such\inkwell\path"))
             .unwrap_err();
         assert!(matches!(e, PlatformError::Failed(_)), "{e}");
-    }
-
-    #[test]
-    fn the_pc_has_at_least_a_gigabyte_of_memory() {
-        assert!(WinSystemInfo.total_memory_bytes().unwrap() >= 1 << 30);
     }
 }

@@ -12,9 +12,7 @@ use std::time::{Duration, Instant};
 
 use common::*;
 use ink_core::CancelToken;
-use ink_engines::{
-    Downloader, EngineRow, Fetch, FetchError, Fetched, LanguageSize, ModelDir, Registry,
-};
+use ink_engines::{Downloader, EngineRow, Fetch, FetchError, Fetched, ModelDir, Registry};
 use ink_ffi::runtime::{Core, Parts};
 use serde_json::{Value, json};
 
@@ -162,7 +160,7 @@ impl Rig {
 }
 
 fn roomy() -> Arc<FakeSystem> {
-    FakeSystem::new(Some(u64::MAX / 2), Some(16 << 30))
+    FakeSystem::new(Some(u64::MAX / 2))
 }
 
 #[test]
@@ -279,7 +277,7 @@ fn a_cancel_with_no_download_says_so() {
 #[test]
 fn a_download_that_cannot_fit_fetches_nothing_and_changes_nothing() {
     let row = big_row("test-big");
-    let system = FakeSystem::new(Some(100), None);
+    let system = FakeSystem::new(Some(100));
     let rig = Rig::new("no-space", vec![row.clone()], &[], system.clone());
     let failed = rig.ask(
         json!({"cmd": "model.update", "model": "test-big", "next": "test-big"}),
@@ -314,7 +312,7 @@ fn a_download_that_cannot_fit_fetches_nothing_and_changes_nothing() {
 #[test]
 fn free_space_the_os_cannot_say_never_blocks_a_download() {
     let row = big_row("test-big");
-    let rig = Rig::new("space-unknown", vec![row], &[], FakeSystem::new(None, None));
+    let rig = Rig::new("space-unknown", vec![row], &[], FakeSystem::new(None));
     rig.served.slow.store(false, Ordering::SeqCst);
     rig.send(json!({"cmd": "model.update", "model": "test-big", "next": "test-big"}));
     assert_eq!(rig.finished("test-big")["ok"], true);
@@ -371,7 +369,7 @@ fn a_model_a_job_holds_is_never_removed() {
 
 #[test]
 fn the_language_model_in_use_is_removed_only_between_calls_and_then_none_is_used() {
-    let chat = language_row("test-chat", LanguageSize::Default, "Test Chat");
+    let chat = language_row("test-chat", "Test Chat");
     let rig = Rig::new(
         "remove-local",
         vec![chat.clone()],

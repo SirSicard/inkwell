@@ -1,5 +1,5 @@
 //! The registry rows of the diarizer, the VAD, Windows' Parakeet, the Mac's Parakeet and Windows'
-//! language models.
+//! language model.
 //!
 //! Plain data, compiled whatever the features, so CI validates it. A row reaches
 //! [`builtin_rows`](crate::builtin_rows) only when its adapter is built: a build without the
@@ -9,7 +9,7 @@
 use ink_core::Job;
 
 use crate::registry::{
-    ChatQuirks, EngineRow, JobScore, LanguageRow, LanguageSize, ModelFile, Os, RowKind, Runtime,
+    ChatQuirks, EngineRow, JobScore, LanguageRow, ModelFile, Os, RowKind, Runtime,
 };
 
 /// The diarizer's registry id.
@@ -313,14 +313,18 @@ pub fn parakeet_tdt_v3_coreml() -> EngineRow {
     }
 }
 
-/// The Default language model's registry id.
+/// The language model's registry id.
 pub const QWEN3_4B_INSTRUCT_ID: &str = "qwen3-4b-instruct-2507-q4km";
 
 /// Qwen3-4B-Instruct-2507, Q4_K_M GGUF, for llama.cpp (`engine-llama`): polish, voice edit, a
-/// meeting's summary and Ask on Windows, on this PC. The Default size.
+/// meeting's summary and Ask on Windows, on this PC. The one language model 1.0 offers.
 ///
 /// - **Pinned:** the revision is the repository's commit, and the file's size and SHA-256 are its
-///   LFS entry, both read from Hugging Face's API at that commit (2026-10-06).
+///   LFS entry, both read from Hugging Face's API at that commit (2026-10-06); the copy the bench
+///   downloaded has that size and hash.
+/// - **Chosen by measurement** (2026-10-06, an RTX 3090 on Vulkan): polish passed its guard on 37
+///   of 43 synthetic dictations, 0.24 s at the median; a meeting's harvest found 17 of 20
+///   commitments. Qwen3-1.7B with thinking off gave the text back unchanged 34 times in 43.
 /// - **Licence:** Apache-2.0: the repository's card and tag (`unsloth/Qwen3-4B-Instruct-2507-GGUF`,
 ///   read 2026-10-06), and the base model's. A conversion by unsloth, not by Qwen: Qwen publishes
 ///   no GGUF of it. Credited in About.
@@ -346,45 +350,7 @@ pub fn qwen3_4b_instruct_2507_q4km() -> EngineRow {
         runtime: Runtime::LlamaCpp,
         kind: RowKind::Language(LanguageRow {
             name: "Qwen3 4B Instruct".into(),
-            size: LanguageSize::Default,
             chat: ChatQuirks { no_think: false },
-        }),
-    }
-}
-
-/// The Small language model's registry id.
-pub const QWEN3_1_7B_ID: &str = "qwen3-1.7b-q8";
-
-/// Qwen3-1.7B, Q8_0 GGUF, for llama.cpp (`engine-llama`): the same features as the Default on a
-/// PC with under 12 GB of memory. The Small size.
-///
-/// - **Pinned:** the revision is the repository's commit, and the file's size and SHA-256 are its
-///   LFS entry, both read from Hugging Face's API at that commit (2026-10-06).
-/// - **Licence:** Apache-2.0: the repository's card and tag (`Qwen/Qwen3-1.7B-GGUF`, Qwen's own
-///   conversion, read 2026-10-06). Credited in About.
-/// - **Thinking off:** a hybrid thinking model; its answers start with the empty think block its
-///   template writes for `enable_thinking=false` ([`ChatQuirks::no_think`]).
-/// - **Windows only.**
-pub fn qwen3_1_7b_q8() -> EngineRow {
-    const REVISION: &str = "90862c4b9d2787eaed51d12237eafdfe7c5f6077";
-    const FILE: &str = "Qwen3-1.7B-Q8_0.gguf";
-    EngineRow {
-        id: QWEN3_1_7B_ID.into(),
-        scores: Vec::new(),
-        files: vec![ModelFile {
-            name: FILE.into(),
-            url: format!("https://huggingface.co/Qwen/Qwen3-1.7B-GGUF/resolve/{REVISION}/{FILE}"),
-            sha256: "061b54daade076b5d3362dac252678d17da8c68f07560be70818cace6590cb1a".into(),
-            size: 1_834_426_016,
-        }],
-        revision: REVISION.into(),
-        licence: "Apache-2.0".into(),
-        oses: vec![Os::Windows],
-        runtime: Runtime::LlamaCpp,
-        kind: RowKind::Language(LanguageRow {
-            name: "Qwen3 1.7B".into(),
-            size: LanguageSize::Small,
-            chat: ChatQuirks { no_think: true },
         }),
     }
 }
@@ -548,77 +514,44 @@ mod tests {
         assert_eq!(names, expected);
     }
 
-    /// Both language rows, with what is particular to each.
-    fn language_rows() -> [(EngineRow, &'static str, LanguageSize, bool); 2] {
-        [
-            (
-                qwen3_4b_instruct_2507_q4km(),
-                "Qwen3 4B Instruct",
-                LanguageSize::Default,
-                false,
-            ),
-            (qwen3_1_7b_q8(), "Qwen3 1.7B", LanguageSize::Small, true),
-        ]
-    }
-
     #[test]
-    fn the_language_rows_are_valid_pinned_windows_only_and_fill_no_job() {
-        let rows: Vec<EngineRow> = language_rows().into_iter().map(|r| r.0).collect();
-        Registry::new(rows.clone()).unwrap();
-        for (row, name, size, no_think) in language_rows() {
-            row.validate().unwrap();
-            assert_eq!(row.runtime, Runtime::LlamaCpp);
-            assert_eq!(row.oses, [Os::Windows], "{}", row.id);
-            assert!(
-                row.scores.is_empty() && row.info().jobs.is_empty(),
-                "{}",
-                row.id
-            );
-            assert_eq!(row.licence, "Apache-2.0");
-            assert!(ALLOWED_WEIGHT_LICENCES.contains(&row.licence.as_str()));
-            let [file] = row.files.as_slice() else {
-                panic!("{:?}", row.files)
-            };
-            assert!(file.url.contains(&format!("/resolve/{}/", row.revision)));
-            assert!(
-                file.url.ends_with(&format!("/{}", file.name)),
-                "{}",
-                file.url
-            );
-            assert_eq!(
-                row.kind,
-                RowKind::Language(LanguageRow {
-                    name: name.into(),
-                    size,
-                    chat: ChatQuirks { no_think },
-                })
-            );
-        }
-    }
-
-    #[test]
-    fn the_language_rows_hold_the_files_hugging_face_lists_at_their_commits() {
-        // Hugging Face's API, `/api/models/<repo>/tree/<commit>`, read 2026-10-06: each file's
-        // LFS size and SHA-256.
-        let default = qwen3_4b_instruct_2507_q4km();
-        assert_eq!(default.id, QWEN3_4B_INSTRUCT_ID);
-        assert_eq!(default.revision, "a06e946bb6b655725eafa393f4a9745d460374c9");
-        assert_eq!(default.files[0].name, "Qwen3-4B-Instruct-2507-Q4_K_M.gguf");
-        assert_eq!(default.total_size(), 2_497_281_120);
-        assert!(
-            default.files[0]
-                .url
-                .starts_with("https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF/")
+    fn the_language_row_is_valid_pinned_windows_only_and_fills_no_job() {
+        let row = qwen3_4b_instruct_2507_q4km();
+        row.validate().unwrap();
+        Registry::new(vec![row.clone()]).unwrap();
+        assert_eq!(row.runtime, Runtime::LlamaCpp);
+        assert_eq!(row.oses, [Os::Windows]);
+        assert!(row.scores.is_empty() && row.info().jobs.is_empty());
+        assert_eq!(row.licence, "Apache-2.0");
+        assert!(ALLOWED_WEIGHT_LICENCES.contains(&row.licence.as_str()));
+        assert_eq!(
+            row.kind,
+            RowKind::Language(LanguageRow {
+                name: "Qwen3 4B Instruct".into(),
+                chat: ChatQuirks { no_think: false },
+            })
         );
-        let small = qwen3_1_7b_q8();
-        assert_eq!(small.id, QWEN3_1_7B_ID);
-        assert_eq!(small.revision, "90862c4b9d2787eaed51d12237eafdfe7c5f6077");
-        assert_eq!(small.files[0].name, "Qwen3-1.7B-Q8_0.gguf");
-        assert_eq!(small.total_size(), 1_834_426_016);
-        assert!(
-            small.files[0]
-                .url
-                .starts_with("https://huggingface.co/Qwen/Qwen3-1.7B-GGUF/")
+    }
+
+    #[test]
+    fn the_language_row_holds_the_file_hugging_face_lists_at_its_commit() {
+        // Hugging Face's API, `/api/models/<repo>/tree/<commit>`, read 2026-10-06: the file's LFS
+        // size and SHA-256, which the bench's copy has too.
+        let row = qwen3_4b_instruct_2507_q4km();
+        assert_eq!(row.id, QWEN3_4B_INSTRUCT_ID);
+        assert_eq!(row.revision, "a06e946bb6b655725eafa393f4a9745d460374c9");
+        let [file] = row.files.as_slice() else {
+            panic!("{:?}", row.files)
+        };
+        assert_eq!(file.name, "Qwen3-4B-Instruct-2507-Q4_K_M.gguf");
+        assert_eq!(file.size, 2_497_281_120);
+        assert_eq!(
+            file.sha256,
+            "3605803b982cb64aead44f6c1b2ae36e3acdb41d8e46c8a94c6533bc4c67e597"
+        );
+        assert_eq!(
+            file.url,
+            "https://huggingface.co/unsloth/Qwen3-4B-Instruct-2507-GGUF/resolve/a06e946bb6b655725eafa393f4a9745d460374c9/Qwen3-4B-Instruct-2507-Q4_K_M.gguf"
         );
     }
 }

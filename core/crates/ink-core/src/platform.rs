@@ -1,5 +1,5 @@
 //! Operating-system services: capture control, meeting detection, hotkeys, text insertion,
-//! focus, permissions, and the machine's free disk space and memory.
+//! focus, permissions, and the machine's free disk space.
 //!
 //! `ink-platform-mac` (S2.1a, S2.1b) and `ink-platform-win` (S3.1) implement these. Every method
 //! that needs the main thread on its OS hops there inside the implementation; callers stay on
@@ -316,16 +316,11 @@ pub trait PermissionProbe: Send + Sync {
     fn request(&self, permission: Permission) -> Result<(), PlatformError>;
 }
 
-/// The machine's free disk space and memory: a model download checks the space before it fetches
-/// a byte, and the core suggests a language model's size by the memory.
+/// The machine's free disk space: a model download checks it before it fetches a byte.
 pub trait SystemInfo: Send + Sync {
     /// **Worker.** The bytes this user may still write on the volume holding `path`, which must
     /// exist (quotas included where the OS keeps them).
     fn free_disk_bytes(&self, path: &Path) -> Result<u64, PlatformError>;
-
-    /// **Worker.** The machine's physical memory in bytes, as the OS reports it (a little under
-    /// what is fitted: firmware and graphics keep some).
-    fn total_memory_bytes(&self) -> Result<u64, PlatformError>;
 }
 
 /// Every platform service, bundled for wiring the pipeline and the C ABI.

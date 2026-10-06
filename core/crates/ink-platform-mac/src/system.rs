@@ -1,4 +1,4 @@
-//! The machine's free disk space (`statfs`) and physical memory (`sysctl hw.memsize`).
+//! The machine's free disk space (`statfs`).
 
 #![cfg(target_os = "macos")]
 
@@ -32,29 +32,6 @@ impl SystemInfo for MacSystemInfo {
         // Blocks available to an unprivileged user, not `f_bfree` (which counts the reserve).
         Ok(fs.f_bavail.saturating_mul(u64::from(fs.f_bsize)))
     }
-
-    fn total_memory_bytes(&self) -> Result<u64, PlatformError> {
-        let mut bytes: u64 = 0;
-        let mut len = size_of::<u64>();
-        // SAFETY: the name is a NUL-terminated literal; `bytes` and `len` are valid for writes,
-        // and `len` holds `bytes`' size, which is what `hw.memsize` (a 64-bit integer) fills.
-        let status = unsafe {
-            libc::sysctlbyname(
-                c"hw.memsize".as_ptr(),
-                (&raw mut bytes).cast(),
-                &raw mut len,
-                std::ptr::null_mut(),
-                0,
-            )
-        };
-        if status != 0 || len != size_of::<u64>() {
-            return Err(PlatformError::Failed(format!(
-                "memory: sysctl hw.memsize failed: {}",
-                std::io::Error::last_os_error()
-            )));
-        }
-        Ok(bytes)
-    }
 }
 
 #[cfg(test)]
@@ -75,10 +52,5 @@ mod tests {
             .free_disk_bytes(Path::new("/no/such/inkwell/path"))
             .unwrap_err();
         assert!(matches!(e, PlatformError::Failed(_)), "{e}");
-    }
-
-    #[test]
-    fn the_mac_has_at_least_a_gigabyte_of_memory() {
-        assert!(MacSystemInfo.total_memory_bytes().unwrap() >= 1 << 30);
     }
 }

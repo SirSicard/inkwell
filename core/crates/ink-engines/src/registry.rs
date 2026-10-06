@@ -146,53 +146,19 @@ pub enum RowKind {
 pub struct LanguageRow {
     /// Its name for the user, as `models.listed` gives it (for example `Qwen3 4B Instruct`).
     pub name: String,
-    /// Which size it is: the core suggests one by the machine's memory ([`suggested_language`]).
-    pub size: LanguageSize,
     /// What its chat format needs beyond llama.cpp's built-in template.
     pub chat: ChatQuirks,
-}
-
-/// The sizes of language model the app offers.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum LanguageSize {
-    /// The one suggested unless the machine has little memory.
-    Default,
-    /// For machines with under [`SMALL_BELOW_MEMORY`] of memory.
-    Small,
 }
 
 /// What a language model's chat format needs beyond llama.cpp's built-in template, which the
 /// adapter applies (it has no Jinja, so a template's own switches cannot be passed).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct ChatQuirks {
-    /// A hybrid thinking model (Qwen3 1.7B): its thinking is turned off the way its own template
-    /// does with `enable_thinking=false`, by starting the answer with an empty think block
-    /// ([`chat::NO_THINK_PREFILL`](crate::chat::NO_THINK_PREFILL)); a think block it writes anyway
-    /// is taken off the answer.
+    /// A hybrid thinking model (Qwen3's 1.7B and 8B): its thinking is turned off the way its own
+    /// template does with `enable_thinking=false`, by starting the answer with an empty think
+    /// block ([`chat::NO_THINK_PREFILL`](crate::chat::NO_THINK_PREFILL)). No row in 1.0 needs it:
+    /// Qwen3-4B-Instruct-2507 never thinks.
     pub no_think: bool,
-}
-
-/// Machines reporting less physical memory than this are suggested the [`LanguageSize::Small`]
-/// model: 12 GB, in bytes. A machine fitted with 12 GB reports a little under 12 GiB (about
-/// 12.5 × 10⁹ bytes) and gets the Default; one with 8 GB gets the Small.
-pub const SMALL_BELOW_MEMORY: u64 = 12_000_000_000;
-
-/// The language row the core suggests among `rows` that run on `os`: the Default, or the Small on
-/// a machine with under [`SMALL_BELOW_MEMORY`] of memory. Memory that could not be read (`None`)
-/// suggests the Default. `None` when there is no such row (every build for the Mac).
-pub fn suggested_language(rows: &[EngineRow], os: Os, memory: Option<u64>) -> Option<&EngineRow> {
-    let wanted = match memory {
-        Some(bytes) if bytes < SMALL_BELOW_MEMORY => LanguageSize::Small,
-        _ => LanguageSize::Default,
-    };
-    let sized = |size: LanguageSize| {
-        rows.iter().find(|row| {
-            row.runs_on(os) && matches!(&row.kind, RowKind::Language(l) if l.size == size)
-        })
-    };
-    sized(wanted)
-        .or_else(|| sized(LanguageSize::Default))
-        .or_else(|| sized(LanguageSize::Small))
 }
 
 impl EngineRow {
@@ -542,7 +508,7 @@ impl Registry {
 /// only added then. Error rates are measured per job on the same sets for every row, so the router
 /// compares like with like: the meeting final and live partials on AMI IHM (three public meeting
 /// excerpts, 709 reference words), the dictation final on FLEURS English dev as published (394
-/// utterances). The diarizer, the VAD, Windows' Parakeet and the language models are listed only in
+/// utterances). The diarizer, the VAD, Windows' Parakeet and the language model are listed only in
 /// builds that include their adapter, so such a build never offers a download it cannot run. The
 /// Mac's Parakeet is in every build: the shell runs it.
 pub fn builtin_rows() -> Vec<EngineRow> {
@@ -557,8 +523,6 @@ pub fn builtin_rows() -> Vec<EngineRow> {
         crate::rows::parakeet_tdt_v3_int8(),
         #[cfg(feature = "engine-llama")]
         crate::rows::qwen3_4b_instruct_2507_q4km(),
-        #[cfg(feature = "engine-llama")]
-        crate::rows::qwen3_1_7b_q8(),
     ]
     .into_iter()
     .collect()

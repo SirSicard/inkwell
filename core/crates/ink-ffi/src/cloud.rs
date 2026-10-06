@@ -40,7 +40,7 @@
 //! # This machine's model
 //!
 //! `llm.choose` with provider [`ON_DEVICE`] chooses the core's own model on this machine: whichever
-//! size is downloaded (one at a time), so a later size change keeps the choice. It needs no key and
+//! one is downloaded (one at a time), so a later change of model keeps the choice. It needs no key and
 //! keeps local-only mode on (it is in this process), and while it is chosen nothing else stands in
 //! for it: removed, the features have no model, and never fall through to a shell's or a
 //! provider's. `llm.providers` lists it (when this OS has such models) with whether one is
@@ -734,11 +734,11 @@ pub fn providers(shared: &Shared, reference: Option<&str>) -> Value {
         .collect();
     let local = shared.llms.local();
     if offers_on_device(shared) {
-        // The model downloaded, else the size the core suggests: what choosing it would use.
+        // The model downloaded, else the one this OS offers: what choosing it would use.
         let model = local
             .as_ref()
             .map(|l| l.row().id.clone())
-            .or_else(|| crate::models::suggested(shared).map(|r| r.id.clone()));
+            .or_else(|| crate::models::language_row(shared).map(|r| r.id.clone()));
         if let Some(model) = model {
             list.push(json!({
                 "id": ON_DEVICE,

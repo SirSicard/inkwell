@@ -640,7 +640,6 @@ fn a_language_row_installed_never_serves_a_speech_job() {
     chat.files[0].url = chat.files[0].url.replace("weights.bin", "chat.gguf");
     chat.kind = ink_engines::RowKind::Language(ink_engines::LanguageRow {
         name: "Synthetic Chat".into(),
-        size: ink_engines::LanguageSize::Default,
         chat: ink_engines::ChatQuirks::default(),
     });
     let speech = row("synthetic-asr", &[(Job::DictationFinal, 9.0)]);

@@ -875,27 +875,24 @@ fn the_catalogue_lists_this_oses_models_with_their_rates_and_whether_they_are_in
     rig.finish();
 }
 
-/// A language model is listed by its kind and name, and exactly one is the suggested size: the
-/// Default, or the Small one under 12 GB of memory. The free space where models go comes with the
-/// list, and the command's id with it.
+/// A language model is listed by its kind and name. The free space where models go comes with
+/// the list, and the command's id with it.
 #[test]
-fn the_catalogue_names_language_models_suggests_one_size_and_says_the_free_space() {
-    use ink_engines::LanguageSize;
-    let listed = |memory: Option<u64>, free: Option<u64>, installed: bool| {
+fn the_catalogue_names_the_language_model_and_says_the_free_space() {
+    let listed = |free: Option<u64>, installed: bool| {
         let dir = TempDir::new("catalogue-language");
         let models = ModelDir::new(dir.path().join("models"));
         let speech = test_row(ROW_ID);
-        let default = language_row("test-chat", LanguageSize::Default, "Test Chat");
-        let small = language_row("test-chat-small", LanguageSize::Small, "Test Chat Small");
+        let chat = language_row("test-chat", "Test Chat");
         if installed {
-            install(&models, &small);
+            install(&models, &chat);
         }
         let loader = MockLoader::new(Behaviour::Say("x".into()));
-        let system = FakeSystem::new(free, memory);
+        let system = FakeSystem::new(free);
         let (core, events) = start_parts(Parts {
             store: Arc::new(ink_store::SqliteStore::open_in_memory().unwrap()),
             clock: clock(),
-            registry: Registry::new(vec![speech, default, small]).unwrap(),
+            registry: Registry::new(vec![speech, chat]).unwrap(),
             models,
             loader: loader.clone(),
             installer: Arc::new(MockInstaller {
@@ -925,55 +922,30 @@ fn the_catalogue_names_language_models_suggests_one_size_and_says_the_free_space
         listed
     };
 
-    let roomy = listed(Some(16 << 30), Some(47_000_000_000), true);
+    let roomy = listed(Some(47_000_000_000), true);
     assert_eq!(roomy["ref"], "m1");
     assert_eq!(roomy["free_bytes"], 47_000_000_000_u64);
     let models = roomy["models"].as_array().unwrap();
     let by_id = |id: &str| models.iter().find(|m| m["id"] == id).unwrap().clone();
     let speech = by_id(ROW_ID);
     assert_eq!(speech["kind"], "speech");
-    assert!(speech.get("name").is_none() && speech.get("suggested").is_none());
+    assert!(speech.get("name").is_none());
     assert_eq!(
         by_id("test-chat"),
         json!({
             "id": "test-chat",
             "kind": "language",
             "name": "Test Chat",
-            "suggested": true,
             "licence": "Apache-2.0",
             "size_bytes": 4,
-            "installed": false,
+            "installed": true,
             "jobs": [],
         })
     );
-    let small = by_id("test-chat-small");
-    assert_eq!(
-        (&small["suggested"], &small["installed"]),
-        (&json!(false), &json!(true))
-    );
 
-    // 8 GB: the Small one. The OS saying nothing of free space: no free_bytes.
-    let tight = listed(Some(8 << 30), None, true);
-    assert!(tight.get("free_bytes").is_none(), "{tight}");
-    let suggested: Vec<&Value> = tight["models"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|m| m["suggested"] == true)
-        .map(|m| &m["id"])
-        .collect();
-    assert_eq!(suggested, [&json!("test-chat-small")]);
-
-    // Memory the OS does not give: the Default.
-    let unknown = listed(None, Some(1), false);
-    let suggested = unknown["models"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|m| m["suggested"] == true)
-        .unwrap()["id"]
-        .clone();
-    assert_eq!(suggested, "test-chat");
+    // The OS saying nothing of free space: no free_bytes.
+    let unknown = listed(None, false);
+    assert!(unknown.get("free_bytes").is_none(), "{unknown}");
 }
 
 /// What serves a job is a screen's question (Settings > Models asks it after each download, and

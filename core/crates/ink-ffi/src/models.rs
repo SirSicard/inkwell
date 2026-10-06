@@ -1,5 +1,4 @@
-//! The models on disk, as the screens manage them: the catalogue's free space and the suggested
-//! language model size; a download's free-space check before it fetches anything
+//! The models on disk, as the screens manage them: the catalogue's free space; a download's free-space check before it fetches anything
 //! ([`check_space`]); cancelling a download (`model.cancel`, [`cancel`]) and deleting a model's
 //! files (`model.remove`, [`remove`]), both on the queries thread, so neither waits behind a
 //! download holding the command thread.
@@ -7,7 +6,7 @@
 use std::sync::{Arc, Mutex};
 
 use ink_core::CancelToken;
-use ink_engines::{EngineRow, Os, RowKind, suggested_language};
+use ink_engines::{EngineRow, Os, RowKind};
 use serde_json::Value;
 
 use crate::events::event;
@@ -31,27 +30,14 @@ pub fn free_bytes(shared: &Shared) -> Option<u64> {
     }
 }
 
-/// **Worker.** The machine's memory, or `None` when the OS cannot say (logged).
-fn memory(shared: &Shared) -> Option<u64> {
-    match shared.system.total_memory_bytes() {
-        Ok(bytes) => Some(bytes),
-        Err(e) => {
-            log::warn!("models: the machine's memory could not be read ({e})");
-            None
-        }
-    }
-}
-
-/// **Worker.** The language row the core suggests for this machine, if this OS has any: the
-/// Default, or the Small one with under 12 GB of memory.
-pub fn suggested(shared: &Shared) -> Option<&EngineRow> {
+/// The language row of this OS, if it has one (Windows; never the Mac).
+pub fn language_row(shared: &Shared) -> Option<&EngineRow> {
     let os = Os::current()?;
-    let rows = shared.registry.rows();
-    // Memory is read only where there is a size to suggest (never on the Mac).
-    rows.iter()
-        .any(|r| r.runs_on(os) && is_language(r))
-        .then(|| suggested_language(rows, os, memory(shared)))
-        .flatten()
+    shared
+        .registry
+        .rows()
+        .iter()
+        .find(|r| r.runs_on(os) && is_language(r))
 }
 
 /// Whether `row` is a language model.

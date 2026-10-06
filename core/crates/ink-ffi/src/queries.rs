@@ -1128,11 +1128,10 @@ impl Ctx<'_> {
 }
 
 /// **Worker.** `models.listed`: every registry model this OS runs, with whether it is installed
-/// in `models`, what it is for (a language model with its name and whether it is the suggested
-/// size), and the free space where models go.
+/// in `models`, what it is for (a language model with its name), and the free space where models
+/// go.
 pub(crate) fn catalogue(shared: &Shared, models: &ModelDir, reference: Option<&str>) -> Value {
     let os = Os::current();
-    let suggested = crate::models::suggested(shared).map(|row| row.id.clone());
     let list: Vec<Value> = shared
         .registry
         .rows()
@@ -1153,7 +1152,6 @@ pub(crate) fn catalogue(shared: &Shared, models: &ModelDir, reference: Option<&s
             });
             if let RowKind::Language(language) = &row.kind {
                 entry["name"] = language.name.as_str().into();
-                entry["suggested"] = (suggested.as_deref() == Some(row.id.as_str())).into();
             }
             entry
         })

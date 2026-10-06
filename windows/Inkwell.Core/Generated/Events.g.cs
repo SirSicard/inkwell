@@ -1009,15 +1009,6 @@ public sealed record CatalogueEntry
     /// </summary>
     [JsonPropertyName("size_bytes")]
     public required long SizeBytes { get; init; }
-
-    /// <summary>
-    /// For a language model, whether it is the size the core suggests for this computer: the
-    /// Default, or the Small one with under 12 GB of memory (12 × 10⁹ bytes as the OS
-    /// reports it). Exactly one language model is suggested where there are any; absent for a
-    /// speech model.
-    /// </summary>
-    [JsonPropertyName("suggested")]
-    public bool? Suggested { get; init; }
 }
 
 /// <summary>
@@ -2987,7 +2978,7 @@ public sealed record LlmProviderEntry
 
     /// <summary>
     /// The model used when llm.choose names none; for on_device, the registry id of the
-    /// language model downloaded, else of the size the core suggests (models.listed).
+    /// language model downloaded, else of the one this OS offers (models.listed).
     /// </summary>
     [JsonPropertyName("default_model")]
     public required string DefaultModel { get; init; }

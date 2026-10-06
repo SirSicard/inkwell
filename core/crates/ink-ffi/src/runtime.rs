@@ -129,7 +129,8 @@ pub struct Parts {
     pub loader: Arc<dyn Loader<Model>>,
     /// Installs a model's files (the downloader).
     pub installer: Arc<dyn ModelInstaller>,
-    /// What the core reads from this machine itself: its free disk space and memory.
+    /// What the core reads from this machine itself, and runs on it: its free disk space and its
+    /// own language model.
     pub local: LocalParts,
     /// Where meetings' recordings go.
     pub data_dir: PathBuf,
@@ -227,11 +228,10 @@ impl Parts {
 }
 
 /// What the core reads from this machine itself, and runs on it of its own. The default knows
-/// nothing and runs nothing: free space and memory are unknown (a download then goes ahead
-/// without the space check, and the Default language model is suggested), and no language model
-/// of the core's own loads, as in tests that do not ask.
+/// nothing and runs nothing: the free space is unknown (a download then goes ahead without the
+/// space check), and no language model of the core's own loads, as in tests that do not ask.
 pub struct LocalParts {
-    /// The machine's free disk space and memory.
+    /// The machine's free disk space.
     pub system: Arc<dyn SystemInfo>,
     /// Loads a registry language row ([`crate::local`]): llama.cpp in a build with
     /// `engine-llama`.
@@ -314,10 +314,6 @@ pub struct UnknownSystem;
 impl SystemInfo for UnknownSystem {
     fn free_disk_bytes(&self, _: &std::path::Path) -> Result<u64, ink_core::PlatformError> {
         Err(ink_core::PlatformError::Unsupported("free disk space"))
-    }
-
-    fn total_memory_bytes(&self) -> Result<u64, ink_core::PlatformError> {
-        Err(ink_core::PlatformError::Unsupported("physical memory"))
     }
 }
 
@@ -478,7 +474,7 @@ pub struct Shared {
     pub local_only: LocalOnly,
     /// Where models are installed (the meeting's VAD and diarizer load from here).
     pub models: ModelDir,
-    /// The machine's free disk space and memory.
+    /// The machine's free disk space.
     pub system: Arc<dyn SystemInfo>,
     /// The core's own language model on this machine: its residency and its thread's mailbox
     /// ([`local`](crate::local)).
