@@ -74,6 +74,7 @@ impl Rig {
             loader,
             data_dir: dir.path().to_owned(),
             permissions: Arc::new(ink_ffi::queries::NoPermissionProbe),
+            local: Default::default(),
             meetings: Default::default(),
         };
         start_parts(parts)

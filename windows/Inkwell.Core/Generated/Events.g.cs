@@ -978,10 +978,18 @@ public sealed record CatalogueEntry
 
     /// <summary>
     /// The jobs it fills, each with its measured error rate. None for a model the core only
-    /// downloads because the shell runs it (the Mac's Parakeet, parakeet-tdt-0.6b-v3-coreml).
+    /// downloads because the shell runs it (the Mac's Parakeet, parakeet-tdt-0.6b-v3-coreml),
+    /// and none for a language model.
     /// </summary>
     [JsonPropertyName("jobs")]
     public required global::System.Collections.Generic.IReadOnlyList<JobScore> Jobs { get; init; }
+
+    /// <summary>
+    /// What it is for. Always sent; a shell built before language models reads its absence as
+    /// speech.
+    /// </summary>
+    [JsonPropertyName("kind")]
+    public ModelKind? Kind { get; init; }
 
     /// <summary>
     /// Its weights' licence.
@@ -990,10 +998,26 @@ public sealed record CatalogueEntry
     public required string Licence { get; init; }
 
     /// <summary>
+    /// For a language model, its name for the user (Qwen3 4B Instruct); absent for a speech
+    /// model, which the shell names itself.
+    /// </summary>
+    [JsonPropertyName("name")]
+    public string? Name { get; init; }
+
+    /// <summary>
     /// Its download size.
     /// </summary>
     [JsonPropertyName("size_bytes")]
     public required long SizeBytes { get; init; }
+
+    /// <summary>
+    /// For a language model, whether it is the size the core suggests for this computer: the
+    /// Default, or the Small one with under 12 GB of memory (12 × 10⁹ bytes as the OS
+    /// reports it). Exactly one language model is suggested where there are any; absent for a
+    /// speech model.
+    /// </summary>
+    [JsonPropertyName("suggested")]
+    public bool? Suggested { get; init; }
 }
 
 /// <summary>
@@ -4467,6 +4491,20 @@ public enum ModeStyle
 }
 
 /// <summary>
+/// What a model in the catalogue is for: speech (transcription, live words, voice detection,
+/// the diarizer) or language (polish, voice edit, a meeting's summary and Ask, run by the core
+/// on this computer; Windows only).
+/// </summary>
+[JsonConverter(typeof(StrictEnumConverter<ModelKind>))]
+public enum ModelKind
+{
+    [JsonStringEnumMemberName("speech")]
+    Speech,
+    [JsonStringEnumMemberName("language")]
+    Language,
+}
+
+/// <summary>
 /// A job asked for a model that is held exclusively (being updated), and was refused. The job
 /// fails; nothing was loaded from files being replaced.
 /// </summary>
@@ -4622,16 +4660,29 @@ public sealed record ModelWarmed : InkEvent
 }
 
 /// <summary>
-/// The catalogue's models for this OS, in answer to models.list. What serves each job now is
-/// engine.route's answer.
+/// The catalogue's models for this OS, in answer to models.list and model.remove. What serves
+/// each job now is engine.route's answer.
 /// </summary>
 public sealed record ModelsListed : InkEvent
 {
+    /// <summary>
+    /// The bytes free to this user on the volume models are installed on; absent when the OS
+    /// could not say.
+    /// </summary>
+    [JsonPropertyName("free_bytes")]
+    public long? FreeBytes { get; init; }
+
     /// <summary>
     /// The models, in the catalogue's order.
     /// </summary>
     [JsonPropertyName("models")]
     public required global::System.Collections.Generic.IReadOnlyList<CatalogueEntry> Models { get; init; }
+
+    /// <summary>
+    /// The command's "id", when it had one.
+    /// </summary>
+    [JsonPropertyName("ref")]
+    public string? Ref { get; init; }
 }
 
 /// <summary>

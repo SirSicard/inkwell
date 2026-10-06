@@ -3101,7 +3101,7 @@
     },
     "ModelsListed": {
       "type": "object",
-      "description": "The catalogue's models for this OS, in answer to models.list. What serves each job now is engine.route's answer.",
+      "description": "The catalogue's models for this OS, in answer to models.list and model.remove. What serves each job now is engine.route's answer.",
       "properties": {
         "type": {
           "const": "models.listed"
@@ -3113,6 +3113,15 @@
             "$ref": "#/$defs/CatalogueEntry",
             "description": "A model."
           }
+        },
+        "free_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The bytes free to this user on the volume models are installed on; absent when the OS could not say."
+        },
+        "ref": {
+          "type": "string",
+          "description": "The command's \"id\", when it had one."
         }
       },
       "required": [
@@ -4155,6 +4164,14 @@
       ],
       "additionalProperties": false
     },
+    "ModelKind": {
+      "type": "string",
+      "description": "What a model in the catalogue is for: speech (transcription, live words, voice detection, the diarizer) or language (polish, voice edit, a meeting's summary and Ask, run by the core on this computer; Windows only).",
+      "enum": [
+        "speech",
+        "language"
+      ]
+    },
     "CatalogueEntry": {
       "type": "object",
       "description": "A model in the catalogue that runs on this OS.",
@@ -4162,6 +4179,18 @@
         "id": {
           "type": "string",
           "description": "Its id."
+        },
+        "kind": {
+          "$ref": "#/$defs/ModelKind",
+          "description": "What it is for. Always sent; a shell built before language models reads its absence as speech."
+        },
+        "name": {
+          "type": "string",
+          "description": "For a language model, its name for the user (Qwen3 4B Instruct); absent for a speech model, which the shell names itself."
+        },
+        "suggested": {
+          "type": "boolean",
+          "description": "For a language model, whether it is the size the core suggests for this computer: the Default, or the Small one with under 12 GB of memory (12 × 10⁹ bytes as the OS reports it). Exactly one language model is suggested where there are any; absent for a speech model."
         },
         "licence": {
           "type": "string",
@@ -4178,7 +4207,7 @@
         },
         "jobs": {
           "type": "array",
-          "description": "The jobs it fills, each with its measured error rate. None for a model the core only downloads because the shell runs it (the Mac's Parakeet, parakeet-tdt-0.6b-v3-coreml).",
+          "description": "The jobs it fills, each with its measured error rate. None for a model the core only downloads because the shell runs it (the Mac's Parakeet, parakeet-tdt-0.6b-v3-coreml), and none for a language model.",
           "items": {
             "$ref": "#/$defs/JobScore",
             "description": "A job and its error rate."

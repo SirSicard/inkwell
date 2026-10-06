@@ -54,6 +54,7 @@ fn rig(label: &str) -> Rig {
         }),
         data_dir: dir.path().to_owned(),
         permissions: probe.clone() as Arc<dyn PermissionProbe>,
+        local: Default::default(),
         meetings: Default::default(),
     };
     let events = Recorder::new();
@@ -874,6 +875,106 @@ fn the_catalogue_lists_this_oses_models_with_their_rates_and_whether_they_are_in
     rig.finish();
 }
 
+/// A language model is listed by its kind and name, and exactly one is the suggested size: the
+/// Default, or the Small one under 12 GB of memory. The free space where models go comes with the
+/// list, and the command's id with it.
+#[test]
+fn the_catalogue_names_language_models_suggests_one_size_and_says_the_free_space() {
+    use ink_engines::LanguageSize;
+    let listed = |memory: Option<u64>, free: Option<u64>, installed: bool| {
+        let dir = TempDir::new("catalogue-language");
+        let models = ModelDir::new(dir.path().join("models"));
+        let speech = test_row(ROW_ID);
+        let default = language_row("test-chat", LanguageSize::Default, "Test Chat");
+        let small = language_row("test-chat-small", LanguageSize::Small, "Test Chat Small");
+        if installed {
+            install(&models, &small);
+        }
+        let loader = MockLoader::new(Behaviour::Say("x".into()));
+        let system = FakeSystem::new(free, memory);
+        let (core, events) = start_parts(Parts {
+            store: Arc::new(ink_store::SqliteStore::open_in_memory().unwrap()),
+            clock: clock(),
+            registry: Registry::new(vec![speech, default, small]).unwrap(),
+            models,
+            loader: loader.clone(),
+            installer: Arc::new(MockInstaller {
+                generation: loader.generation.clone(),
+                gate: None,
+                installs: AtomicUsize::new(0),
+            }),
+            data_dir: dir.path().to_owned(),
+            permissions: Arc::new(ink_ffi::queries::NoPermissionProbe),
+            local: ink_ffi::runtime::LocalParts {
+                system: system.clone(),
+            },
+            meetings: Default::default(),
+        });
+        core.command(r#"{"cmd":"models.list","id":"m1"}"#).unwrap();
+        let listed = events.wait_type("models.listed", WAIT);
+        // Asked of the models root, or, before it exists, of the directory above it.
+        let asked = if installed {
+            dir.path().join("models")
+        } else {
+            dir.path().to_owned()
+        };
+        assert_eq!(*system.asked.lock().unwrap(), [asked]);
+        core.shutdown();
+        events.assert_valid();
+        listed
+    };
+
+    let roomy = listed(Some(16 << 30), Some(47_000_000_000), true);
+    assert_eq!(roomy["ref"], "m1");
+    assert_eq!(roomy["free_bytes"], 47_000_000_000_u64);
+    let models = roomy["models"].as_array().unwrap();
+    let by_id = |id: &str| models.iter().find(|m| m["id"] == id).unwrap().clone();
+    let speech = by_id(ROW_ID);
+    assert_eq!(speech["kind"], "speech");
+    assert!(speech.get("name").is_none() && speech.get("suggested").is_none());
+    assert_eq!(
+        by_id("test-chat"),
+        json!({
+            "id": "test-chat",
+            "kind": "language",
+            "name": "Test Chat",
+            "suggested": true,
+            "licence": "Apache-2.0",
+            "size_bytes": 4,
+            "installed": false,
+            "jobs": [],
+        })
+    );
+    let small = by_id("test-chat-small");
+    assert_eq!(
+        (&small["suggested"], &small["installed"]),
+        (&json!(false), &json!(true))
+    );
+
+    // 8 GB: the Small one. The OS saying nothing of free space: no free_bytes.
+    let tight = listed(Some(8 << 30), None, true);
+    assert!(tight.get("free_bytes").is_none(), "{tight}");
+    let suggested: Vec<&Value> = tight["models"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|m| m["suggested"] == true)
+        .map(|m| &m["id"])
+        .collect();
+    assert_eq!(suggested, [&json!("test-chat-small")]);
+
+    // Memory the OS does not give: the Default.
+    let unknown = listed(None, Some(1), false);
+    let suggested = unknown["models"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["suggested"] == true)
+        .unwrap()["id"]
+        .clone();
+    assert_eq!(suggested, "test-chat");
+}
+
 /// What serves a job is a screen's question (Settings > Models asks it after each download, and
 /// when an engine comes or goes): it is answered while a model update holds the command thread for
 /// its download, not once the download ends.
@@ -923,6 +1024,7 @@ fn the_catalogue_lists_the_macs_parakeet_on_macos_only() {
         }),
         data_dir: dir.path().to_owned(),
         permissions: Arc::new(ink_ffi::queries::NoPermissionProbe),
+        local: Default::default(),
         meetings: Default::default(),
     });
     let parakeet = |n: usize| {
@@ -952,6 +1054,7 @@ fn the_catalogue_lists_the_macs_parakeet_on_macos_only() {
         parakeet(1),
         Some(json!({
             "id": "parakeet-tdt-0.6b-v3-coreml",
+            "kind": "speech",
             "licence": "CC-BY-4.0",
             "size_bytes": 483_105_645,
             "installed": false,

@@ -60,6 +60,7 @@ pub mod llms;
 pub mod logging;
 pub mod mailbox;
 pub mod meeting;
+pub mod models;
 pub mod modes;
 pub mod phrases;
 pub mod queries;

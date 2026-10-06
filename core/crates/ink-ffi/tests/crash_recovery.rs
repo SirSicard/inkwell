@@ -54,6 +54,7 @@ fn parts(dir: &Path) -> Parts {
         }),
         data_dir: dir.to_owned(),
         permissions: Arc::new(ink_ffi::queries::NoPermissionProbe),
+        local: Default::default(),
         meetings: MeetingPlatform::default(),
     }
 }

@@ -598,6 +598,7 @@ fn opening_an_untitled_record_reads_its_transcript_once() {
         installer,
         data_dir: dir.path().to_owned(),
         permissions: Arc::new(ink_ffi::queries::NoPermissionProbe),
+        local: Default::default(),
         meetings: Default::default(),
     });
     let untitled = record(store.as_ref(), RecordKind::Dictation, None, NOON);

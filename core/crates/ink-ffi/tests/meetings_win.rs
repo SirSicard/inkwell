@@ -208,6 +208,7 @@ fn rig(label: &str, seconds: f64) -> Rig {
         }),
         data_dir: dir.path().to_owned(),
         permissions: Arc::new(ink_ffi::queries::NoPermissionProbe),
+        local: Default::default(),
         meetings: MeetingPlatform {
             capture: Arc::new(WinMeetingCapture::new(Devices(devices.clone()))),
             detector: Some(detector.clone()),

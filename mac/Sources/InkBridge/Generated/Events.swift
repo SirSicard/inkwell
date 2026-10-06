@@ -819,19 +819,34 @@ public struct CatalogueEntry: Codable, Sendable, Equatable {
     /// Whether its files are installed and complete.
     public let installed: Bool
     /// The jobs it fills, each with its measured error rate. None for a model the core only
-    /// downloads because the shell runs it (the Mac's Parakeet, parakeet-tdt-0.6b-v3-coreml).
+    /// downloads because the shell runs it (the Mac's Parakeet, parakeet-tdt-0.6b-v3-coreml),
+    /// and none for a language model.
     public let jobs: [JobScore]
+    /// What it is for. Always sent; a shell built before language models reads its absence as
+    /// speech.
+    public let kind: ModelKind?
     /// Its weights' licence.
     public let licence: String
+    /// For a language model, its name for the user (Qwen3 4B Instruct); absent for a speech
+    /// model, which the shell names itself.
+    public let name: String?
     /// Its download size.
     public let sizeBytes: Int64
+    /// For a language model, whether it is the size the core suggests for this computer: the
+    /// Default, or the Small one with under 12 GB of memory (12 × 10⁹ bytes as the OS
+    /// reports it). Exactly one language model is suggested where there are any; absent for a
+    /// speech model.
+    public let suggested: Bool?
 
     private enum CodingKeys: String, CodingKey {
         case id
         case installed
         case jobs
+        case kind
         case licence
+        case name
         case sizeBytes = "size_bytes"
+        case suggested
     }
 }
 
@@ -2898,6 +2913,14 @@ public enum ModeStyle: String, Codable, Sendable, Equatable, CaseIterable {
     case other
 }
 
+/// What a model in the catalogue is for: speech (transcription, live words, voice detection,
+/// the diarizer) or language (polish, voice edit, a meeting's summary and Ask, run by the core
+/// on this computer; Windows only).
+public enum ModelKind: String, Codable, Sendable, Equatable, CaseIterable {
+    case speech
+    case language
+}
+
 /// A job asked for a model that is held exclusively (being updated), and was refused. The job
 /// fails; nothing was loaded from files being replaced.
 public struct ModelRefused: Codable, Sendable, Equatable {
@@ -2994,13 +3017,25 @@ public struct ModelWarmed: Codable, Sendable, Equatable {
     public let type: String
 }
 
-/// The catalogue's models for this OS, in answer to models.list. What serves each job now is
-/// engine.route's answer.
+/// The catalogue's models for this OS, in answer to models.list and model.remove. What serves
+/// each job now is engine.route's answer.
 public struct ModelsListed: Codable, Sendable, Equatable {
+    /// The bytes free to this user on the volume models are installed on; absent when the OS
+    /// could not say.
+    public let freeBytes: Int64?
     /// The models, in the catalogue's order.
     public let models: [CatalogueEntry]
+    /// The command's "id", when it had one.
+    public let ref: String?
     /// Always `models.listed`.
     public let type: String
+
+    private enum CodingKeys: String, CodingKey {
+        case freeBytes = "free_bytes"
+        case models
+        case ref
+        case type
+    }
 }
 
 /// The user's modes, in answer to modes.list, modes.save and modes.delete, in the order they

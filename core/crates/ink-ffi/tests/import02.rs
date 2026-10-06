@@ -108,6 +108,7 @@ impl Rig {
             }),
             data_dir: dir.path().to_owned(),
             permissions: Arc::new(ink_ffi::queries::NoPermissionProbe),
+            local: Default::default(),
             meetings: Default::default(),
         });
         let keys = Arc::new(Keys {

@@ -31,7 +31,7 @@ use std::thread::{self, JoinHandle};
 use ink_audio::BandsWriter;
 use ink_core::{
     CancelToken, Clock, EngineError, EventSink, FocusReader, Job, Llm, MeetingDetector,
-    OfflineEngine, PermissionProbe, Store, TextInserter,
+    OfflineEngine, PermissionProbe, Store, SystemInfo, TextInserter,
 };
 use ink_engines::{
     DownloadProgress, EngineRow, Loader, ModelDir, Os, Registry, Residency, Route, Router, Unloaded,
@@ -128,6 +128,8 @@ pub struct Parts {
     pub loader: Arc<dyn Loader<Model>>,
     /// Installs a model's files (the downloader).
     pub installer: Arc<dyn ModelInstaller>,
+    /// What the core reads from this machine itself: its free disk space and memory.
+    pub local: LocalParts,
     /// Where meetings' recordings go.
     pub data_dir: PathBuf,
     /// Checks and requests the OS permissions (the screens' `permissions.*` commands).
@@ -215,10 +217,64 @@ impl Parts {
             models,
             data_dir: config.data_dir.clone(),
             permissions,
+            local: LocalParts::production(),
             meetings: MeetingPlatform::production()?,
         };
         Ok((parts, import02))
     }
+}
+
+/// What the core reads from this machine itself. The default knows nothing: free space and memory
+/// are unknown (a download then goes ahead without the space check, and the Default language
+/// model is suggested), as in tests that do not ask.
+pub struct LocalParts {
+    /// The machine's free disk space and memory.
+    pub system: Arc<dyn SystemInfo>,
+}
+
+impl Default for LocalParts {
+    fn default() -> Self {
+        Self {
+            system: Arc::new(UnknownSystem),
+        }
+    }
+}
+
+impl LocalParts {
+    /// The platform's.
+    fn production() -> Self {
+        Self {
+            system: platform_system(),
+        }
+    }
+}
+
+/// [`SystemInfo`] where the platform can say nothing: every call says so.
+pub struct UnknownSystem;
+
+impl SystemInfo for UnknownSystem {
+    fn free_disk_bytes(&self, _: &std::path::Path) -> Result<u64, ink_core::PlatformError> {
+        Err(ink_core::PlatformError::Unsupported("free disk space"))
+    }
+
+    fn total_memory_bytes(&self) -> Result<u64, ink_core::PlatformError> {
+        Err(ink_core::PlatformError::Unsupported("physical memory"))
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn platform_system() -> Arc<dyn SystemInfo> {
+    Arc::new(ink_platform_mac::MacSystemInfo)
+}
+
+#[cfg(windows)]
+fn platform_system() -> Arc<dyn SystemInfo> {
+    Arc::new(ink_platform_win::WinSystemInfo)
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
+fn platform_system() -> Arc<dyn SystemInfo> {
+    Arc::new(UnknownSystem)
 }
 
 /// The Mac's permission probe, told whether the app has asked for System Audio before (until it
@@ -363,6 +419,8 @@ pub struct Shared {
     pub local_only: LocalOnly,
     /// Where models are installed (the meeting's VAD and diarizer load from here).
     pub models: ModelDir,
+    /// The machine's free disk space and memory.
+    pub system: Arc<dyn SystemInfo>,
     /// Ids of the engines the shell registered, of every kind: one id space.
     externals: Mutex<Vec<String>>,
     /// The ink's bands writer, lent by the C ABI; the pump publishes through it.
@@ -586,6 +644,7 @@ impl Core {
         let shared = Arc::new(Shared {
             events: hub.events(),
             models: parts.models,
+            system: parts.local.system,
             router,
             residency: Residency::new(parts.loader, parts.clock.clone()),
             store: parts.store,
@@ -1316,6 +1375,7 @@ pub(crate) mod testing {
             installer: Arc::new(NoModels),
             data_dir,
             permissions: Arc::new(crate::queries::NoPermissionProbe),
+            local: Default::default(),
             meetings: Default::default(),
         };
         let core = Core::start(

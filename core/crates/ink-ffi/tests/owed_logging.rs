@@ -89,6 +89,7 @@ fn a_looks_done_line_that_cannot_be_read_is_logged_and_the_suggestion_still_show
         }),
         data_dir: dir.path().to_owned(),
         permissions: Arc::new(ink_ffi::queries::NoPermissionProbe),
+        local: Default::default(),
         meetings: Default::default(),
     });
     core.command(r#"{"cmd":"commitments.list","id":"owed"}"#)

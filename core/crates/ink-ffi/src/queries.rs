@@ -23,7 +23,7 @@ use ink_core::{
     Channel, Commitment, CommitmentId, NoteId, Permission, PermissionProbe, PermissionState,
     PlatformError, RecordId, SpeakerId, Store,
 };
-use ink_engines::{ModelDir, Os, Route};
+use ink_engines::{ModelDir, Os, Route, RowKind};
 use serde_json::{Map, Value, json};
 
 use crate::events::{self, event};
@@ -902,7 +902,7 @@ impl Ctx<'_> {
                     Err(e) => fail(e),
                 }
             }
-            Query::ModelsList => emit(self.catalogue()),
+            Query::ModelsList => emit(self.catalogue(id.as_deref())),
             Query::EngineRoute(job) => emit(routed(self.shared, job)),
             Query::SettingGet { key } => match if crate::calls::is_calls_setting(&key) {
                 crate::calls::setting_value(store, &key)
@@ -1092,31 +1092,55 @@ impl Ctx<'_> {
         )
     }
 
-    /// `models.listed`: every registry model this OS runs, with whether it is installed.
-    fn catalogue(&self) -> Value {
-        let os = Os::current();
-        let models: Vec<Value> = self
-            .shared
-            .registry
-            .rows()
-            .iter()
-            .filter(|row| os.is_some_and(|os| row.runs_on(os)))
-            .map(|row| {
-                json!({
-                    "id": row.id,
-                    "licence": row.licence,
-                    "size_bytes": row.total_size(),
-                    "installed": self.models.is_installed(row),
-                    "jobs": row
-                        .scores
-                        .iter()
-                        .map(|s| json!({"job": events::job(s.job), "wer": s.wer}))
-                        .collect::<Vec<_>>(),
-                })
-            })
-            .collect();
-        event("models.listed", &[("models", Some(Value::Array(models)))])
+    /// `models.listed`: every registry model this OS runs, with whether it is installed, and the
+    /// free space where models go.
+    fn catalogue(&self, reference: Option<&str>) -> Value {
+        catalogue(self.shared, self.models, reference)
     }
+}
+
+/// **Worker.** `models.listed`: every registry model this OS runs, with whether it is installed
+/// in `models`, what it is for (a language model with its name and whether it is the suggested
+/// size), and the free space where models go.
+pub(crate) fn catalogue(shared: &Shared, models: &ModelDir, reference: Option<&str>) -> Value {
+    let os = Os::current();
+    let suggested = crate::models::suggested(shared).map(|row| row.id.clone());
+    let list: Vec<Value> = shared
+        .registry
+        .rows()
+        .iter()
+        .filter(|row| os.is_some_and(|os| row.runs_on(os)))
+        .map(|row| {
+            let mut entry = json!({
+                "id": row.id,
+                "kind": if crate::models::is_language(row) { "language" } else { "speech" },
+                "licence": row.licence,
+                "size_bytes": row.total_size(),
+                "installed": models.is_installed(row),
+                "jobs": row
+                    .scores
+                    .iter()
+                    .map(|s| json!({"job": events::job(s.job), "wer": s.wer}))
+                    .collect::<Vec<_>>(),
+            });
+            if let RowKind::Language(language) = &row.kind {
+                entry["name"] = language.name.as_str().into();
+                entry["suggested"] = (suggested.as_deref() == Some(row.id.as_str())).into();
+            }
+            entry
+        })
+        .collect();
+    event(
+        "models.listed",
+        &[
+            ("models", Some(Value::Array(list))),
+            (
+                "free_bytes",
+                crate::models::free_bytes(shared).map(Into::into),
+            ),
+            ("ref", reference.map(Into::into)),
+        ],
+    )
 }
 
 /// `setting.value`.
