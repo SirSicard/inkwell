@@ -68,6 +68,17 @@ final class ConsentDropTests: XCTestCase {
         XCTAssertTrue(pressed.isEmpty, "nothing recorded without a click")
     }
 
+    /// The consent line is laid out whole, on two lines: a tail-truncating field drew one, and the
+    /// reminder to tell the others was cut off.
+    func testTheConsentLineIsShownWholeOnTwoLines() {
+        let content = DropContentView()
+        content.setFrameSize(DropLayout.sizeWithActions)
+        let store = CoreStore()
+        store.apply([event(#"{"type":"meeting.detected","app":"com.example.call","app_name":"Example Call"}"#)])
+        content.show(ShellInk(store: store).dropText)
+        XCTAssertEqual(content.detailShownLines, 2)
+    }
+
     func testTheDropsAnswersBecomeMeetingCommands() {
         let sent = Sent()
         let meetings = MeetingModel(send: sent.send, titles: FixedTitle(title: "Weekly sync"))

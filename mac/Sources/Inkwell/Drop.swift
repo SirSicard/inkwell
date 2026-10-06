@@ -266,7 +266,10 @@ final class DropContentView: NSView {
 
         title.font = .systemFont(ofSize: 12, weight: .semibold)
         detail.font = Self.lineFont
-        detail.lineBreakMode = .byTruncatingTail
+        // Wrapped by word, the last line cut: a tail-truncating field draws one line only, which
+        // cut the reminder to tell the others off the consent offer.
+        detail.lineBreakMode = .byWordWrapping
+        detail.cell?.truncatesLastVisibleLine = true
         detail.maximumNumberOfLines = 2
         detail.cell?.wraps = true
         detail.preferredMaxLayoutWidth = DropLayout.sizeWithActions.width - DropLayout.inkWidth - 24
@@ -348,13 +351,21 @@ final class DropContentView: NSView {
         } else {
             detail.maximumNumberOfLines = 2
             detail.cell?.wraps = true
-            detail.lineBreakMode = .byTruncatingTail
+            detail.lineBreakMode = .byWordWrapping
+            detail.cell?.truncatesLastVisibleLine = true
             detail.stringValue = text.detail
         }
         layer?.borderWidth = text.tone == .alert ? 1.5 : 1
         applyColours()
         // The live words are the user's: VoiceOver reads them (they are on screen), no log does.
         setAccessibilityLabel("Inkwell: \(text.title), \(text.detail)")
+    }
+
+    /// How many lines the detail is laid out on now (tests).
+    var detailShownLines: Int {
+        layoutSubtreeIfNeeded()
+        let line = NSLayoutManager().defaultLineHeight(for: detail.font ?? Self.lineFont)
+        return Int((detail.frame.height / line).rounded())
     }
 
     @objc private func clicked(_ sender: NSButton) {
