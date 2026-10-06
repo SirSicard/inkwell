@@ -245,7 +245,8 @@ impl CaptureControl for MacCapture {
     }
 
     /// HAL listeners for the device list and both defaults (the module docs). A second call
-    /// removes the first's listeners before adding the new ones.
+    /// removes the first's listeners before adding the new ones; if those cannot be added, nothing
+    /// is watched (the core logs the error and reads the devices when it opens a mic).
     fn watch_devices(&self, on_change: EventSink<DeviceChange>) -> Result<(), PlatformError> {
         let mut watch = self.watch.lock().unwrap_or_else(PoisonError::into_inner);
         // The old listeners go first (their drop waits out a notification in flight), so the old
@@ -430,6 +431,20 @@ mod tests {
         )
         .expect("listening");
         assert!(!gone.load(Ordering::Acquire), "alive while it exists");
+        // And a format listener, as a mic stream has: its removal too is refused once the device
+        // is gone ('!obj'), and must not leak.
+        let format = io::FormatListener::register(
+            aggregate,
+            io::FormatWatch::new(
+                ink_core::StreamFormat {
+                    sample_rate: 48_000,
+                    channels: 1,
+                },
+                Arc::default(),
+            ),
+            Arc::new(|| Err("not read".into())),
+        )
+        .expect("listening for the rate");
         let before = devices.load(Ordering::SeqCst);
         // SAFETY: created above, destroyed once.
         let status = unsafe { objc2_core_audio::AudioHardwareDestroyAggregateDevice(aggregate) };
@@ -441,6 +456,7 @@ mod tests {
             gone.load(Ordering::Acquire)
         });
         drop(alive);
+        drop(format);
 
         capture.unwatch_devices();
         let after = devices.load(Ordering::SeqCst);

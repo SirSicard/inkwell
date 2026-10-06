@@ -407,6 +407,8 @@ mod win {
         choices: Choices,
         /// The output all output was last pinned to; kept when the outputs cannot be read.
         pinned: Option<String>,
+        /// Why the choice or the outputs could not be read, logged once until they can.
+        unread: Option<String>,
         /// Why the last question could not be answered, logged once until it can.
         unasked: Option<String>,
     }
@@ -418,9 +420,17 @@ mod win {
             if self.target != FarEndTarget::AllOutput {
                 return None;
             }
-            let choice = self.choices.output();
-            match self.devices.pinned_output(&choice) {
-                Ok(now) => {
+            // Kept as it was when the choice or the outputs cannot be read: a store or a device
+            // list failing for a moment must not move the recording to the default and back.
+            let now = self.choices.try_output().and_then(|choice| {
+                self.devices
+                    .pinned_output(&choice)
+                    .map(|now| (choice, now))
+                    .map_err(|e| e.to_string())
+            });
+            match now {
+                Ok((choice, now)) => {
+                    self.unread = None;
                     match (&self.pinned, &now) {
                         (Some(_), None) if choice != OutputChoice::Default => {
                             log::warn!(
@@ -432,7 +442,12 @@ mod win {
                     }
                     self.pinned = now;
                 }
-                Err(e) => log::warn!("meeting: the outputs could not be read: {e}"),
+                Err(e) => {
+                    if self.unread.as_ref() != Some(&e) {
+                        log::warn!("meeting: the output choice could not be read: {e}");
+                        self.unread = Some(e);
+                    }
+                }
             }
             self.pinned.clone()
         }
@@ -558,6 +573,7 @@ mod win {
                     target,
                     endpoint: id,
                     choices: choices.clone(),
+                    unread: None,
                     unasked: None,
                 }) as Box<dyn Follow>),
                 FarHears::App => None,
@@ -647,6 +663,8 @@ mod win {
             moved: AtomicBool,
             /// Whether a chosen output is connected (`pinned_output`).
             pinned_connected: AtomicBool,
+            /// Whether `pinned_output` cannot read the outputs.
+            pinned_fails: AtomicBool,
             /// Device-loopback far ends opened so far: each is on the output "out-N".
             outputs: AtomicUsize,
             /// What was asked: the mic picked (for which choice), the mic opened, each far-end
@@ -689,6 +707,7 @@ mod win {
                 all_output_fails: AtomicBool::new(false),
                 moved: AtomicBool::new(false),
                 pinned_connected: AtomicBool::new(true),
+                pinned_fails: AtomicBool::new(false),
                 outputs: AtomicUsize::new(0),
                 asked: Mutex::new(Vec::new()),
             }
@@ -715,6 +734,9 @@ mod win {
                 &self,
                 choice: &OutputChoice,
             ) -> Result<Option<String>, PlatformError> {
+                if self.pinned_fails.load(Ordering::Relaxed) {
+                    return Err(PlatformError::Device("the outputs cannot be listed".into()));
+                }
                 Ok(match choice {
                     OutputChoice::Default => None,
                     OutputChoice::Device(w) => self
@@ -978,6 +1000,10 @@ mod win {
             let mut opened = WinMeetingCapture::new(d).open(None, &choices).unwrap();
             let follow = opened.sides[1].follow.as_mut().expect("it moves");
             assert!(follow.moved(false).unwrap().is_none());
+            // The outputs cannot be read for a moment: it keeps its pin, and stays.
+            d.pinned_fails.store(true, Ordering::Relaxed);
+            assert!(follow.moved(false).unwrap().is_none());
+            d.pinned_fails.store(false, Ordering::Relaxed);
             d.pinned_connected.store(false, Ordering::Relaxed);
             assert!(follow.moved(false).unwrap().is_none());
             d.pinned_connected.store(true, Ordering::Relaxed);
@@ -987,6 +1013,7 @@ mod win {
                 d.asked.lock().unwrap()[2..],
                 [
                     "far all output on dock",
+                    "moved? all output pinned dock on out-0",
                     "moved? all output pinned dock on out-0",
                     "moved? all output on out-0",
                     "moved? all output pinned dock on out-0",

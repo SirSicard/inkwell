@@ -31,8 +31,12 @@
 //! the same rules: the device watch on the system object (the device list and both defaults,
 //! [`device_watch_listener`], which hands each change to the core's callback and returns) and a
 //! mic's device-alive listener ([`alive_listener`], which sets a flag). Both run on a HAL
-//! notification thread, never the IO thread. Removing a listener from an object that is already
-//! gone answers `'!obj'`; its listeners went with it, so that context is freed, not leaked.
+//! notification thread, never the IO thread.
+//!
+//! **A device that is gone** (unplugged mid-stream) refuses its teardown: removing a listener
+//! answers `'!obj'`, destroying an IOProc `'!dev'` (measured). The HAL calls nothing of an object
+//! it no longer has, so a refusal on an object that reads as gone ([`IoHal::is_gone`]) counts as
+//! done, and the context is freed rather than leaked.
 //!
 //! `unsafe impl Sync` appears only in this file, each with its reason.
 #![cfg(target_os = "macos")]
@@ -54,10 +58,10 @@ use objc2_core_audio::{
     AudioDeviceStart, AudioDeviceStop, AudioObjectAddPropertyListener, AudioObjectID,
     AudioObjectPropertyAddress, AudioObjectPropertyListenerProc, AudioObjectPropertySelector,
     AudioObjectRemovePropertyListener, kAudioDevicePropertyDeviceIsAlive,
-    kAudioDevicePropertyNominalSampleRate, kAudioHardwareBadObjectError,
-    kAudioHardwarePropertyDefaultInputDevice, kAudioHardwarePropertyDefaultOutputDevice,
-    kAudioHardwarePropertyDevices, kAudioObjectPropertyElementMain,
-    kAudioObjectPropertyScopeGlobal,
+    kAudioDevicePropertyNominalSampleRate, kAudioHardwareBadDeviceError,
+    kAudioHardwareBadObjectError, kAudioHardwarePropertyDefaultInputDevice,
+    kAudioHardwarePropertyDefaultOutputDevice, kAudioHardwarePropertyDevices,
+    kAudioObjectPropertyElementMain, kAudioObjectPropertyScopeGlobal,
 };
 use objc2_core_audio_types::{AudioBuffer, AudioBufferList, AudioTimeStamp, AudioTimeStampFlags};
 
@@ -141,6 +145,20 @@ pub(crate) trait IoHal: Sync {
         listener: AudioObjectPropertyListenerProc,
         client: *mut c_void,
     ) -> i32;
+    /// Whether `object` is gone from the HAL (a device unplugged): reading it fails as a bad
+    /// object or device. A refused teardown on a gone object is no teardown left to do: the HAL
+    /// calls nothing of an object it no longer has. Measured: removing a listener from a destroyed
+    /// device answers '!obj', destroying its IOProc '!dev'.
+    fn is_gone(&self, object: ObjectId) -> bool {
+        let _ = object;
+        false
+    }
+}
+
+/// Whether a teardown call that answered `status` on `object` left nothing registered: it worked,
+/// or the object itself is gone.
+fn torn_down(hal: &dyn IoHal, object: ObjectId, status: i32) -> bool {
+    status == 0 || hal.is_gone(object)
 }
 
 /// [`IoHal`] on the real audio server.
@@ -197,6 +215,20 @@ impl IoHal for SystemIo {
         // SAFETY: the caller upholds the trait's contract; `address` is live for the call.
         unsafe {
             AudioObjectRemovePropertyListener(device, NonNull::from(address), listener, client)
+        }
+    }
+
+    fn is_gone(&self, object: ObjectId) -> bool {
+        match super::hal::get::<u32>(
+            object,
+            kAudioDevicePropertyDeviceIsAlive,
+            kAudioObjectPropertyScopeGlobal,
+            "reading whether a device is still there",
+        ) {
+            Ok(_) => false,
+            Err(e) => {
+                e.status == kAudioHardwareBadObjectError || e.status == kAudioHardwareBadDeviceError
+            }
         }
     }
 }
@@ -471,10 +503,11 @@ impl Drop for FormatListener {
                 self.context.as_ptr().cast(),
             )
         };
-        // Freed only when the HAL confirms the listener is gone and no notification is inside.
-        // Otherwise a later notification could still read the context (its gate lives inside
-        // it), so it is leaked and counted, never freed.
-        if status == 0 && context.gate.wait_idle(LEAVE_TIMEOUT) {
+        // Freed only when the HAL confirms the listener is gone (or the device is, and the
+        // listener with it) and no notification is inside. Otherwise a later notification could
+        // still read the context (its gate lives inside it), so it is leaked and counted, never
+        // freed.
+        if torn_down(self.hal, self.device, status) && context.gate.wait_idle(LEAVE_TIMEOUT) {
             // SAFETY: removed, and no notification is inside the gate; the context came from
             // `Box::into_raw` in `register_on`.
             drop(unsafe { Box::from_raw(self.context.as_ptr()) });
@@ -567,10 +600,8 @@ impl<C: IoContext> Drop for Listeners<C> {
                     self.context.as_ptr().cast(),
                 )
             };
-            // '!obj': the object itself is gone (a device unplugged mid-stream), and its listeners
-            // with it, so nothing can call them again. Measured on the real HAL: removing a
-            // listener from a destroyed device answers this.
-            removed &= status == 0 || status == kAudioHardwareBadObjectError;
+            // A device unplugged mid-stream answers '!obj': its listeners went with it.
+            removed &= torn_down(self.hal, self.object, status);
         }
         // A listener still added could be called later and would read the context (its gate lives
         // inside it), so it is leaked, never freed.
@@ -1139,10 +1170,16 @@ impl<C: IoContext> RunningIo<C> {
             "stopping the audio device",
         );
         // SAFETY: as above.
-        let destroyed = check(
-            unsafe { self.hal.destroy_ioproc(self.device, self.proc_id) },
-            "unregistering the IOProc",
-        );
+        let status = unsafe { self.hal.destroy_ioproc(self.device, self.proc_id) };
+        // A device unplugged mid-stream answers '!dev': its IOProcs went with it, and so did
+        // the need to stop it.
+        let gone = status != 0 && self.hal.is_gone(self.device);
+        let stopped = if gone { Ok(()) } else { stopped };
+        let destroyed = if gone {
+            Ok(())
+        } else {
+            check(status, "unregistering the IOProc")
+        };
         if let Err(e) = destroyed {
             // Still registered: the HAL may call it again, so the context is never freed.
             leak();
@@ -1643,6 +1680,8 @@ pub(crate) mod tests {
     struct FakeIo {
         destroy: i32,
         remove: i32,
+        /// What `is_gone` answers: the device was unplugged.
+        gone: bool,
     }
 
     const REFUSED: i32 = i32::from_be_bytes(*b"nope");
@@ -1685,20 +1724,74 @@ pub(crate) mod tests {
         ) -> i32 {
             self.remove
         }
+        fn is_gone(&self, _: ObjectId) -> bool {
+            self.gone
+        }
     }
 
     static TEARDOWN_WORKS: FakeIo = FakeIo {
         destroy: 0,
         remove: 0,
+        gone: false,
     };
     static DESTROY_FAILS: FakeIo = FakeIo {
         destroy: REFUSED,
         remove: 0,
+        gone: false,
     };
     static REMOVE_FAILS: FakeIo = FakeIo {
         destroy: 0,
         remove: REFUSED,
+        gone: false,
     };
+    /// A device unplugged mid-stream, as measured: its IOProc's destroy answers '!dev', its
+    /// listeners' removal '!obj'.
+    static DEVICE_WENT: FakeIo = FakeIo {
+        destroy: kAudioHardwareBadDeviceError,
+        remove: kAudioHardwareBadObjectError,
+        gone: true,
+    };
+
+    /// The IOProc and the rate listener of a device that went are torn down with it: their
+    /// contexts are freed (the ring's sink with them), not leaked, and the stop is no error.
+    #[test]
+    fn a_device_that_went_frees_its_ioproc_and_listener_contexts() {
+        let counters = Arc::new(IoCounters::default());
+        let context = InputContext::new(
+            Box::new(
+                capture_ring(MONO_48K, Duration::from_millis(100))
+                    .unwrap()
+                    .0,
+            ),
+            ink_audio::unguarded(),
+            MONO_48K,
+            MacClock::new().unwrap(),
+            counters.clone(),
+        );
+        let Ok(running) = RunningIo::start_on(&DEVICE_WENT, 1, Some(input_proc), context) else {
+            panic!("the fake starts");
+        };
+        let (context, result) = running.stop();
+        assert!(result.is_ok(), "{result:?}");
+        drop(context.expect("handed back"));
+        assert_eq!(Arc::strong_count(&counters), 1, "freed");
+
+        let marker = Arc::new(());
+        let m = marker.clone();
+        let read: FormatReader = Arc::new(move || {
+            let _held = &m;
+            Ok(MONO_48K)
+        });
+        let listener = FormatListener::register_on(
+            &DEVICE_WENT,
+            1,
+            FormatWatch::new(MONO_48K, Arc::default()),
+            read,
+        )
+        .expect("the fake registers");
+        drop(listener);
+        assert_eq!(Arc::strong_count(&marker), 1, "freed");
+    }
 
     /// If the IOProc cannot be unregistered the HAL may still call it, so its context is leaked,
     /// never freed, and the leak is counted and reported.
@@ -1778,6 +1871,8 @@ pub(crate) mod tests {
         removes: AtomicU32,
         fail_add: u32,
         remove: i32,
+        /// What `is_gone` answers.
+        gone: bool,
     }
 
     impl CountingIo {
@@ -1787,6 +1882,14 @@ pub(crate) mod tests {
                 removes: AtomicU32::new(0),
                 fail_add,
                 remove,
+                gone: false,
+            }
+        }
+
+        const fn gone(remove: i32) -> Self {
+            Self {
+                gone: true,
+                ..Self::new(u32::MAX, remove)
             }
         }
     }
@@ -1832,6 +1935,9 @@ pub(crate) mod tests {
         ) -> i32 {
             self.removes.fetch_add(1, Ordering::SeqCst);
             self.remove
+        }
+        fn is_gone(&self, _: ObjectId) -> bool {
+            self.gone
         }
     }
 
@@ -1982,15 +2088,20 @@ pub(crate) mod tests {
         assert_eq!(Arc::strong_count(&marker), 2, "still alive");
     }
 
-    /// Removing a listener from an object that is gone answers '!obj': the listeners went with
-    /// it, so the context is freed, not leaked (each unplugged mic would otherwise leak one).
+    /// Removing a listener from an object that is gone is refused ('!obj'), but the listeners
+    /// went with it: the context is freed, not leaked (each unplugged mic would otherwise leak
+    /// one). The same refusal on an object still there leaks, as any refusal does.
     #[test]
     fn a_listener_on_a_gone_object_is_freed_not_leaked() {
-        static HAL: CountingIo = CountingIo::new(u32::MAX, kAudioHardwareBadObjectError);
+        static GONE: CountingIo = CountingIo::gone(kAudioHardwareBadObjectError);
+        static THERE: CountingIo = CountingIo::new(u32::MAX, kAudioHardwareBadObjectError);
         let marker = Arc::new(());
         let (sink, _) = recording_sink(&marker);
-        drop(register_watch(&HAL, sink).expect("registers"));
+        drop(register_watch(&GONE, sink).expect("registers"));
         assert_eq!(Arc::strong_count(&marker), 1, "freed");
+        let (sink, _) = recording_sink(&marker);
+        drop(register_watch(&THERE, sink).expect("registers"));
+        assert_eq!(Arc::strong_count(&marker), 2, "leaked");
     }
 
     #[test]

@@ -191,14 +191,21 @@ pub fn input_choice(store: &dyn Store) -> InputChoice {
 
 /// **Worker.** The output choice as stored; one that cannot be read is the default, logged.
 pub fn output_choice(store: &dyn Store) -> OutputChoice {
-    match read_choice(store, OUTPUT_KEY, OUTPUT_DEVICE_KEY, DEFAULT) {
-        Ok(Some(w)) => OutputChoice::Device(w),
-        Ok(None) => OutputChoice::Default,
-        Err(e) => {
-            log::error!("the output choice could not be read ({e}); using the default output");
-            OutputChoice::Default
-        }
-    }
+    try_output_choice(store).unwrap_or_else(|e| {
+        log::error!("the output choice could not be read ({e}); using the default output");
+        OutputChoice::Default
+    })
+}
+
+/// **Worker.** The output choice as stored, or why it could not be read: for a far end that
+/// already follows one and keeps it through a store that fails for a moment.
+pub fn try_output_choice(store: &dyn Store) -> Result<OutputChoice, String> {
+    Ok(
+        match read_choice(store, OUTPUT_KEY, OUTPUT_DEVICE_KEY, DEFAULT)? {
+            Some(w) => OutputChoice::Device(w),
+            None => OutputChoice::Default,
+        },
+    )
 }
 
 /// Where a meeting reads the user's device choices: at its start, and again when its mic goes
@@ -222,6 +229,11 @@ impl Choices {
     /// **Worker.** [`output_choice`] now.
     pub fn output(&self) -> OutputChoice {
         output_choice(self.store.as_ref())
+    }
+
+    /// **Worker.** [`try_output_choice`] now.
+    pub fn try_output(&self) -> Result<OutputChoice, String> {
+        try_output_choice(self.store.as_ref())
     }
 }
 
@@ -669,6 +681,7 @@ mod tests {
             "unplugged: the default, not a pin"
         );
     }
+
     #[test]
     fn a_device_token_is_one_printable_line_of_at_most_512_bytes() {
         assert!(is_device_token("BuiltInMicrophoneDevice"));
