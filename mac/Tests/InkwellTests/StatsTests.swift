@@ -601,6 +601,29 @@ final class MilestoneCelebrationTests: XCTestCase {
         XCTAssertFalse(view.holdsStill)
     }
 
+    /// The same orb that never arrives, under a glow: the glow lights anyway once the hold's bound
+    /// has passed, on the orb's spot, and its release lets the orb go as usual.
+    func testAGlowWhoseOrbNeverArrivesLightsWithinTheBoundAndLetsGo() async throws {
+        try XCTSkipUnless(InkRenderer.isSupported, "no Metal device")
+        let view = wanderingOrb()
+        let orb = OrbHold()
+        orb.attach(view)
+        try await show(view)
+        XCTAssertTrue(view.isAnimating, "gliding")
+        InkClock.shared.remove(view)
+        let limit = OrbHold.arrivalLimit
+        let start = ContinuousClock.now
+        let centre = try await bounded(
+            Task { await MilestoneGlow.holdCentre(orb, home: Glow.Orb.main) }, "the glow's centre",
+            within: limit + .seconds(2))
+        XCTAssertGreaterThanOrEqual(ContinuousClock.now - start, limit - .milliseconds(50), "it waited out its bound")
+        XCTAssertEqual(centre, view.orbCentre, "lit on the orb's spot")
+        XCTAssertTrue(view.holdsSpot, "held there while lit")
+        orb.release()
+        XCTAssertFalse(view.holdsStill)
+        XCTAssertFalse(view.holdsSpot)
+    }
+
     /// A glow cancelled while it waits for the orb lets go at once, without waiting for a glide.
     func testAGlowCancelledWhileItWaitsLetsGoAtOnce() async throws {
         let view = wanderingOrb()

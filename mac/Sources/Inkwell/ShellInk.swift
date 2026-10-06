@@ -338,6 +338,12 @@ final class OrbHold {
     /// A hold has read the spot: it stays pinned (InkView.holdsSpot) until every hold is let go.
     private var spotRead = false
 
+    /// How long a hold waits for the orb to arrive: a glide at rest, and a second's slack. The orb
+    /// arrives on the display link's ticks, which can stop while the view still counts as on screen
+    /// (the display asleep), and never while its pipeline is still compiling; unbounded, either
+    /// would keep the orb held under a glow that never lights.
+    static let arrivalLimit: Duration = .seconds(OrbWander.restGlide + 1)
+
     /// The orb's view; a new one takes the holds already made. A view replaced while a hold waits
     /// leaves that wait to its cancellation (OrbLayer keeps one view for the window's life).
     func attach(_ view: InkView) {
@@ -349,16 +355,33 @@ final class OrbHold {
 
     /// Holds the orb and returns its centre (fractions of the view, y from the top) once it is on
     /// screen and has arrived (a glide under way, or the one it takes on coming on screen,
-    /// finishes first), or nil with no orb attached. Each hold needs its release, cancelled or not.
+    /// finishes first), or wherever it is once `arrivalLimit` has passed; nil with no orb attached.
+    /// Each hold needs its release, cancelled or not.
     func hold() async -> SIMD2<Double>? {
         holders += 1
         guard let view else { return nil }
         view.holdsStill = true
-        await view.settled()
+        await Self.settled(view, within: Self.arrivalLimit)
         guard !Task.isCancelled, let view = self.view else { return nil }
         spotRead = true
         view.holdsSpot = true
         return view.orbCentre
+    }
+
+    /// Waits for `view` to settle, at most `limit`, whichever ends first. Rule 9 (no polling
+    /// timers) holds: this is one sleep inside a celebration that is already running, ended with
+    /// the wait, never a timer that wakes to look again or runs while nothing is live.
+    private static func settled(_ view: InkView, within limit: Duration) async {
+        let wait = Task { await view.settled() }
+        // Past the limit it cancels the wait, which then ends at once; a wait that ended first
+        // cancels it, and its sleep ends at once.
+        let bound = Task {
+            try? await Task.sleep(for: limit)
+            wait.cancel()
+        }
+        // A hold cancelled meanwhile stops waiting at once too.
+        await withTaskCancellationHandler { await wait.value } onCancel: { wait.cancel() }
+        bound.cancel()
     }
 
     /// Lets go of one hold; with none left the orb wanders again.
