@@ -276,8 +276,6 @@ enum ShellSetting: String, Sendable {
     /// "on" or "off": the switch for a meeting's summary and Ask. Only "off" is set this way: they
     /// turn on through the consent step (`consentAllow`).
     case meetingsLLM = "meetings.llm"
-    /// "on" or "off" (the default): with Bluetooth output, record the headset's own mic.
-    case meetingsHeadsetMic = "meetings.headset_mic"
     /// "forever" (the default), or days: how long the library keeps records.
     case retentionDays = "retention.days"
     /// The dictation key (a token: fn, right_option, ...).

@@ -778,10 +778,6 @@ private struct MeetingsSection: View {
                 "Offer to record calls",
                 detail: "When an app opens the microphone for a call, Inkwell asks whether to record it. It never records without you saying so.",
                 isOn: meetings.detect, set: { meetings.setDetect($0) })
-            toggle(
-                "Use the headset's microphone",
-                detail: "With Bluetooth headphones, record their own microphone instead of the Mac's. It carries only call-quality sound.",
-                isOn: meetings.headsetMic, set: { meetings.setHeadsetMic($0) })
             if meetings.settingsFailed {
                 Text("Couldn't read or save a meeting setting. It may not be what it shows.")
                     .font(Typography.caption)
@@ -791,7 +787,7 @@ private struct MeetingsSection: View {
                 fact("Consent", "Tell the others in the call that you are recording. Inkwell shows while it records, and never hides that it does.")
                 fact("You", "Your microphone, as \u{201C}Hear you\u{201D} allows.")
                 fact("Them", "For a call you record when Inkwell offers, the call app's own sound. With Record now, or when Inkwell can't hear the call app alone, everything this Mac plays, and Inkwell says so. As \u{201C}Hear the others\u{201D} allows.")
-                fact("Headphones", "With Bluetooth headphones, Inkwell records the Mac's own microphone: a headset microphone carries only call-quality sound.")
+                fact("Headphones", "With Bluetooth headphones, Automatic records the Mac's own microphone: a headset microphone carries only call-quality sound. Settings > Sound picks another.")
                 fact("Where", "Recordings and transcripts stay on this Mac. Nothing is sent anywhere unless you add your own key for a model online.")
             }
             if permissions.state(.hearTheOthers).isAlert {
