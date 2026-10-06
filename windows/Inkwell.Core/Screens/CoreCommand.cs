@@ -500,6 +500,35 @@ public abstract record CoreCommand
         public override string Name => "import.run";
         private protected override IEnumerable<(string, object)> Fields() => [("cmd", Name), ("id", Name)];
     }
+
+    /// <summary>
+    /// Settings > Sound: the microphones, the outputs, the choices and what records now, answered by
+    /// audio.devices with <paramref name="Ref"/> (then audio.devices_changed unasked as devices come
+    /// and go), or a command.failed with it as the id.
+    /// </summary>
+    public sealed record AudioDevices(string Ref) : CoreCommand
+    {
+        public override string Name => "audio.devices";
+        private protected override IEnumerable<(string, object)> Fields() => [("cmd", Name), ("id", Ref)];
+    }
+
+    /// <summary>
+    /// The mic test: audio.test_started, audio.test_level about ten times a second, then
+    /// audio.tested, all with <paramref name="Ref"/>; or a command.failed with it as the id
+    /// (meeting_recording while a meeting records). Nothing it hears is kept.
+    /// </summary>
+    public sealed record AudioTest(string Ref) : CoreCommand
+    {
+        public override string Name => "audio.test";
+        private protected override IEnumerable<(string, object)> Fields() => [("cmd", Name), ("id", Ref)];
+    }
+
+    /// <summary>Ends the running test: its own audio.tested (stopped), or a command.failed with <paramref name="Ref"/> when none runs.</summary>
+    public sealed record AudioTestStop(string Ref) : CoreCommand
+    {
+        public override string Name => "audio.test_stop";
+        private protected override IEnumerable<(string, object)> Fields() => [("cmd", Name), ("id", Ref)];
+    }
 }
 
 /// <summary>Where a page of records continues: the last record of the previous page.</summary>
@@ -579,6 +608,10 @@ public enum ShellSetting
     MeetingsDetect,
     /// <summary>"on" or "off": the switch for a meeting's summary and Ask. Only "off" is set this way.</summary>
     MeetingsLlm,
+    /// <summary>The microphone for dictation, meetings and the test: "auto" (the default) or a device's id from audio.devices, connected when set.</summary>
+    AudioInput,
+    /// <summary>The output Record now's far end records: "default" (the default) or an output's id from audio.devices, connected when set.</summary>
+    AudioOutput,
     /// <summary>"forever" (the default), or days: how long the library keeps records.</summary>
     RetentionDays,
     /// <summary>The dictation key (a token).</summary>
@@ -624,6 +657,8 @@ public static class ShellSettings
         ShellSetting.DictationPolish => "dictation.polish",
         ShellSetting.MeetingsDetect => "meetings.detect",
         ShellSetting.MeetingsLlm => "meetings.llm",
+        ShellSetting.AudioInput => "audio.input",
+        ShellSetting.AudioOutput => "audio.output",
         ShellSetting.RetentionDays => "retention.days",
         ShellSetting.DictationKey => "dictation.key",
         ShellSetting.DictationEditKey => "dictation.edit_key",

@@ -1,0 +1,101 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Settings > Sound, as the Mac's SoundSection: the microphone (Automatic first, then each mic with
+     how it connects), "Their sound from" (the output Record now records: Windows only, its far end
+     is device loopback), and the mic test with its level. Rows label | control | caption, at the
+     150 the other sections' labels take. The pickers are filled in code (Render), from the model. -->
+<UserControl
+    x:Class="Inkwell.Screens.SoundSection"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <UserControl.Resources>
+        <Style x:Key="RowLabelStyle" TargetType="TextBlock" BasedOn="{StaticResource InkBodyStyle}">
+            <Setter Property="Margin" Value="0,6,0,0" />
+            <Setter Property="VerticalAlignment" Value="Top" />
+        </Style>
+    </UserControl.Resources>
+    <StackPanel Spacing="10">
+        <TextBlock AutomationProperties.HeadingLevel="Level2" Style="{StaticResource InkHeadingStyle}" Text="Sound" />
+
+        <Grid ColumnSpacing="12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="150" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <TextBlock AutomationProperties.AccessibilityView="Raw" Style="{StaticResource RowLabelStyle}" Text="Microphone" />
+            <StackPanel Grid.Column="1" Spacing="4">
+                <ComboBox
+                    x:Name="InputPicker"
+                    MinWidth="0"
+                    MaxWidth="420"
+                    HorizontalAlignment="Stretch"
+                    AutomationProperties.Name="Microphone"
+                    SelectionChanged="OnInputChosen" />
+                <!-- A live region: a chosen mic that leaves is said (MissingLine), not only shown. -->
+                <TextBlock
+                    x:Name="InputCaption"
+                    AutomationProperties.LiveSetting="Polite"
+                    Style="{StaticResource InkCaptionStyle}"
+                    TextWrapping="Wrap" />
+                <TextBlock x:Name="InputProblem" Style="{StaticResource InkAlertTextStyle}" TextWrapping="Wrap" />
+            </StackPanel>
+        </Grid>
+
+        <Grid x:Name="OutputRow" ColumnSpacing="12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="150" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <TextBlock AutomationProperties.AccessibilityView="Raw" Style="{StaticResource RowLabelStyle}" Text="Their sound from" />
+            <StackPanel Grid.Column="1" Spacing="4">
+                <ComboBox
+                    x:Name="OutputPicker"
+                    MinWidth="0"
+                    MaxWidth="420"
+                    HorizontalAlignment="Stretch"
+                    AutomationProperties.Name="Their sound from"
+                    SelectionChanged="OnOutputChosen" />
+                <TextBlock x:Name="OutputCaption" Style="{StaticResource InkCaptionStyle}" TextWrapping="Wrap" />
+                <TextBlock x:Name="OutputProblem" Style="{StaticResource InkAlertTextStyle}" TextWrapping="Wrap" />
+            </StackPanel>
+        </Grid>
+
+        <Grid ColumnSpacing="12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="150" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <TextBlock AutomationProperties.AccessibilityView="Raw" Style="{StaticResource RowLabelStyle}" Text="Test" />
+            <StackPanel Grid.Column="1" Spacing="4">
+                <!-- The button, then the meter in what it leaves (a Grid, so the meter narrows with the card). -->
+                <Grid ColumnSpacing="12">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Button x:Name="TestButton" Click="OnTest" />
+                    <!-- Moves only on the core's levels while a test runs; at rest it is drawn once. -->
+                    <ProgressBar
+                        x:Name="Meter"
+                        Grid.Column="1"
+                        MaxWidth="240"
+                        HorizontalAlignment="Stretch"
+                        VerticalAlignment="Center"
+                        AutomationProperties.Name="Microphone level"
+                        Maximum="1"
+                        Minimum="0" />
+                </Grid>
+                <!-- How the test went, read as it changes; a problem in the alert colour. -->
+                <TextBlock
+                    x:Name="TestLine"
+                    AutomationProperties.LiveSetting="Polite"
+                    Style="{StaticResource InkCaptionStyle}"
+                    TextWrapping="Wrap" />
+                <TextBlock
+                    x:Name="TestProblem"
+                    AutomationProperties.LiveSetting="Assertive"
+                    Style="{StaticResource InkAlertTextStyle}"
+                    TextWrapping="Wrap" />
+            </StackPanel>
+        </Grid>
+    </StackPanel>
+</UserControl>

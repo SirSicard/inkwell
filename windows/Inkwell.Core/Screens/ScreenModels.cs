@@ -71,6 +71,7 @@ public sealed class ScreenModels
         Startup = new StartupModel(startup, this.log);
         Appearance = new AppearanceModel(send, this.log);
         Stats = new StatsModel(send, wake ?? NoWake.Instance);
+        Sound = new SoundModel(send);
     }
 
     public PermissionsModel Permissions { get; }
@@ -118,6 +119,9 @@ public sealed class ScreenModels
     /// <summary>The Stats screen, milestones, and Settings > Stats.</summary>
     public StatsModel Stats { get; }
 
+    /// <summary>Settings > Sound: the microphone, the output Record now records, and the mic test.</summary>
+    public SoundModel Sound { get; }
+
     /// <summary>A batch of the core's events, after the CoreStore has applied it.</summary>
     public void Apply(IReadOnlyList<InkEvent> batch)
     {
@@ -164,6 +168,7 @@ public sealed class ScreenModels
             RecordControls.Apply(e);
             Appearance.Apply(e);
             Stats.Apply(e);
+            Sound.Apply(e);
             // The sizes a model install or a deleted record changed; the view shows them when they land.
             _ = Storage.Apply(e);
         }
@@ -225,7 +230,8 @@ public sealed class ScreenModels
             || ModesModel.Handles(failed) || OwedModel.Handles(failed) || LiveModel.Handles(failed)
             || MeetingModel.Handles(failed) || OnboardingModel.Handles(failed) || DictationModel.Handles(failed) || ShortcutRecorderModel.Handles(failed)
             || Ai.Handles(failed) || CloudModel.Handles(failed) || SnippetsModel.Handles(failed) || VoiceCommandsModel.Handles(failed)
-            || Library.Handles(failed) || Import02Model.Handles(failed) || AppearanceModel.Handles(failed) || StatsModel.Handles(failed);
+            || Library.Handles(failed) || Import02Model.Handles(failed) || AppearanceModel.Handles(failed) || StatsModel.Handles(failed)
+            || SoundModel.Handles(failed);
     }
 
     /// <summary>
