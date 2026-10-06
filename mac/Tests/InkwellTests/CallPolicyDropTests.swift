@@ -142,6 +142,7 @@ final class CallPolicyDropTests: XCTestCase {
         // Always for Zoom: from now on, and this call now (the core keeps it offered until started).
         screens.performDropAction(.always(app: zoom, name: "Zoom")) { _ in }
         XCTAssertEqual(sent.commands.last, .meetingsCallsSet(app: zoom, policy: "always", replaceUnreadable: false, ref: "calls:1"))
+        screens.calls.apply(callsEvent(#"{"app":"us.zoom.xos","app_name":"Zoom","policy":"always","chosen":true}"#, ref: "calls:1"))
         // Never for Zoom: only the policy; the core withdraws the offer.
         sent.commands = []
         screens.performDropAction(.never(app: zoom, name: "Zoom")) { _ in }
@@ -491,6 +492,40 @@ final class CallPolicyDropTests: XCTestCase {
         ink.meetings?.apply(first)
         XCTAssertEqual(ink.dropText.actions, [.stop])
         XCTAssertEqual(sleeps.scheduled, 0)
+    }
+
+    /// A double click on "Always for": the second press does nothing while the first is saved, and
+    /// the buttons stay where they were (no "Never for" slides under the pointer).
+    func testADoubleClickOnAlwaysSavesOnce() {
+        let sent = Sent()
+        let (store, ink, screens) = models(sent)
+        store.apply([detected()])
+        screens.calls.apply(detected())
+        let before = ink.dropText.actions
+        screens.performDropAction(.always(app: zoom, name: "Zoom")) { _ in }
+        XCTAssertEqual(ink.dropText.actions, before)
+        screens.performDropAction(.always(app: zoom, name: "Zoom")) { _ in }
+        screens.performDropAction(.never(app: zoom, name: "Zoom")) { _ in }
+        XCTAssertEqual(sent.commands.filter { if case .meetingsCallsSet = $0 { true } else { false } }.count, 1)
+    }
+
+    /// Stop on the Drop takes Stop and delete away at once; a second Stop and delete sends nothing.
+    func testStopTakesStopAndDeleteAwayAtOnce() {
+        let sent = Sent()
+        let start = Date()
+        let (store, ink, _) = models(sent, now: { start })
+        let meetings = try! XCTUnwrap(ink.meetings)
+        let first = started(auto: true, deleteUntil: start.addingTimeInterval(60))
+        store.apply([first])
+        meetings.apply(first)
+        meetings.discard()
+        meetings.discard()
+        XCTAssertEqual(sent.commands.filter { $0 == .meetingDiscard }.count, 1)
+        let second = started(auto: true, deleteUntil: start.addingTimeInterval(60), record: "r2")
+        store.apply([second])
+        meetings.apply(second)
+        meetings.perform(.stop, permissions: PermissionsModel(send: sent.send, calendar: FakeCalendar()))
+        XCTAssertEqual(ink.dropText.actions, [.stop])
     }
 
     /// A choice from the Drop that failed is said there; a new offer clears it.

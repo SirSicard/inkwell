@@ -61,7 +61,7 @@ final class CallPolicySettingsTests: XCTestCase {
         calls.choose(.never, for: "com.microsoft.teams2", from: .settings)
         XCTAssertEqual(sent.commands.last, .meetingsCallsSet(app: "com.microsoft.teams2", policy: "never", replaceUnreadable: false, ref: "calls:1"))
         XCTAssertEqual(calls.rows[1].choice, .never, "shown as made until the answer")
-        XCTAssertEqual(calls.policy(of: "com.microsoft.teams2"), .never)
+        XCTAssertEqual(calls.policy(of: "com.microsoft.teams2"), .ask, "what happens is the core's answer, not the choice in flight")
         // Back to the default.
         calls.choose(.default, for: zoom, from: .settings)
         XCTAssertEqual(sent.commands.last, .meetingsCallsSet(app: zoom, policy: "default", replaceUnreadable: false, ref: "calls:2"))
@@ -98,10 +98,14 @@ final class CallPolicySettingsTests: XCTestCase {
                 XCTAssertFalse(words.contains(word), word)
             }
         }
-        // A default the core refused: said, and read again.
+        // A default the core refused: said, and read again, once: a read that fails is only said.
         calls.apply(event(#"{"type":"command.failed","command":"setting.set","id":"setting:meetings.calls.default","message":"database is locked"}"#))
         XCTAssertEqual(calls.failure, "Couldn't save the default: database is locked")
         XCTAssertEqual(sent.commands.last, .settingGet(.meetingsCallsDefault))
+        let sentBefore = sent.commands.count
+        calls.apply(event(#"{"type":"command.failed","command":"setting.get","id":"setting:meetings.calls.default","message":"database is locked"}"#))
+        XCTAssertEqual(sent.commands.count, sentBefore, "no loop of reads")
+        XCTAssertEqual(calls.failure, "Couldn't read the default: database is locked")
     }
 
     /// Over a list the core cannot read, a choice in Settings asks before starting it over, and

@@ -196,12 +196,14 @@ final class MeetingModel {
     func stop(from origin: Origin = .stop) {
         failure = nil
         stopping = origin
+        // Stopped by hand: Stop and delete goes with it at once, not at meeting.stopped.
+        if origin == .dropStop { endDeleteWindow() }
         send(.meetingStop)
     }
 
     /// "Stop and delete": only while the meeting's first minute lasts.
     func discard() {
-        guard let record = deletable else { return }
+        guard let record = deletable, discarding == nil else { return }
         failure = nil
         discarding = record
         send(.meetingDiscard)

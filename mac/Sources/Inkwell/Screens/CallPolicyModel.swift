@@ -130,12 +130,10 @@ final class CallPolicyModel {
         send(.settingSet(.meetingsCallsDefault, policy.rawValue))
     }
 
-    /// What happens for `app` now, when the core has listed it.
+    /// What happens for `app` now, as the core last listed it (a choice in flight is not yet
+    /// what happens: the Drop's buttons stay put while one is saved).
     func policy(of app: String) -> CallPolicy? {
-        if let choice = pending[app] {
-            return choice == .default ? defaultPolicy : Self.policy(choice)
-        }
-        return apps.first { $0.app == app }?.policy
+        apps.first { $0.app == app }?.policy
     }
 
     /// Chooses for one app; `saved` runs once the core has saved it (never when it failed). Over
@@ -143,6 +141,8 @@ final class CallPolicyModel {
     func choose(
         _ choice: CallChoice, for app: String, from origin: Origin, saved: (@MainActor () -> Void)? = nil
     ) {
+        // A second press on the Drop while its first is saved (a double click) does nothing.
+        if origin == .drop, inFlight.values.contains(where: { $0.app == app && $0.origin == .drop }) { return }
         clearFailure(origin)
         if unreadable != nil {
             // Starting the list over asks first, in Settings; the Drop has no room to ask.
@@ -317,10 +317,12 @@ final class CallPolicyModel {
             load()
         case .commandFailed(let failed) where failed.command == "meetings.calls.list":
             failure = "Couldn't read the apps you chose for: \(failed.message)"
-        case .commandFailed(let failed) where failed.id == Self.defaultSettingID:
+        case .commandFailed(let failed) where failed.id == Self.defaultSettingID && failed.command == "setting.set":
             failure = "Couldn't save the default: \(failed.message)"
-            // What it is, not what was asked.
+            // What it is, not what was asked (read once: a read that fails is only said).
             send(.settingGet(.meetingsCallsDefault))
+        case .commandFailed(let failed) where failed.id == Self.defaultSettingID:
+            failure = "Couldn't read the default: \(failed.message)"
         default:
             break
         }
