@@ -33,6 +33,19 @@ public class CatalogueModelTests
         Assert.Equal(4, catalogue.Requeries);
     }
 
+    /// <summary>
+    /// The on-device language model has its own screens (the local language model UI); until
+    /// they come, Settings > Models and the first run's choices list the speech models only, so
+    /// Download all never fetches it.
+    /// </summary>
+    [Fact]
+    public void TheLanguageModelIsNotASpeechModelToList()
+    {
+        var catalogue = new CatalogueModel(_ => { });
+        catalogue.Apply(Ev.Of("""{"type":"models.listed","models":[{"id":"silero-vad-v6-16k","kind":"speech","licence":"MIT","size_bytes":1289603,"installed":false,"jobs":[{"job":"voice_activity","wer":1.5}]},{"id":"qwen3-4b-instruct-2507-q4km","kind":"language","name":"Qwen3 4B Instruct","licence":"Apache-2.0","size_bytes":2497281120,"installed":false,"jobs":[]},{"id":"qwen3-asr-1.7b-q8","licence":"Apache-2.0","size_bytes":2500000000,"installed":true,"jobs":[{"job":"dictation_final","wer":4.59}]}]}"""));
+        Assert.Equal(["silero-vad-v6-16k", "qwen3-asr-1.7b-q8"], catalogue.Models.Select(m => m.Id));
+    }
+
     [Fact]
     public void AFailedListReadsAsFailedNotAsNothingInstalled()
     {

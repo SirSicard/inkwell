@@ -366,7 +366,10 @@ public sealed class CatalogueModel(Action<CoreCommand> send) : ObservableModel
         switch (e)
         {
             case ModelsListed listed:
-                Models = listed.Models;
+                // Speech models only: the language models (Windows' on-device polish) have their
+                // own screens, which come with the local language model UI. A list from a core
+                // before them has no kind: speech.
+                Models = listed.Models.Where(m => m.Kind is null or ModelKind.Speech).ToList();
                 Listed = true;
                 Failed = false;
                 Changed();

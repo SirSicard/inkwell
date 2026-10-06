@@ -490,7 +490,10 @@ public sealed class CloudModel : ObservableModel
         {
             case LlmProviders state:
                 var first = !Loaded;
+                // The own-key providers. This PC's model (on_device) is chosen from its own row,
+                // which comes with the local language model UI.
                 Providers = state.Providers
+                    .Where(p => p.Id != "on_device")
                     .Select(p => new CloudProvider(p.Id, ProviderName(p.Id), p.DefaultModel, p.Endpoint, p.CustomUrl, p.NeedsKey, p.HasKey))
                     .ToList();
                 var choiceChanged = Chosen != state.Chosen || ChosenModel != state.Model || ChosenBaseUrl != state.BaseUrl;
