@@ -69,7 +69,8 @@ struct MilestoneGlow: View {
         .task(id: serial) {
             let mine = serial
             // The orb stays put under the glow until it has gone (or is cancelled); it lights once
-            // the orb has arrived, so a glide on coming on screen finishes first.
+            // the orb has arrived, so a glide on coming on screen finishes first, or where the orb
+            // is when it has not arrived within OrbHold.arrivalLimit.
             defer { orb?.release() }
             let spot = await Self.holdCentre(orb, home: placement)
             guard !Task.isCancelled, stats.beginGlow(mine) else { return }

@@ -74,7 +74,8 @@ public final class InkView: NSView {
     /// never draw; when its task is cancelled, at once too. No timer: the schedule's own changes
     /// (coming on screen, a glide arriving) let it go. It re-checks on waking, so a caller's next
     /// synchronous read of `orbCentre` sees it settled. With a pipeline still compiling it waits
-    /// for it, unbounded: the caller's cancellation is what ends that wait.
+    /// for it, unbounded, as it does for ticks that stop with the view still on screen: the
+    /// caller's cancellation is what ends that wait (the milestone glow's hold bounds it).
     public func settled() async {
         while !isSettled, !Task.isCancelled {
             await settledOnce()
