@@ -717,7 +717,7 @@ struct PolishConsentsRow: View {
                         .foregroundStyle(Theme.secondaryText)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                ForEach(Array(consents.enumerated()), id: \.offset) { _, granted in
+                ForEach(consents, id: \.self) { granted in
                     LineOrStack(minWidth: 260) {
                         VStack(alignment: .leading, spacing: 1) {
                             Text(granted.label)

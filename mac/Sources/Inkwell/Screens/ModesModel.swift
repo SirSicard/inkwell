@@ -380,8 +380,12 @@ final class ModeEditor: Identifiable {
     var polishModel: String?
     /// A model at the provider (provider: models only); blank for the one chosen in AI.
     var polishModelName: String
-    /// The user confirmed where the mode's model sends now (it had moved, or was never recorded).
-    var confirmed = false
+    /// Where the user confirmed the mode's model sends now (it had moved, or was never recorded):
+    /// the destination they were shown, which the save sends back as it was, never one looked up
+    /// again at the save.
+    var confirmedTo: ModelChoice?
+    /// The user confirmed it.
+    var confirmed: Bool { confirmedTo != nil }
 
     /// Why the last save was refused, in words to show (nil: nothing wrong).
     var error: String?
@@ -389,8 +393,10 @@ final class ModeEditor: Identifiable {
     var saving = false
     /// The OK for where the mode's model sends, on screen before saving: Allow records it, then saves.
     var consentStep: ConsentModel.Destination?
-    /// The core refused an app another mode has: the next save moves it.
+    /// The core refused an app another mode has: the next save moves it (that save only).
     var takeApps = false
+    /// Apps as shown, by identity: looked up once (Launch Services reads files), not at each draw.
+    @ObservationIgnored var labels: [String: AppLabel] = [:]
 
     nonisolated var id: ObjectIdentifier { ObjectIdentifier(self) }
 
@@ -430,12 +436,12 @@ final class ModeEditor: Identifiable {
         return trimmed.isEmpty ? nil : trimmed
     }
 
-    /// "120 / 2,000".
+    /// "120 / 2,000", counted as the core counts (Unicode scalars, as Rust's chars).
     var promptCount: String {
-        "\(prompt.count.formatted()) / \(ModesModel.promptLimit.formatted())"
+        "\(prompt.unicodeScalars.count.formatted()) / \(ModesModel.promptLimit.formatted())"
     }
 
-    var promptTooLong: Bool { prompt.count > ModesModel.promptLimit }
+    var promptTooLong: Bool { prompt.unicodeScalars.count > ModesModel.promptLimit }
 }
 
 @MainActor
@@ -461,6 +467,8 @@ final class ModesModel {
     var deleting: ModeRow?
     /// A row's Confirm… or Allow…, on screen.
     var confirming: Confirming?
+    /// Start over's confirmation, on screen.
+    var confirmingStartOver = false
 
     /// A row's Confirm… (where its model sends now) or Allow… (polish's OK for it).
     struct Confirming: Identifiable, Equatable {
@@ -495,9 +503,16 @@ final class ModesModel {
     @ObservationIgnored private var loaded = false
     /// What is waiting for an answer, by ref.
     @ObservationIgnored private var pendingSave: String?
+    /// The editor that sent it: a refusal that arrives once it has closed is said in the section.
+    @ObservationIgnored private var pendingSaveEditor: ModeEditor?
+    /// Apps as shown, by identity (lowercased): Launch Services is asked once per app.
+    @ObservationIgnored private var labelCache: [String: AppLabel] = [:]
     @ObservationIgnored private var pendingDelete: (ref: String, name: String)?
     @ObservationIgnored private var pendingConfirm: String?
     @ObservationIgnored private var pendingStartOver: String?
+    /// A row's delete, confirm or OK, or Start over, is waiting for the core: the rows' buttons
+    /// wait too, so a second tap never takes the first one's place.
+    private(set) var busy = false
     /// An OK on its way, and what follows it once the core has recorded it.
     @ObservationIgnored private var pendingOK: (ref: String, destination: ConsentModel.Destination, then: AfterOK)?
 
@@ -658,9 +673,15 @@ final class ModesModel {
         }.map { $0.id == listed.defaultId && listed.modes.count > 1 ? Self.everywhereElse : $0.name }
     }
 
-    /// An app as the editor shows it.
+    /// An app as the rows and the editor show it, asked once per app.
     func label(_ identity: String) -> AppLabel {
-        AppIdentity.label(identity, apps: apps)
+        let key = identity.trimmingCharacters(in: .whitespaces).lowercased()
+        if let known = labelCache[key], known.id == identity.trimmingCharacters(in: .whitespaces) {
+            return known
+        }
+        let label = AppIdentity.label(identity, apps: apps)
+        labelCache[key] = label
+        return label
     }
 
     /// "Moves Slack from Chat." for each app the draft takes from another mode.
@@ -737,11 +758,11 @@ final class ModesModel {
         editor = ModeEditor(mode: mode, isDefault: id == listed.defaultId)
     }
 
-    /// Cancel, Escape or the sheet closed: nothing is saved. An answer still on its way is not
-    /// the editor's any more.
+    /// Cancel, Escape or the sheet closed: nothing more is saved. A save already sent still lands;
+    /// if the core refuses it, the section says so (the editor is gone). An OK still on its way is
+    /// recorded, but saves nothing.
     func closeEditor() {
         editor = nil
-        pendingSave = nil
         if case .saveEditor = pendingOK?.then {
             pendingOK = nil
         }
@@ -759,9 +780,11 @@ final class ModesModel {
 
     /// The editor's Confirm: the user agreed to where the mode's model sends now. Saved with the mode.
     func confirmInEditor(_ editor: ModeEditor) {
-        guard case .confirm = polishState(polish: true, pin: editor.polishModel, modelName: editor.modelNameToSend,
-                                          pinState: editor.original?.polishModelState) else { return }
-        editor.confirmed = true
+        guard !editor.pinChanged,
+              case .confirm(let choice, _, _) = polishState(polish: true, pin: editor.polishModel, modelName: editor.modelNameToSend,
+                                                           pinState: editor.original?.polishModelState, ignoringSwitch: true)
+        else { return }
+        editor.confirmedTo = choice
     }
 
     /// Save: the mode as the editor holds it. A model newly picked (or confirmed) at a destination
@@ -777,9 +800,10 @@ final class ModesModel {
         sendSave(editor)
     }
 
-    /// The editor's OK step: Allow records polish's OK for that destination, then saves.
-    func allowAndSave() {
-        guard let editor, let destination = editor.consentStep, let consent else { return }
+    /// The editor's OK step: Allow records polish's OK for `destination` (the one the step showed),
+    /// then saves.
+    func allowAndSave(_ destination: ConsentModel.Destination) {
+        guard let editor, editor.consentStep == destination, let consent else { return }
         editor.consentStep = nil
         editor.saving = true
         pendingOK = (consent.allow(forMode: destination), destination, .saveEditor)
@@ -808,13 +832,17 @@ final class ModesModel {
             save.polishModel = .some(editor.polishModel)
             save.polishModelName = .some(editor.modelNameToSend)
         }
-        if editor.confirmed, !editor.pinChanged, let pin = editor.polishModel, let choice = choices.first(where: { $0.id == pin }) {
-            save.confirmTo = choice
+        if !editor.pinChanged, let shown = editor.confirmedTo, shown.id == editor.polishModel {
+            // As the user was shown it: if it sends elsewhere by now, the core refuses it.
+            save.confirmTo = shown
         }
         save.takeApps = editor.takeApps || !movingNotes(editor).isEmpty
+        // Said for this save only: an app someone else takes later is said again.
+        editor.takeApps = false
         save.replaceUnreadable = replaceUnreadable
         let ref = nextRef()
         pendingSave = ref
+        pendingSaveEditor = editor
         editor.saving = true
         send(.modesSave(save, ref: ref))
     }
@@ -822,14 +850,17 @@ final class ModesModel {
     // MARK: - The rows' actions
 
     func askDelete(_ id: String) {
+        guard !busy else { return }
         deleting = rows.first { $0.id == id && !$0.isDefault }
     }
 
-    /// The delete was confirmed: the mode's apps go back to the default mode.
-    func delete() {
-        guard let row = deleting else { return }
+    /// The delete was confirmed, of `row` (the one the confirmation named): its apps go back to
+    /// the default mode.
+    func delete(_ row: ModeRow) {
+        guard deleting?.id == row.id, !busy else { return }
         deleting = nil
         problem = nil
+        busy = true
         let ref = nextRef()
         pendingDelete = (ref, row.name)
         send(.modesDelete(mode: row.id, ref: ref))
@@ -844,7 +875,7 @@ final class ModesModel {
 
     /// A row's Confirm… or Allow….
     func askConfirm(_ id: String) {
-        guard let row = rows.first(where: { $0.id == id }) else { return }
+        guard !busy, let row = rows.first(where: { $0.id == id }) else { return }
         problem = nil
         switch row.polish {
         case .confirm(let choice, let label, _):
@@ -871,13 +902,16 @@ final class ModesModel {
 
     /// The confirmation's Allow: polish's OK for where the model sends, if no consent covers it,
     /// then (for a model that moved) the confirm, with the destination the user was shown.
-    func confirmAllow() {
-        guard let c = confirming else { return }
+    func confirmAllow(_ c: Confirming) {
+        guard confirming == c, !busy else { return }
         confirming = nil
+        busy = true
         if c.asksOK, let consent {
             pendingOK = (consent.allow(forMode: c.choice.destination), c.choice.destination, c.pin ? .confirm(c) : .nothing)
         } else if c.pin {
             sendConfirm(c)
+        } else {
+            busy = false
         }
     }
 
@@ -889,9 +923,21 @@ final class ModesModel {
         send(.modesSave(save, ref: ref))
     }
 
-    /// Replaces stored modes the core can't read with the default: only when the user chooses it.
+    /// Start over: asks first (it replaces the stored modes, which can't be read, with the default).
+    func askStartOver() {
+        guard unreadable, !busy else { return }
+        confirmingStartOver = true
+    }
+
+    /// Start over's confirmation: words for it.
+    static let startOverTitle = "Start over?"
+    static let startOverMessage = "Your stored modes can't be read. Start over replaces them with one default mode, Everywhere else; the modes that can't be read are gone."
+
+    /// Replaces stored modes the core can't read with the default: only when the user confirmed it.
     func startOver() {
-        guard unreadable else { return }
+        guard unreadable, confirmingStartOver, !busy else { return }
+        confirmingStartOver = false
+        busy = true
         problem = nil
         var save = ModeSave(id: Self.builtinDefaultID)
         save.replaceUnreadable = true
@@ -913,11 +959,12 @@ final class ModesModel {
         case .nameIsStyle: return "Formal, Casual and Relaxed name the styles in voice commands. Pick another name."
         case .tooLong:
             let name = editor?.name.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if name.count > 64 { return "A name can be up to 64 characters." }
-            if (editor?.prompt.count ?? 0) > promptLimit { return "Polish instructions can be up to 2,000 characters." }
+            // Counted as the core counts: Unicode scalars, as Rust's chars.
+            if name.unicodeScalars.count > 64 { return "A name can be up to 64 characters." }
+            if (editor?.prompt.unicodeScalars.count ?? 0) > promptLimit { return "Polish instructions can be up to 2,000 characters." }
             if (editor?.apps.count ?? 0) > 64 { return "Shorten to 64 apps or fewer." }
             if editor?.adding == true { return "You can have up to 50 modes." }
-            return "Shorten to 64 apps or fewer."
+            return "Something here is too long. Shorten it."
         case .defaultMode: return "\(everywhereElse) is used in every app without a mode of its own, so it can't be given apps."
         case .appTaken: return "An app here is in another mode now. Save again to move it here."
         case .appInvalid: return "One of these apps can't be told apart from others. Remove it, and pick it again."
@@ -951,6 +998,13 @@ final class ModesModel {
         }
     }
 
+    /// A save refused after its editor was closed.
+    static func lateSaveFailure(_ editor: ModeEditor, _ words: String) -> String {
+        let name = editor.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let what = editor.adding ? (name.isEmpty ? "The new mode" : "The new mode \u{201C}\(name)\u{201D}") : "Your change to \u{201C}\(editor.original?.name ?? name)\u{201D}"
+        return "\(what) wasn't saved. \(words)"
+    }
+
     static let okFailure = "Couldn't record your OK, so nothing was saved. Try again."
     static let okFailureRow = "Couldn't record your OK. Try again."
     static let startOverFailure = "Couldn't start over. Try again."
@@ -964,17 +1018,24 @@ final class ModesModel {
             if let ref = listed.ref {
                 if ref == pendingSave {
                     pendingSave = nil
-                    editor = nil
+                    // Saved: the editor that sent it closes (unless it already did).
+                    if editor === pendingSaveEditor { editor = nil }
+                    pendingSaveEditor = nil
                 } else if ref == pendingDelete?.ref {
                     pendingDelete = nil
+                    finished()
                 } else if ref == pendingConfirm {
                     pendingConfirm = nil
+                    finished()
                 } else if ref == pendingStartOver {
                     pendingStartOver = nil
+                    finished()
                 }
             }
         case .commandFailed(let failure) where failure.command == "modes.list":
-            // Not known what is stored: nothing is shown, and nothing can be changed but Start over.
+            // Not known what is stored: nothing is shown, and nothing can be changed. Try again reads
+            // again; Start over (which asks first) replaces modes the core can't read, and changes
+            // nothing over ones it can.
             failed = true
             unreadable = true
             rows = []
@@ -993,7 +1054,8 @@ final class ModesModel {
                     case .confirm(let c):
                         sendConfirm(c)
                     case .nothing:
-                        break
+                        // The OK was all the row asked for.
+                        finished()
                     }
                 } else {
                     // The model sends elsewhere now, or the store refused: nothing was recorded.
@@ -1022,6 +1084,12 @@ final class ModesModel {
         send(.modesList(ref: nextRef()))
     }
 
+    /// A row's operation has its answer: a stale failure goes, and the buttons are back.
+    private func finished() {
+        busy = false
+        problem = nil
+    }
+
     private func okFailed() {
         guard let pending = pendingOK else { return }
         pendingOK = nil
@@ -1030,6 +1098,7 @@ final class ModesModel {
             editor?.saving = false
             editor?.error = Self.okFailure
         case .confirm, .nothing:
+            busy = false
             problem = Self.okFailureRow
         }
     }
@@ -1039,21 +1108,35 @@ final class ModesModel {
         if failure.code == .listUnreadable {
             unreadable = true
         }
-        if id == pendingSave {
+        if id == pendingSave, let sender = pendingSaveEditor {
             pendingSave = nil
-            editor?.saving = false
+            pendingSaveEditor = nil
+            sender.saving = false
             if failure.code == .appTaken {
-                editor?.takeApps = true
+                sender.takeApps = true
             }
-            editor?.error = Self.saveFailure(failure.code, editor: editor)
+            if [.destinationChanged, .modelUnknown].contains(failure.code) {
+                // What was confirmed is not where the model sends now: Confirm asks again.
+                sender.confirmedTo = nil
+            }
+            let words = Self.saveFailure(failure.code, editor: sender)
+            if editor === sender {
+                sender.error = words
+            } else {
+                // Cancelled while the save was on its way: said where the user is now.
+                problem = Self.lateSaveFailure(sender, words)
+            }
         } else if let pending = pendingDelete, id == pending.ref {
             pendingDelete = nil
+            busy = false
             problem = Self.deleteFailure(failure.code, name: pending.name)
         } else if id == pendingConfirm {
             pendingConfirm = nil
+            busy = false
             problem = Self.confirmFailure(failure.code)
         } else if id == pendingStartOver {
             pendingStartOver = nil
+            busy = false
             problem = Self.startOverFailure
             return
         } else {
@@ -1082,7 +1165,7 @@ final class ModesModel {
             var seen = Set<String>()
             let labels = mode.apps
                 .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
-                .map { AppIdentity.label($0, apps: apps) }
+                .map { label($0) }
                 .filter { seen.insert($0.id).inserted }
             let isDefault = mode.id == listed.defaultId
             return ModeRow(

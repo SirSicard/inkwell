@@ -23,7 +23,8 @@ private func event(_ json: String, file: StaticString = #filePath, line: UInt = 
 @MainActor
 private final class Sent {
     var commands: [CoreCommand] = []
-    lazy var send: SendCommand = { [unowned self] in self.commands.append($0) }
+    /// Holds its Sent strongly (a test that drops the tuple's Sent still sends).
+    lazy var send: SendCommand = { [self] in self.commands.append($0) }
 
     /// The modes.save commands' JSON, decoded.
     var saves: [[String: Any]] {
@@ -204,7 +205,7 @@ final class ModesRowsTests: XCTestCase {
                                        .modesList(ref: "modes:3"), .modesList(ref: "modes:4")])
     }
 
-    func testDeletingSaysWhereItsAppsGo() {
+    func testDeletingSaysWhereItsAppsGo() throws {
         let (modes, sent) = model()
         modes.apply(listing([mode("c", "Chat", apps: ["com.apple.mail", "com.tinyspeck.slackmacgap"]),
                              mode("n", "Notes", apps: ["com.apple.Notes"]), mode("e", "Empty"), defaultMode]))
@@ -215,7 +216,7 @@ final class ModesRowsTests: XCTestCase {
         XCTAssertNil(modes.deleting, "the default mode can't be deleted")
         modes.askDelete("c")
         XCTAssertEqual(modes.deleting?.name, "Chat")
-        modes.delete()
+        modes.delete(try XCTUnwrap(modes.deleting))
         XCTAssertEqual(sent.commands, [.modesDelete(mode: "c", ref: "modes:1")])
         XCTAssertNil(modes.deleting)
         modes.apply(failed("modes.delete", id: "modes:1", code: "mode_not_found"))
@@ -231,6 +232,10 @@ final class ModesRowsTests: XCTestCase {
         XCTAssertTrue(modes.unreadable)
         modes.add()
         XCTAssertNil(modes.editor, "no editor over modes that can't be read")
+        modes.startOver()
+        XCTAssertEqual(sent.saves.count, 0, "not without asking")
+        modes.askStartOver()
+        XCTAssertTrue(modes.confirmingStartOver)
         modes.startOver()
         let save = try XCTUnwrap(sent.saves.last)
         XCTAssertEqual(save["replace_unreadable"] as? Bool, true)
@@ -441,14 +446,14 @@ final class ModesEditorModelTests: XCTestCase {
             modes.apply(failed("modes.save", id: ref, code: code))
             XCTAssertTrue(sent.commands.contains { if case .modesList = $0 { true } else { false } }, "\(code): read again")
         }
-        // Cancel: a late answer is no longer the editor's.
+        // Cancelled while it was on its way: the refusal is said in the section.
         sent.commands = []
         modes.save()
         let late = try XCTUnwrap(sent.commands.first?.commandID)
         modes.closeEditor()
         modes.apply(failed("modes.save", id: late, code: "name_blank"))
         XCTAssertNil(modes.editor)
-        XCTAssertNil(modes.problem)
+        XCTAssertEqual(modes.problem, "Your change to \u{201C}Chat\u{201D} wasn't saved. Give the mode a name.")
     }
 
     /// Picking a model at a destination no polish consent covers asks first; Allow records the OK
@@ -472,7 +477,7 @@ final class ModesEditorModelTests: XCTestCase {
         XCTAssertEqual(sent.commands, [], "Cancel sends nothing")
 
         modes.save()
-        modes.allowAndSave()
+        modes.allowAndSave(try XCTUnwrap(editor.consentStep))
         XCTAssertEqual(sent.commands, [.consentAllow(feature: .polish, to: .cloud, endpoint: "https://api.groq.com/openai/v1", key: nil, ref: "consent.allow:polish:1")])
         XCTAssertTrue(editor.saving)
         // The polish consent model takes the answer too: it is its newest.
@@ -499,14 +504,14 @@ final class ModesEditorModelTests: XCTestCase {
         let editor = try XCTUnwrap(modes.editor)
         editor.polishModel = "provider:groq"
         modes.save()
-        modes.allowAndSave()
+        modes.allowAndSave(try XCTUnwrap(editor.consentStep))
         modes.apply(polishState(on: true, consents: [deviceConsent], ref: "consent.allow:polish:1"))
         XCTAssertEqual(editor.error, ModesModel.okFailure)
         XCTAssertFalse(editor.saving)
         XCTAssertEqual(sent.saves.count, 0)
 
         modes.save()
-        modes.allowAndSave()
+        modes.allowAndSave(try XCTUnwrap(editor.consentStep))
         modes.apply(failed("consent.allow", id: "consent.allow:polish:2", code: nil))
         XCTAssertEqual(editor.error, "Couldn't record your OK, so nothing was saved. Try again.")
         XCTAssertEqual(sent.saves.count, 0)
@@ -569,7 +574,7 @@ final class ModesEditorModelTests: XCTestCase {
         XCTAssertEqual(ModesModel.confirmTitle(c), "Polish \u{201C}Chat\u{201D} with Groq \u{00B7} llama-3.1-8b-instant?")
         XCTAssertEqual(ModesModel.confirmButton(c), "Send to Groq")
         XCTAssertEqual(modes.confirmMessage(c), ConsentModel.message(.polish, c.choice.destination))
-        modes.confirmAllow()
+        modes.confirmAllow(try XCTUnwrap(modes.confirming))
         XCTAssertNil(modes.confirming)
         let save = try XCTUnwrap(sent.saves.last)
         let fields = try XCTUnwrap(save["mode"] as? [String: Any])
@@ -587,7 +592,7 @@ final class ModesEditorModelTests: XCTestCase {
         let both = try XCTUnwrap(asking.confirming)
         XCTAssertTrue(both.asksOK)
         XCTAssertTrue(asking.confirmMessage(both).hasSuffix(" This also turns on Polish my words."))
-        asking.confirmAllow()
+        asking.confirmAllow(try XCTUnwrap(asking.confirming))
         XCTAssertEqual(asked.commands, [.consentAllow(feature: .polish, to: .cloud, endpoint: "https://api.groq.com/openai/v1", key: nil, ref: "consent.allow:polish:1")])
         asking.apply(polishState(on: true, consents: [groqConsent], ref: "consent.allow:polish:1"))
         XCTAssertEqual((asked.saves.last?["mode"] as? [String: Any])?["polish_model_confirm"] as? Bool, true)
@@ -599,13 +604,13 @@ final class ModesEditorModelTests: XCTestCase {
                                      models: [apple, groq(allowed: false)])
         modes.askConfirm("c")
         XCTAssertEqual(modes.confirming?.pin, false)
-        modes.confirmAllow()
+        modes.confirmAllow(try XCTUnwrap(modes.confirming))
         modes.apply(polishState(on: true, consents: [groqConsent], ref: "consent.allow:polish:1"))
         XCTAssertEqual(sent.saves.count, 0)
         XCTAssertNil(modes.problem)
         // Refused: said in the section.
         modes.askConfirm("c")
-        modes.confirmAllow()
+        modes.confirmAllow(try XCTUnwrap(modes.confirming))
         modes.apply(polishState(on: true, consents: [], ref: "consent.allow:polish:2"))
         XCTAssertEqual(modes.problem, ModesModel.okFailureRow)
     }
@@ -624,6 +629,127 @@ final class ModesEditorModelTests: XCTestCase {
         let fields = try XCTUnwrap(sent.saves.last?["mode"] as? [String: Any])
         XCTAssertEqual(fields["polish_model_confirm_to"] as? [String: String], ["to": "on_device"])
         XCTAssertNil(fields["polish_model"], "the same pin, confirmed")
+    }
+
+    /// The editor's Confirm sends the destination the user was shown, never one looked up again
+    /// at the save; refused because it sends elsewhere now, Confirm asks again.
+    func testAnEditorConfirmSendsWhatWasShownAndAsksAgainWhenItMoved() throws {
+        let (modes, sent, _) = model([mode("c", "Chat", model: "provider:groq", state: "moved"), defaultMode],
+                                     models: [apple, groq(allowed: true)])
+        modes.edit("c")
+        let editor = try XCTUnwrap(modes.editor)
+        modes.confirmInEditor(editor)
+        XCTAssertEqual(editor.confirmedTo?.destination.kind, .cloud(endpoint: "https://api.groq.com/openai/v1"))
+        // The provider is re-pointed while the editor is open: a listing names another endpoint.
+        let moved = #"{"id":"provider:groq","name":"Groq","model":"llama-3.1-8b-instant","to":"cloud","endpoint":"https://elsewhere.example.com/v1","allowed":true,"blocked_local_only":false}"#
+        modes.apply(listing([mode("c", "Chat", model: "provider:groq", state: "moved"), defaultMode], models: [apple, moved]))
+        modes.save()
+        let fields = try XCTUnwrap(sent.saves.last?["mode"] as? [String: Any])
+        XCTAssertEqual((fields["polish_model_confirm_to"] as? [String: String])?["endpoint"], "https://api.groq.com/openai/v1",
+                       "what the user was shown, for the core to refuse")
+        modes.apply(failed("modes.save", id: "modes:1", code: "destination_changed"))
+        XCTAssertFalse(editor.confirmed, "not confirmed any more")
+        XCTAssertTrue(modes.canConfirmInEditor(editor), "Confirm asks again")
+        XCTAssertEqual(editor.error, ModesModel.saveFailure(.destinationChanged, editor: editor))
+        modes.save()
+        XCTAssertNil((sent.saves.last?["mode"] as? [String: Any])?["polish_model_confirm"], "no confirm without a new one")
+    }
+
+    /// Cancelled while its save was on its way: a refusal is said in the section, not dropped.
+    func testASaveRefusedAfterItsEditorClosedIsSaid() throws {
+        let (modes, _, _) = model()
+        modes.edit("c")
+        let editor = try XCTUnwrap(modes.editor)
+        editor.name = "Casual"
+        modes.save()
+        modes.closeEditor()
+        modes.apply(failed("modes.save", id: "modes:1", code: "name_is_style"))
+        XCTAssertNil(modes.editor)
+        XCTAssertEqual(modes.problem, "Your change to \u{201C}Chat\u{201D} wasn't saved. \(ModesModel.saveFailure(.nameIsStyle, editor: editor))")
+        // A save that lands after its editor closed changes nothing else.
+        modes.add()
+        let other = try XCTUnwrap(modes.editor)
+        other.name = "Notes"
+        modes.save()
+        modes.closeEditor()
+        modes.add()
+        let third = try XCTUnwrap(modes.editor)
+        modes.apply(listing([mode("c", "Chat"), mode("n", "Notes"), defaultMode], ref: "modes:2", saved: "n"))
+        XCTAssertTrue(modes.editor === third, "another editor opened since stays open")
+    }
+
+    /// One row operation at a time: a second tap while the first waits never takes its place.
+    func testRowOperationsWaitForTheirAnswer() throws {
+        let (modes, sent, _) = model([mode("c", "Chat"), mode("n", "Notes"), defaultMode])
+        modes.askDelete("c")
+        modes.delete(try XCTUnwrap(modes.deleting))
+        XCTAssertTrue(modes.busy)
+        modes.askDelete("n")
+        XCTAssertNil(modes.deleting, "waits for the first")
+        modes.apply(failed("modes.delete", id: "modes:1", code: nil))
+        XCTAssertFalse(modes.busy)
+        XCTAssertEqual(modes.problem, "Couldn't delete \u{201C}Chat\u{201D}. Try again.")
+        modes.askDelete("n")
+        modes.delete(try XCTUnwrap(modes.deleting))
+        modes.apply(listing([mode("c", "Chat"), defaultMode], ref: "modes:2"))
+        XCTAssertFalse(modes.busy)
+        XCTAssertNil(modes.problem, "a stale failure goes once something succeeds")
+        XCTAssertEqual(sent.commands.filter { if case .modesDelete = $0 { true } else { false } }.count, 2)
+    }
+
+    /// "Save again to move it" is for the next save only.
+    func testTakingAppsIsForTheNextSaveOnly() throws {
+        let (modes, sent, _) = model()
+        modes.add()
+        let editor = try XCTUnwrap(modes.editor)
+        editor.name = "Work"
+        modes.addApp("com.apple.Notes", to: editor)
+        modes.save()
+        modes.apply(failed("modes.save", id: "modes:1", code: "app_taken"))
+        modes.save()
+        XCTAssertEqual(sent.saves.last?["take_apps"] as? Bool, true)
+        modes.apply(failed("modes.save", id: "modes:3", code: "name_taken"))
+        modes.save()
+        XCTAssertNil(sent.saves.last?["take_apps"], "said once, used once")
+    }
+
+    /// Each app is named once (Launch Services reads files), not at every draw.
+    func testAnAppIsLookedUpOnce() throws {
+        final class Counting: AppDirectory, @unchecked Sendable {
+            var asked = 0
+            func app(bundleID: String) -> (name: String, icon: NSImage)? {
+                asked += 1
+                return nil
+            }
+        }
+        let apps = Counting()
+        let modes = ModesModel(send: { _ in }, apps: apps)
+        modes.apply(listing([mode("c", "Chat", apps: ["com.apple.mail"]), defaultMode]))
+        let first = apps.asked
+        XCTAssertEqual(first, 1)
+        for _ in 0..<5 { _ = modes.label("com.apple.mail") }
+        modes.apply(listing([mode("c", "Chat", apps: ["com.apple.mail"]), defaultMode]))
+        XCTAssertEqual(apps.asked, first)
+    }
+
+    func testAnOKIsMatchedWhateverTheEndpointsTrailingSlash() {
+        let state = ConsentModel.Snapshot(on: true, allowed: true, destination: nil, error: nil,
+                                          consents: [ConsentModel.Granted(kind: .cloud(endpoint: "https://api.groq.com/openai/v1"), name: "Groq")])
+        XCTAssertTrue(state.covers(ConsentModel.Destination(kind: .cloud(endpoint: "https://api.groq.com/openai/v1/"), name: "Groq")))
+        XCTAssertFalse(state.covers(ConsentModel.Destination(kind: .cloud(endpoint: "https://api.groq.com/openai"), name: "Groq")))
+        XCTAssertFalse(state.covers(ConsentModel.Destination(kind: .onDevice, name: "x")))
+    }
+
+    func testTooLongFallsBackToPlainWords() {
+        let editor = ModeEditor(mode: nil, isDefault: false)
+        editor.name = String(repeating: "\u{1F600}", count: 40)
+        XCTAssertEqual(ModesModel.saveFailure(.tooLong, editor: editor), "You can have up to 50 modes.")
+        let existing = ModeEditor(mode: try? JSONDecoder().decode(ModeInfo.self, from: Data(mode("c", "Chat").utf8)), isDefault: false)
+        XCTAssertEqual(ModesModel.saveFailure(.tooLong, editor: existing), "Something here is too long. Shorten it.")
+        // Counted as the core counts: a flag is two scalars.
+        existing.prompt = String(repeating: "\u{1F1E9}\u{1F1F0}", count: 1001)
+        XCTAssertEqual(ModesModel.saveFailure(.tooLong, editor: existing), "Polish instructions can be up to 2,000 characters.")
+        XCTAssertTrue(existing.promptTooLong)
     }
 
     func testTheEditorsCountAndPlaceholder() throws {
@@ -759,7 +885,7 @@ final class ModesCoreRoundTripTests: XCTestCase {
         modes.edit(work)
         editor = try XCTUnwrap(modes.editor)
         modes.askDelete(work)
-        modes.delete()
+        modes.delete(try XCTUnwrap(modes.deleting))
         pump("deleted") { !modes.rows.contains { $0.id == work } }
         editor.name = "Work again"
         XCTAssertEqual(saveRefused("mode_not_found"), ModesModel.saveFailure(.modeNotFound, editor: editor))

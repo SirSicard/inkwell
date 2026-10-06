@@ -35,9 +35,25 @@ import Observation
 final class ConsentModel {
     /// Where a feature sends the user's words, as the consent step names it.
     struct Destination: Equatable, Sendable {
-        enum Kind: Equatable, Sendable {
+        enum Kind: Hashable, Sendable {
             case onDevice
             case cloud(endpoint: String)
+
+            /// The same destination, as the core compares them (an endpoint without its trailing
+            /// slashes, which the core drops).
+            func sameDestination(_ other: Kind) -> Bool {
+                switch (self, other) {
+                case (.onDevice, .onDevice): true
+                case (.cloud(let a), .cloud(let b)): Self.trimmed(a) == Self.trimmed(b)
+                default: false
+                }
+            }
+
+            private static func trimmed(_ endpoint: String) -> String {
+                var out = Substring(endpoint)
+                while out.hasSuffix("/") { out = out.dropLast() }
+                return String(out)
+            }
         }
 
         let kind: Kind
@@ -98,12 +114,12 @@ final class ConsentModel {
         /// Whether one of the consents covers `destination` (one on this Mac covers every model
         /// on it; a cloud one, its endpoint).
         func covers(_ destination: Destination) -> Bool {
-            consents.contains { $0.kind == destination.kind }
+            consents.contains { $0.kind.sameDestination(destination.kind) }
         }
     }
 
     /// A destination the user agreed a feature may send to, as consent.state lists it.
-    struct Granted: Equatable, Sendable {
+    struct Granted: Hashable, Sendable {
         let kind: Destination.Kind
         /// For cloud, the provider's name the user agreed to.
         let name: String?

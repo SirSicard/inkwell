@@ -16,6 +16,7 @@ struct ModesSection: View {
             SectionTitle(text: "Modes", note: "Picked by the app you're typing in")
             if modes.failed {
                 Text(ModesModel.loadFailedText).font(Typography.caption).foregroundStyle(Theme.alert)
+                Button("Try Again") { modes.load() }
             }
             if let problem = modes.problem {
                 Text(problem)
@@ -24,7 +25,8 @@ struct ModesSection: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             if modes.unreadable {
-                Button("Start over (replaces the damaged modes)") { modes.startOver() }
+                Button("Start over (replaces the damaged modes)\u{2026}") { modes.askStartOver() }
+                    .disabled(modes.busy)
                     .help("Your stored modes can\u{2019}t be read. This replaces them with the default mode.")
             }
             ForEach(modes.rows) { row in
@@ -44,12 +46,23 @@ struct ModesSection: View {
             isPresented: Binding(get: { modes.deleting != nil }, set: { if !$0 { modes.deleting = nil } }),
             titleVisibility: .visible,
             presenting: modes.deleting
-        ) { _ in
-            Button("Delete", role: .destructive) { modes.delete() }
+        ) { row in
+            Button("Delete", role: .destructive) { modes.delete(row) }
             Button("Cancel", role: .cancel) { modes.deleting = nil }
                 .keyboardShortcut(.defaultAction)
         } message: { row in
             Text(ModesModel.deleteMessage(row))
+        }
+        .confirmationDialog(
+            ModesModel.startOverTitle,
+            isPresented: Binding(get: { modes.confirmingStartOver }, set: { if !$0 { modes.confirmingStartOver = false } }),
+            titleVisibility: .visible
+        ) {
+            Button("Start Over", role: .destructive) { modes.startOver() }
+            Button("Cancel", role: .cancel) { modes.confirmingStartOver = false }
+                .keyboardShortcut(.defaultAction)
+        } message: {
+            Text(ModesModel.startOverMessage)
         }
         .alert(
             modes.confirming.map(ModesModel.confirmTitle) ?? "",
@@ -57,7 +70,7 @@ struct ModesSection: View {
             presenting: modes.confirming
         ) { confirming in
             Button("Cancel", role: .cancel) { modes.confirming = nil }
-            Button(ModesModel.confirmButton(confirming)) { modes.confirmAllow() }
+            Button(ModesModel.confirmButton(confirming)) { modes.confirmAllow(confirming) }
                 .keyboardShortcut(.defaultAction)
         } message: { confirming in
             Text(modes.confirmMessage(confirming))
@@ -97,14 +110,17 @@ private struct ModeRowView: View {
                         .accessibilityLabel("Edit \(row.title)")
                     if !row.isDefault {
                         Button("Delete") { modes.askDelete(row.id) }
+                            .disabled(modes.busy)
                             .accessibilityLabel("Delete \(row.title)")
                     }
                     switch row.polish.rowNote?.fix {
                     case .confirm:
                         Button("Confirm\u{2026}") { modes.askConfirm(row.id) }
+                            .disabled(modes.busy)
                             .accessibilityLabel("Confirm where \(row.title)'s model sends")
                     case .allow:
                         Button("Allow\u{2026}") { modes.askConfirm(row.id) }
+                            .disabled(modes.busy)
                             .accessibilityLabel("Allow polish for \(row.title)")
                     case nil:
                         EmptyView()
@@ -205,7 +221,8 @@ struct ModeEditorSheet: View {
                 Button("Save") { modes.save() }
                     .keyboardShortcut(.defaultAction)
                     .disabled(editor.saving)
-                    .accessibilityLabel(editor.adding ? "Save the new mode" : "Save \(editor.name)")
+                    .accessibilityLabel(editor.adding || editor.name.trimmingCharacters(in: .whitespaces).isEmpty
+                        ? "Save the mode" : "Save \(editor.name)")
             }
         }
         .font(Typography.body)
@@ -223,7 +240,7 @@ struct ModeEditorSheet: View {
         ) { destination in
             Button("Cancel", role: .cancel) { modes.cancelConsentStep() }
                 .accessibilityLabel("Cancel, and save nothing")
-            Button(ConsentModel.button(.polish, destination)) { modes.allowAndSave() }
+            Button(ConsentModel.button(.polish, destination)) { modes.allowAndSave(destination) }
                 .keyboardShortcut(.defaultAction)
         } message: { destination in
             Text(modes.consentMessage(destination))
@@ -298,7 +315,7 @@ struct ModeEditorSheet: View {
         row("Polish with") {
             Picker("Polish with", selection: Binding(get: { editor.polishModel }, set: { picked in
                 editor.polishModel = picked
-                editor.confirmed = false
+                editor.confirmedTo = nil
             })) {
                 ForEach(modes.modelOptions(editor), id: \.id) { option in
                     Text(option.label).tag(option.id)
@@ -422,6 +439,8 @@ private struct AddAppMenu: View {
         .fixedSize()
         .accessibilityLabel("Add an app")
         .onAppear(perform: refresh)
+        // An app removed from the list is offered again.
+        .onChange(of: editor.apps) { refresh() }
         .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didLaunchApplicationNotification)) { _ in refresh() }
         .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didTerminateApplicationNotification)) { _ in refresh() }
     }
