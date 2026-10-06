@@ -426,9 +426,11 @@ final class DictationModel {
             case .releaseMissed:
                 return DropText(title: "Stopped after 3 minutes", detail: "The key's release never arrived")
             // Shown elsewhere (Today's notices, Settings) or nothing the user acts on at once.
+            // polishModelMissing (a mode's own model is gone) is for the modes editor's branch to
+            // surface; until then it is quiet, as polishUnavailable is.
             case .vadFailed, .audioLost, .tailCutShort, .focusUnreadable, .polishUnavailable,
-                 .polishFailed, .noModeForStyle, .saveFailed, .deletedTextNotScrubbed,
-                 .deletedTextScrubbed, .other:
+                 .polishModelMissing, .polishFailed, .noModeForStyle, .saveFailed,
+                 .deletedTextNotScrubbed, .deletedTextScrubbed, .other:
                 return nil
             }
         default:

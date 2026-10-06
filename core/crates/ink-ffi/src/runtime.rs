@@ -816,7 +816,7 @@ impl Core {
         let events = s.events.clone();
         let sink: ink_core::EventSink<ink_pipeline::events::DictationEvent> =
             Arc::new(move |e| events.emit(events::dictation(&e)));
-        let chain = DictationChain::new(
+        let mut chain = DictationChain::new(
             Services {
                 engine: Arc::new(Routed::new(s.clone(), Job::DictationFinal)),
                 store: s.store.clone(),
@@ -835,6 +835,11 @@ impl Core {
             parts.vad,
             sink,
         );
+        // A mode's own language model, found at each take, behind the same local-only switch.
+        chain.set_mode_models(Some(crate::llms::mode_models(
+            s.llms.clone(),
+            s.local_only.clone(),
+        )));
         let worker = DictationWorker::spawn(
             chain,
             s.clock.clone(),

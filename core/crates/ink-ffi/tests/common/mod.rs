@@ -593,3 +593,18 @@ impl ink_core::Store for FailingStore {
         self.inner.scrub_change()
     }
 }
+
+/// Stores polish's consents as the core keeps them: the chain reads them again at each call.
+#[allow(dead_code)]
+pub fn store_polish_consents(
+    core: &ink_ffi::runtime::Core,
+    consents: &[ink_pipeline::consent::LlmConsent],
+) {
+    core.shared()
+        .store
+        .set_setting(
+            ink_pipeline::consent::Feature::Polish.setting_key(),
+            &ink_pipeline::consent::consents_to_setting(consents),
+        )
+        .unwrap();
+}

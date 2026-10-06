@@ -219,6 +219,15 @@ impl RigBuilder {
         });
         let mem = Arc::new(MemStore::new());
         let store: Arc<dyn Store> = self.store.clone().unwrap_or_else(|| mem.clone());
+        // The chain reads polish's consents again from the store at each call, so the settings'
+        // are stored too, as the core keeps them: in the rig's own store only (a test that brings
+        // its own stores them itself, and a probe built from this config must not write it).
+        if self.store.is_none() && !self.settings.polish_consents.is_empty() {
+            let _ = mem.set_setting(
+                ink_pipeline::consent::Feature::Polish.setting_key(),
+                &ink_pipeline::consent::consents_to_setting(&self.settings.polish_consents),
+            );
+        }
         let events = Arc::new(Mutex::new(Vec::new()));
         let sink_events = events.clone();
         let sink: EventSink<DictationEvent> =

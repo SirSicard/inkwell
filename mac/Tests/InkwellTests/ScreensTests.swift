@@ -1354,7 +1354,7 @@ final class ModesModelTests: XCTestCase {
             "com.apple.finder", " us.zoom.xos ", "COM.TINYSPECK.SLACKMACGAP",
         ]
         let apps = try JSONSerialization.data(withJSONObject: identities)
-        let json = #"{"type":"modes.listed","default_id":"d","modes":[{"id":"chat","name":"Chat","style":"casual","polish":false,"remove_fillers":true,"apps":\#(String(decoding: apps, as: UTF8.self))},{"id":"d","name":"Default","style":"formal","polish":true,"remove_fillers":true,"apps":[]}]}"#
+        let json = #"{"type":"modes.listed","default_id":"d","modes":[{"id":"chat","name":"Chat","style":"casual","polish":false,"remove_fillers":true,"polish_prompt":"","apps":\#(String(decoding: apps, as: UTF8.self))},{"id":"d","name":"Default","style":"formal","polish":true,"remove_fillers":true,"polish_prompt":"","apps":[]}],"default_polish_prompt":"Fix it.","polish_models":[]}"#
         for directory in [Apps(), WorkspaceApps()] as [any AppDirectory] {
             let modes = ModesModel(send: { _ in }, apps: directory)
             modes.apply(event(json))
