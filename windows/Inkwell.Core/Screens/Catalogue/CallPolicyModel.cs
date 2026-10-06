@@ -167,14 +167,13 @@ public sealed class CallPolicyModel(Action<CoreCommand> send, IAppDirectory? app
         send(new CoreCommand.SettingSet(ShellSetting.MeetingsCallsDefault, policy.Value()));
     }
 
-    /// <summary>What happens for <paramref name="app"/> now, when the core has listed it.</summary>
+    /// <summary>
+    /// What happens for <paramref name="app"/> now, as the core last listed it (a choice in flight
+    /// is not yet what happens: the Drop's buttons stay put while one is saved).
+    /// </summary>
     public CallPolicy? PolicyOf(string app)
     {
         ArgumentNullException.ThrowIfNull(app);
-        if (pending.TryGetValue(app, out var choice))
-        {
-            return choice == CallChoice.Default ? Default : choice.Policy();
-        }
         return Apps.FirstOrDefault(a => a.App == app)?.Policy;
     }
 
@@ -185,6 +184,11 @@ public sealed class CallPolicyModel(Action<CoreCommand> send, IAppDirectory? app
     public void Choose(CallChoice choice, string app, CallPolicyOrigin origin, Action? saved = null)
     {
         ArgumentNullException.ThrowIfNull(app);
+        // A second press on the Drop while its first is saved (a double click) does nothing.
+        if (origin == CallPolicyOrigin.Drop && inFlight.Values.Any(f => f.App == app && f.Origin == CallPolicyOrigin.Drop))
+        {
+            return;
+        }
         ClearFailure(origin);
         if (Unreadable is not null)
         {
@@ -391,11 +395,15 @@ public sealed class CallPolicyModel(Action<CoreCommand> send, IAppDirectory? app
                 Failure = $"Couldn't read the apps you chose for: {failed.Message}";
                 Changed();
                 break;
-            case CommandFailed failed when failed.Id == DefaultSettingId:
+            case CommandFailed failed when failed.Id == DefaultSettingId && failed.Command == "setting.set":
                 Failure = $"Couldn't save the default: {failed.Message}";
                 Changed();
-                // What it is, not what was asked.
+                // What it is, not what was asked (read once: a read that fails is only said).
                 send(new CoreCommand.SettingGet(ShellSetting.MeetingsCallsDefault));
+                break;
+            case CommandFailed failed when failed.Id == DefaultSettingId:
+                Failure = $"Couldn't read the default: {failed.Message}";
+                Changed();
                 break;
             default:
                 break;

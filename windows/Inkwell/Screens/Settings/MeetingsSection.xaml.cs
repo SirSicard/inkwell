@@ -145,6 +145,7 @@ public sealed partial class MeetingsSection : UserControl
             ScreenLog.System.Write($"the call list's start-over step could not be shown ({e.GetType().Name}); cancelled");
             askingStartOver = false;
             calls.CancelStartOver();
+            Relayout();
             return;
         }
         askingStartOver = false;
@@ -157,6 +158,14 @@ public sealed partial class MeetingsSection : UserControl
         {
             calls.CancelStartOver();
         }
+        Relayout();
+    }
+
+    /// <summary>The rows laid out again from the model: a pick not saved (the start over cancelled) goes back to what is stored.</summary>
+    private void Relayout()
+    {
+        shownApps = null;
+        AppRows.ItemsSource = null;
         Render();
     }
 

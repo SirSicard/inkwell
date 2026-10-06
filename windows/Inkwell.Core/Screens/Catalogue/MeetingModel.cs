@@ -213,6 +213,11 @@ public sealed class MeetingModel(
     {
         Failure = null;
         stopping = origin;
+        if (origin == MeetingOrigin.DropStop)
+        {
+            // Stopped by hand: Stop and delete goes with it at once, not at meeting.stopped.
+            EndDeleteWindow();
+        }
         Changed();
         send(new CoreCommand.MeetingStop());
     }
@@ -220,7 +225,7 @@ public sealed class MeetingModel(
     /// <summary>"Stop and delete": only while the meeting's first minute lasts.</summary>
     public void Discard()
     {
-        if (Deletable is not string record)
+        if (Deletable is not string record || Discarding is not null)
         {
             return;
         }

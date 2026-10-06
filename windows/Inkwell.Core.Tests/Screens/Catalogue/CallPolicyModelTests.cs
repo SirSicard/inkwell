@@ -49,7 +49,7 @@ public sealed class CallPolicyModelTests
         calls.Choose(CallChoice.Never, "examplecall.exe", CallPolicyOrigin.Settings);
         Assert.Equal(new CoreCommand.MeetingsCallsSet("examplecall.exe", "never", false, "calls:1"), sent.Commands[^1]);
         Assert.Equal(CallChoice.Never, calls.Rows[1].Choice); // shown as made until the answer
-        Assert.Equal(CallPolicy.Never, calls.PolicyOf("examplecall.exe"));
+        Assert.Equal(CallPolicy.Ask, calls.PolicyOf("examplecall.exe")); // what happens is the core's answer, not the choice in flight
         calls.Choose(CallChoice.Default, Zoom, CallPolicyOrigin.Settings);
         Assert.Equal(new CoreCommand.MeetingsCallsSet(Zoom, "default", false, "calls:2"), sent.Commands[^1]);
         calls.Apply(Calls(
@@ -94,6 +94,11 @@ public sealed class CallPolicyModelTests
         Assert.Equal("Couldn't save the default: database is locked", calls.Failure);
         Assert.Equal(new CoreCommand.SettingGet(ShellSetting.MeetingsCallsDefault), sent.Commands[^1]);
         Assert.True(CallPolicyModel.Handles(failed));
+        // Read once: a read that fails is only said, never asked again in a loop.
+        var sentBefore = sent.Commands.Count;
+        calls.Apply(Ev.Of("""{"type":"command.failed","command":"setting.get","id":"setting:meetings.calls.default","message":"database is locked"}"""));
+        Assert.Equal(sentBefore, sent.Commands.Count);
+        Assert.Equal("Couldn't read the default: database is locked", calls.Failure);
     }
 
     [Fact]

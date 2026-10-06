@@ -387,6 +387,34 @@ public sealed class CallPolicyDropTests
         Assert.Contains(rig.Sent.Commands, c => c is CoreCommand.NoteAdd); // refused: saved
     }
 
+    /// <summary>A double click on "Always for": the second press does nothing while the first is saved, and the buttons stay where they were.</summary>
+    [Fact]
+    public void ADoubleClickOnAlwaysSavesOnce()
+    {
+        var rig = new Rig();
+        rig.Apply(Offered);
+        var before = rig.Titles;
+        rig.Screens.PerformDropAction(rig.Line.Actions!.At(2)!);
+        Assert.Equal(before, rig.Titles); // no "Never for" slides under the pointer
+        rig.Screens.PerformDropAction(rig.Line.Actions!.At(2)!);
+        rig.Screens.PerformDropAction(new DropAction.Never(Zoom, "Zoom"));
+        Assert.Single(rig.Sent.Commands.OfType<CoreCommand.MeetingsCallsSet>());
+    }
+
+    /// <summary>Stop on the Drop takes Stop and delete away at once; a second Stop and delete sends nothing.</summary>
+    [Fact]
+    public void StopTakesStopAndDeleteAwayAtOnce()
+    {
+        var rig = new Rig();
+        rig.Apply(Started(auto: true, InAMinute));
+        rig.Screens.Meetings.Discard();
+        rig.Screens.Meetings.Discard();
+        Assert.Single(rig.Sent.Commands.OfType<CoreCommand.MeetingDiscard>());
+        rig.Apply(Started(auto: true, InAMinute, "r2"));
+        rig.Screens.PerformDropAction(new DropAction.StopRecording());
+        Assert.Equal(["Stop"], rig.Titles);
+    }
+
     [Fact]
     public void TheScreensShowTheNewFailures()
     {
