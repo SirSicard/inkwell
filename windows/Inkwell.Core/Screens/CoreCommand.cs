@@ -415,6 +415,26 @@ public abstract record CoreCommand
             [("cmd", Name), ("utc_offsets", UtcOffsets.Select(o => o.Fields()).ToList()), ("week_start", WeekStart), ("id", Ref)];
     }
 
+    /// <summary>
+    /// Pauses the streak from today (days without a dictation then don't count against it, for up
+    /// to 90 days): stats.counted with <paramref name="Ref"/>, or a command.failed with it as the
+    /// id. Takes stats.get's calendar.
+    /// </summary>
+    public sealed record StreakPause(IReadOnlyList<UtcOffset> UtcOffsets, int WeekStart, string Ref) : CoreCommand
+    {
+        public override string Name => "streak.pause";
+        private protected override IEnumerable<(string, object)> Fields() =>
+            [("cmd", Name), ("utc_offsets", UtcOffsets.Select(o => o.Fields()).ToList()), ("week_start", WeekStart), ("id", Ref)];
+    }
+
+    /// <summary>Ends the running pause of the streak: answered as <see cref="StreakPause"/>.</summary>
+    public sealed record StreakResume(IReadOnlyList<UtcOffset> UtcOffsets, int WeekStart, string Ref) : CoreCommand
+    {
+        public override string Name => "streak.resume";
+        private protected override IEnumerable<(string, object)> Fields() =>
+            [("cmd", Name), ("utc_offsets", UtcOffsets.Select(o => o.Fields()).ToList()), ("week_start", WeekStart), ("id", Ref)];
+    }
+
     /// <summary>Settings > Snippets: answered by snippets.listed with <paramref name="Ref"/>.</summary>
     public sealed record SnippetsList(string Ref) : CoreCommand
     {
@@ -613,8 +633,16 @@ public enum ShellSetting
     LlmLocalOnly,
     /// <summary>The typing speed the Stats screen measures time saved against: a whole number of words a minute, 10 to 200 (40 unless set).</summary>
     StatsTypingWpm,
-    /// <summary>"on" (the default) or "off": a milestone reached is celebrated.</summary>
+    /// <summary>"on" (the default) or "off": a milestone reached, or a best set, is celebrated.</summary>
     StatsCelebrate,
+    /// <summary>The weekdays the streak rests on: "none" (the default), or ISO weekdays ascending and comma-separated ("6,7"), never all seven.</summary>
+    StatsRestDays,
+    /// <summary>"shown" (the default) or "hidden": a hidden streak shows nowhere and celebrates nothing.</summary>
+    StatsStreak,
+    /// <summary>"on" or "off" (the default): the share card may carry the heatmap.</summary>
+    StatsShareHeatmap,
+    /// <summary>The first day (YYYY-MM-DD) of the week whose review the user dismissed.</summary>
+    StatsReviewDismissed,
 }
 
 public static class ShellSettings
@@ -644,6 +672,10 @@ public static class ShellSettings
         ShellSetting.LlmLocalOnly => "llm.local_only",
         ShellSetting.StatsTypingWpm => "stats.typing_wpm",
         ShellSetting.StatsCelebrate => "stats.celebrate",
+        ShellSetting.StatsRestDays => "stats.rest_days",
+        ShellSetting.StatsStreak => "stats.streak",
+        ShellSetting.StatsShareHeatmap => "stats.share_heatmap",
+        ShellSetting.StatsReviewDismissed => "stats.review_dismissed",
         _ => throw new ArgumentOutOfRangeException(nameof(setting)),
     };
 

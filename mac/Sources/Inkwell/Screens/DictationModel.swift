@@ -1,5 +1,6 @@
 // Dictation as the shell shows it: whether it is live and on which keys (Settings > Dictation), the
-// choice of keys, and what the Drop says about a take that ended without its text going in.
+// choice of keys, and what the Drop says about a take that ended without its text going in (and a
+// personal best one just set, from the Stats check that follows it).
 //
 // The core holds the keys and the mic (architecture rule 1). Once the core is ready the shell reads
 // the user's switch (dictation.enabled, never set: on) and, unless it is off, sends
@@ -412,6 +413,10 @@ final class DictationModel {
             case .other:
                 return DropText(title: "The edit failed", detail: "The selection was left alone", tone: .alert)
             }
+        case .milestonesReached(let reached):
+            // A best the take (or today, or this week) just set: the core reports it once, never
+            // for an import, and never with celebrations off. A note to read, not an alert.
+            return reached.best.map { StatsFormat.bestNote($0) }
         case .dictationMicFailed:
             // At a press (it would not open) or mid-take (it went away or changed under the take,
             // which then ends with what it heard).

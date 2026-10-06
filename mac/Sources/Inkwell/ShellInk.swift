@@ -125,6 +125,9 @@ struct DropText: Equatable, Sendable {
     /// The detail is the live words of a take being held: its end matters (the head is cut, not
     /// the tail), and its newest words are still wet.
     var liveWords = false
+    /// A note that never replaces one showing or waiting (a personal best's: the take's own note,
+    /// an alert above all, comes first). It is left out then; the Records card still has it.
+    var yields = false
 
     /// What the Drop says for what is going on. A consent offer shows only while nothing is live.
     /// The consent line is honest about what recording does: both sides are kept on this Mac, and

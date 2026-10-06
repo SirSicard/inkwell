@@ -9,6 +9,7 @@
 //   a take held or transcribed   its line, the ink dictating (the app in front, its mode, the live words)
 //   a take ended not as it should  a note for 2.5 s, the ink still (too short, no mic, not typed...)
 //   a note while something is live  kept, and shown when it ends
+//   a personal best just set     a note for 2.5 s, plain ("Longest dictation yet")
 //   an app took the mic (the core offers)  "Teams opened the microphone", Record this call / Not this one, the ink still
 //   nothing                      the Drop hides
 //
@@ -31,8 +32,12 @@ public enum DropLineTone
 
 /// <summary>The Drop's two lines, and its buttons when it offers something.</summary>
 /// <param name="LiveWords">The detail is a held take's live words: its end matters, the newest words are wet.</param>
+/// <param name="Yields">
+/// A note that never replaces one showing or waiting (a personal best's: the take's own note, an
+/// alert above all, comes first). It is left out then; the Records card still has it.
+/// </param>
 public sealed record DropLine(
-    string Title, string Detail, DropLineTone Tone = DropLineTone.Plain, bool LiveWords = false, DropActions? Actions = null);
+    string Title, string Detail, DropLineTone Tone = DropLineTone.Plain, bool LiveWords = false, DropActions? Actions = null, bool Yields = false);
 
 /// <summary>A button on the Drop.</summary>
 public abstract record DropAction
@@ -240,6 +245,9 @@ public static class DictationDrop
         // until dictation is turned on again).
         DictationHotkeyLost => new("The dictation key stopped working", "Turn dictation on again in Settings", DropLineTone.Alert),
         DictationEditHotkeyLost => new("The edit key stopped working", "Turn dictation on again in Settings", DropLineTone.Alert),
+        // A best the take (or today, or this week) just set: the core reports it once, never for
+        // an import, and never with celebrations off. A note to read, not an alert.
+        MilestonesReached { Best: { } best } => StatsFormat.BestNote(best),
         _ => null,
     };
 
@@ -318,7 +326,8 @@ public sealed class DropModel
         offer = live is null && store.Offer is { } offered ? MeetingDrop.Offer(offered, offerFailure()) : null;
         foreach (var e in batch)
         {
-            if (DictationDrop.Note(e, hasLanguageModel(), noSpeechModel()) is not { } note)
+            if (DictationDrop.Note(e, hasLanguageModel(), noSpeechModel()) is not { } note
+                || (note.Yields && (noteShowing is not null || noteWaiting is not null)))
             {
                 continue;
             }

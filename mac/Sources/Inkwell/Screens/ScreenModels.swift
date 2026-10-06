@@ -444,6 +444,9 @@ final class ScreenModels {
             // The Stats screen says it couldn't count. (A milestone check that failed celebrates
             // nothing until the next one; no screen shows it, so it is logged.)
             stats.handles(failed)
+        case "streak.pause", "streak.resume":
+            // Settings > Stats says so under the pause.
+            stats.handles(failed)
         case "setting.get":
             stats.handles(failed) || failed.id == OnboardingModel.settingID || failed.id == PolishModel.settingID
                 || MeetingModel.settingIDs.contains(failed.id ?? "") || dictation.handles(failed)
