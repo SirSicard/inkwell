@@ -128,7 +128,7 @@ public sealed partial class MainWindow : Window
         {
             return;
         }
-        Orb.Look = theme.Look;
+        Orb.Look = theme.Look.WithShellStrength(theme.OrbStrength);
         Orb.AlwaysStill = theme.AlwaysStill;
         DimOrb();
         Edge.Set(theme.Colours, theme.EdgeGlow);

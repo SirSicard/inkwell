@@ -391,7 +391,7 @@ public sealed class InkSimulation(InkRandom random)
     /// <summary>
     /// The orb's uniform block for this frame (C4): the canvas, where the orb sits, the time, your
     /// level and theirs (the envelopes), the state weights, the mode, and the colours, with the rest
-    /// tint in idle's fourth lane (the uniform block keeps its size).
+    /// tint in idle's fourth lane and rest boost in ink's (the uniform block keeps its size).
     /// <paramref name="moving"/> false is the still frame: the shader holds its time at 0.
     /// </summary>
     public InkUniforms Uniforms(InkPlacement placement, GlowLook look, bool moving)
@@ -419,7 +419,7 @@ public sealed class InkSimulation(InkRandom random)
             ThemA = Vec(look.ThemA),
             ThemB = Vec(look.ThemB),
             Idle = new Vector4(look.Idle.R, look.Idle.G, look.Idle.B, Math.Clamp(look.RestTint, 0, 1)),
-            Ink = Vec(look.Ink),
+            Ink = new Vector4(look.Ink.R, look.Ink.G, look.Ink.B, Math.Clamp(look.RestBoost, 0, 1)),
         };
     }
 
@@ -435,7 +435,7 @@ public readonly record struct GlowFrame(double Time, double Dictating, double Me
 /// <summary>
 /// The shader's uniform block <c>G</c> (shaders/ink.wgsl), 160 bytes: the canvas and the orb's
 /// centre (pixels, top-left origin), the time, the unit, your level and theirs, the four state
-/// weights, the mode and whether it moves, then six colours as vec4 (rgb, a unused) from offset
+/// weights, the mode and whether it moves, then six colours as vec4 (idle.a tint, ink.a boost) from offset
 /// 64. The HLSL cbuffer packs the same way.
 /// </summary>
 [StructLayout(LayoutKind.Sequential)]

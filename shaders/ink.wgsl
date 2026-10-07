@@ -58,13 +58,14 @@
 //     48     4    dark    1 in dark mode, 0 in light
 //     52     4    motion  1 animates; 0 draws one still frame, whatever `time` is
 //     56     8    pad     unused (vec2)
-//     64     16   yA      your colour (vec4: rgb; a is unused here and in yB, tA, tB and ink)
+//     64     16   yA      your colour (vec4: rgb; a is unused here and in yB, tA and tB)
 //     80     16   yB      your partner shade
 //     96     16   tA      the far end's colour
 //     112    16   tB      its partner shade
 //     128    16   idle    the orb at rest (rgb), and how far it leans toward the dots (a, 0..1:
 //                         its first shade toward yA, its second toward tA; 0 keeps it as rgb)
-//     144    16   ink     the drop it blots down to
+//     144    16   ink     the drop it blots down to (rgb), rest alpha boost (a, 0..1; 0 keeps
+//                         the original rest alpha, 1 raises it by 50 %)
 // Colours are sRGB, 0..1, written as they are: render into a UNORM target, not an sRGB one.
 //
 // Units: p is the pixel's offset from `center` divided by `unit`, with y up. At rest the orb's
@@ -216,7 +217,9 @@ fn fs_main(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
     }
     // Yours over theirs. Theirs, in the problem state, between 55 % and 85 % of its strength.
     let a2 = o2.a * 0.9 * meeting * (1.0 - problem * (0.45 - 0.3 * pulse));
-    let a1 = o1.a * 0.9 * mix(0.55, 1.0, max(live, blot)) * (1.0 - 0.35 * a2 * (1.0 - blot));
+    // Zero keeps the old look for shells that do not supply a boost; live and blot stay as before.
+    let restAlpha = mix(0.55, 0.825, clamp(g.ink.a, 0.0, 1.0));
+    let a1 = o1.a * 0.9 * mix(restAlpha, 1.0, max(live, blot)) * (1.0 - 0.35 * a2 * (1.0 - blot));
     let alpha = a1 + a2 * (1.0 - a1);
     if (alpha <= 0.0) { return vec4<f32>(0.0); }
     var col = (o1.rgb * a1 + o2.rgb * a2 * (1.0 - a1)) / max(alpha, 0.0001);

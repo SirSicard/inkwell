@@ -6,7 +6,7 @@ using Xunit;
 
 namespace Inkwell.Ink.Tests;
 
-public sealed class RenderTests
+public sealed class RenderTests(ITestOutputHelper output)
 {
     private static InkImage Render(InkState state, GlowLook? look = null)
     {
@@ -120,6 +120,29 @@ public sealed class RenderTests
             swapChain.InjectedPresentResult = FlakyTarget.DeviceRemoved;
             Assert.Throws<InkRendererException>(() => swapChain.Present()); // a lost device still is
         }
+    }
+
+    [Fact]
+    public void FullRestBoostRaisesRenderedAlphaByHalfAndLeavesLiveUnchanged()
+    {
+        var look = GlowLook.Default.WithShellStrength(0.7f);
+        var full = look.WithShellStrength(1f);
+        var before = Render(InkState.Idle, look);
+        var after = Render(InkState.Idle, full);
+        long beforeAlpha = 0, afterAlpha = 0;
+        for (var i = 3; i < before.Rgba.Length; i += 4)
+        {
+            beforeAlpha += before.Rgba[i];
+            afterAlpha += after.Rgba[i];
+            Assert.InRange(after.Rgba[i] - 1.5 * before.Rgba[i], -1.5, 1.5);
+        }
+        Assert.True(beforeAlpha > 0);
+        Assert.InRange((double)afterAlpha / beforeAlpha, 1.49, 1.51);
+        output.WriteLine($"Rest alpha sum: {beforeAlpha} -> {afterAlpha}; ratio {(double)afterAlpha / beforeAlpha:F6}");
+        Assert.NotEqual(before.Rgba, after.Rgba);
+        Assert.Equal(Render(InkState.Dictating, look).Rgba, Render(InkState.Dictating, full).Rgba);
+        Assert.Equal(Render(InkState.Meeting, look).Rgba, Render(InkState.Meeting, full).Rgba);
+        Assert.Equal(Render(InkState.Blotting, look).Rgba, Render(InkState.Blotting, full).Rgba);
     }
 
     /// <summary>The orb takes the colours it is given: your colour while dictating, the idle colour at rest.</summary>

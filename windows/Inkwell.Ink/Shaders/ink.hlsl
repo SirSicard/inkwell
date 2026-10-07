@@ -223,18 +223,20 @@ float4 fs_main(FragmentInput_fs_main fragmentinput_fs_main) : SV_Target0
     }
     float _e205 = o2_.w;
     float a2_ = (((_e205 * 0.9) * meeting) * (1.0 - (problem * (0.45 - (0.3 * pulse)))));
-    float a1_ = (((_e171.w * 0.9) * lerp(0.55, 1.0, max(live, blot))) * (1.0 - ((0.35 * a2_) * (1.0 - blot))));
+    float _e220 = g.ink.w;
+    float restAlpha = lerp(0.55, 0.825, clamp(_e220, 0.0, 1.0));
+    float a1_ = (((_e171.w * 0.9) * lerp(restAlpha, 1.0, max(live, blot))) * (1.0 - ((0.35 * a2_) * (1.0 - blot))));
     float alpha = (a1_ + (a2_ * (1.0 - a1_)));
     if ((alpha <= 0.0)) {
         return (0.0).xxxx;
     }
-    float4 _e243 = o2_;
-    col = (((_e171.xyz * a1_) + ((_e243.xyz * a2_) * (1.0 - a1_))) / (max(alpha, 0.0001)).xxx);
-    float3 _e255 = col;
-    const float _e260 = hash((pos.xy + (frac(t)).xx));
-    col = (_e255 + (((_e260 - 0.5) * 0.05)).xxx);
-    float3 _e267 = col;
-    col = clamp(_e267, (0.0).xxx, (1.0).xxx);
-    float3 _e273 = col;
-    return float4((_e273 * alpha), alpha);
+    float4 _e252 = o2_;
+    col = (((_e171.xyz * a1_) + ((_e252.xyz * a2_) * (1.0 - a1_))) / (max(alpha, 0.0001)).xxx);
+    float3 _e264 = col;
+    const float _e269 = hash((pos.xy + (frac(t)).xx));
+    col = (_e264 + (((_e269 - 0.5) * 0.05)).xxx);
+    float3 _e276 = col;
+    col = clamp(_e276, (0.0).xxx, (1.0).xxx);
+    float3 _e282 = col;
+    return float4((_e282 * alpha), alpha);
 }

@@ -45,6 +45,23 @@ public sealed class OrbBehindTextTests(ITestOutputHelper output)
         Assert.Equal(160, System.Runtime.InteropServices.Marshal.SizeOf<InkUniforms>());
     }
 
+    [Theory]
+    [InlineData(0.1f, 0.6f, 0f)]
+    [InlineData(0.7f, 0.6f, 0f)]
+    [InlineData(0.85f, 0.8f, 0.5f)]
+    [InlineData(1f, 1f, 1f)]
+    public void ShellStrengthAboveSeventyRaisesTintAndBoost(float strength, float tint, float boost)
+    {
+        var look = GlowLook.Default.WithShellStrength(strength);
+        Assert.Equal(tint, look.RestTint, 5);
+        Assert.Equal(boost, look.RestBoost, 5);
+        var simulation = new InkSimulation(InkRandom.Seeded(1));
+        Assert.Equal(boost, simulation.Uniforms(InkPlacement.Centre, look, moving: false).Ink.W, 5);
+        Assert.Equal(0, simulation.Uniforms(InkPlacement.Centre, GlowLook.Default, moving: false).Ink.W);
+        Assert.Equal(1, simulation.Uniforms(InkPlacement.Centre, look with { RestBoost = 3 }, moving: false).Ink.W);
+        Assert.Equal(160, System.Runtime.InteropServices.Marshal.SizeOf<InkUniforms>());
+    }
+
     /// <summary>The home is inside the region the orb wanders in.</summary>
     [Fact]
     public void TheHomeIsInsideTheWander() =>

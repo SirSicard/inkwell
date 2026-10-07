@@ -15,7 +15,8 @@ public sealed record GlowLook(
     (float R, float G, float B) ThemB,
     (float R, float G, float B) Idle,
     (float R, float G, float B) Ink,
-    float RestTint = 0)
+    float RestTint = 0,
+    float RestBoost = 0)
 {
     /// <summary>
     /// How far the orb at rest leans toward the dots, so each preset clearly shows at rest: the
@@ -23,6 +24,15 @@ public sealed record GlowLook(
     /// 4.5:1 and secondary text 3:1 over it with every preset in both modes.
     /// </summary>
     public const float ShellRestTint = 0.6f;
+
+    /// <summary>The shell's rest look, unchanged through 70 %, then stronger toward 100 %.</summary>
+    public GlowLook WithShellStrength(float strength)
+    {
+        var k = Math.Clamp((strength - 0.7f) / 0.3f, 0, 1);
+        // Ease in above the old maximum so a small slider move does not make the orb jump.
+        var boost = k * k * (3 - 2 * k);
+        return this with { RestTint = ShellRestTint + (1 - ShellRestTint) * boost, RestBoost = boost };
+    }
 
     /// <summary>Day, Indigo &amp; Coral.</summary>
     public static GlowLook Default { get; } = new(
