@@ -293,6 +293,7 @@ fn gate_echo_path_words() -> Vec<String> {
         channel: Channel::Mic,
         context: None,
         cancel: ink_core::CancelToken::new(),
+        live: false,
     };
     let transcript = qwen().transcribe(&cut, &options).expect("Qwen3-ASR");
     bench::normalise(&transcript.text())

@@ -11,8 +11,9 @@
 //! - **One segment per word**, placed by the model's token times: a word runs from its first
 //!   token's start to its last token's end. The live-partials scheme (`crate::live`) reads them;
 //!   a dictation reads only the text.
-//! - **The CPU**, with one thread per physical core. ONNX Runtime's other execution providers are
-//!   not in this build of sherpa-onnx.
+//! - **The CPU**, with one thread per physical core for a final, and one thread for a live-partials
+//!   window ([`LIVE_THREADS`]). ONNX Runtime's other execution providers are not in this build of
+//!   sherpa-onnx.
 //! - **Cancellation** is checked before each window's decode, which cannot be interrupted once
 //!   started.
 //!
@@ -38,8 +39,20 @@
 //! # Threads
 //!
 //! Every call is a **worker** call. A recognizer may create streams on several threads, but one
-//! decode at a time runs here: the recognizer is used under a mutex, which costs nothing for the
-//! short windows this engine takes.
+//! decode at a time runs on each: each recognizer is used under its own mutex, which costs nothing
+//! for the short windows this engine takes. A live window and a final can run at once, on the two.
+//!
+//! sherpa-onnx fixes a recognizer's thread count when it is made, so there are two:
+//!
+//! - **Live** ([`LIVE_THREADS`]): made by [`SherpaParakeet::load`], so a model that cannot load
+//!   fails there. The live-partials scheme decodes the unsettled utterance again every half second
+//!   on both sides of a call, and with a thread per core each of ONNX Runtime's three sessions
+//!   (encoder, decoder, joiner) kept a pool of spinning threads: a test call on a 12-core, 24-thread
+//!   PC kept 16 of its 24 threads busy, 15.5 of them in those pools. On one thread the same call
+//!   took 1.4 threads, and the live words kept coming.
+//! - **Final** (a thread per physical core): made at the first final it is asked for (a dictation,
+//!   the warm-up before one, the final pass, an import). On a PC with a GPU, where Qwen3-ASR takes
+//!   those, it is never made, and the model is held in memory once.
 
 #![warn(clippy::undocumented_unsafe_blocks)]
 
@@ -62,6 +75,9 @@ pub const SHERPA_ONNX_VERSION: &str = "1.13.4";
 
 /// The ONNX Runtime that sherpa-onnx 1.13.4's Windows archive carries (the DLL's own version).
 pub const ONNXRUNTIME_VERSION: &str = "1.27.0";
+
+/// Threads for a live-partials window (see the module docs).
+pub const LIVE_THREADS: i32 = 1;
 
 /// The longest audio decoded in one pass, in seconds. Longer audio is cut into windows.
 pub const MAX_SECONDS: u32 = 90;
@@ -281,7 +297,7 @@ mod ffi {
     }
 }
 
-/// The recognizer handle. Used only under [`SherpaParakeet`]'s mutex.
+/// A recognizer handle. Used only under one of [`SherpaParakeet`]'s mutexes.
 struct Recognizer(NonNull<ffi::Recognizer>);
 
 // SAFETY: the handle has no thread affinity (sherpa-onnx's C API ties none of its objects to a
@@ -299,7 +315,12 @@ impl Drop for Recognizer {
 /// Parakeet TDT v3 int8, loaded. Implements [`OfflineEngine`] (see the module docs).
 pub struct SherpaParakeet {
     info: EngineInfo,
-    recognizer: Mutex<Recognizer>,
+    /// The four files' paths, for the final recognizer when it is first needed.
+    paths: [CString; 4],
+    /// Live-partials windows, on [`LIVE_THREADS`].
+    live: Mutex<Recognizer>,
+    /// Finals, on a thread per physical core; made at the first.
+    full: Mutex<Option<Recognizer>>,
 }
 
 /// The model files, by the names the sherpa-onnx conversion gives them.
@@ -312,7 +333,7 @@ const FILES: [&str; 4] = [
 
 impl SherpaParakeet {
     /// **Worker.** Loads the model in `dir` (the four files of the int8 conversion) on the CPU,
-    /// with one thread per physical core. Takes seconds. A missing file is
+    /// for live windows first (see the module docs). Takes seconds. A missing file is
     /// [`EngineError::ModelMissing`]; a library that is not sherpa-onnx [`SHERPA_ONNX_VERSION`]
     /// is refused.
     pub fn load(dir: &Path, info: EngineInfo) -> Result<Self, EngineError> {
@@ -351,27 +372,17 @@ impl SherpaParakeet {
                 CString::new(text).map_err(|_| failed(format!("{name}'s path holds a NUL")))?,
             );
         }
-        let threads = i32::try_from(physical_cores().get()).unwrap_or(i32::MAX);
-        let provider = c"cpu";
-        let model_type = c"nemo_transducer";
-        let greedy = c"greedy_search";
-        let empty: *const c_char = c"".as_ptr();
-        let config = recognizer_config(
-            [paths[0].as_ptr(), paths[1].as_ptr(), paths[2].as_ptr()],
-            paths[3].as_ptr(),
-            threads,
-            [provider.as_ptr(), model_type.as_ptr(), greedy.as_ptr()],
-            empty,
-        );
-        // SAFETY: `config` and every string it points to outlive the call, and it is the complete
-        // struct `c-api.h` declares for 1.13.4 (the version checked above).
-        let handle = unsafe { ffi::SherpaOnnxCreateOfflineRecognizer(&config) };
-        let handle = NonNull::new(handle.cast_mut()).ok_or_else(|| {
+        let paths: [CString; 4] = paths
+            .try_into()
+            .map_err(|_| failed("the model's four files".into()))?;
+        let live = make_recognizer(&paths, LIVE_THREADS).ok_or_else(|| {
             failed("sherpa-onnx could not load the model (see its log for the reason)".into())
         })?;
         Ok(Self {
             info,
-            recognizer: Mutex::new(Recognizer(handle)),
+            paths,
+            live: Mutex::new(live),
+            full: Mutex::new(None),
         })
     }
 
@@ -379,13 +390,36 @@ impl SherpaParakeet {
         EngineError::Failed(format!("{}: {what}", self.info.id))
     }
 
-    /// One decode of `audio`, which is finite and at most [`MAX_SECONDS`] long: its words.
-    fn decode(&self, audio: &[f32]) -> Result<Vec<TimedText>, EngineError> {
+    /// One decode of `audio`, which is finite and at most [`MAX_SECONDS`] long, on the live or
+    /// the final recognizer: its words.
+    fn decode(&self, audio: &[f32], live: bool) -> Result<Vec<TimedText>, EngineError> {
+        if live {
+            let recognizer = lock(&self.live);
+            return self.decode_on(&recognizer, audio);
+        }
+        let mut full = lock(&self.full);
+        if full.is_none() {
+            let threads = i32::try_from(physical_cores().get()).unwrap_or(i32::MAX);
+            *full = Some(make_recognizer(&self.paths, threads).ok_or_else(|| {
+                self.failed("sherpa-onnx could not load the model for a final".into())
+            })?);
+        }
+        let recognizer = full
+            .as_ref()
+            .ok_or_else(|| self.failed("no recognizer".into()))?;
+        self.decode_on(recognizer, audio)
+    }
+
+    /// One decode of `audio` on `recognizer`, held under its mutex by the caller.
+    fn decode_on(
+        &self,
+        recognizer: &Recognizer,
+        audio: &[f32],
+    ) -> Result<Vec<TimedText>, EngineError> {
         let n = i32::try_from(audio.len()).map_err(|_| self.failed("too much audio".into()))?;
         let rate = i32::try_from(CANONICAL_RATE).unwrap_or(i32::MAX);
-        let recognizer = lock(&self.recognizer);
-        // SAFETY: the recognizer is valid for as long as `self` lives, and the mutex keeps this the
-        // only use of it.
+        // SAFETY: the recognizer is valid for as long as `self` lives, and the caller's lock on its
+        // mutex keeps this the only use of it.
         let stream = unsafe { ffi::SherpaOnnxCreateOfflineStream(recognizer.0.as_ptr()) };
         if stream.is_null() {
             return Err(self.failed("sherpa-onnx could not open a stream".into()));
@@ -413,6 +447,26 @@ impl SherpaParakeet {
         unsafe { ffi::SherpaOnnxDestroyOfflineStream(stream) };
         result
     }
+}
+
+/// A recognizer for the transducer's `paths` (`[encoder, decoder, joiner, tokens]`) on `threads`
+/// threads, or none when sherpa-onnx cannot load the model (its log says why).
+fn make_recognizer(paths: &[CString; 4], threads: i32) -> Option<Recognizer> {
+    let provider = c"cpu";
+    let model_type = c"nemo_transducer";
+    let greedy = c"greedy_search";
+    let empty: *const c_char = c"".as_ptr();
+    let config = recognizer_config(
+        [paths[0].as_ptr(), paths[1].as_ptr(), paths[2].as_ptr()],
+        paths[3].as_ptr(),
+        threads,
+        [provider.as_ptr(), model_type.as_ptr(), greedy.as_ptr()],
+        empty,
+    );
+    // SAFETY: `config` and every string it points to outlive the call, and it is the complete
+    // struct `c-api.h` declares for 1.13.4 (the version [`SherpaParakeet::load`] checked).
+    let handle = unsafe { ffi::SherpaOnnxCreateOfflineRecognizer(&config) };
+    NonNull::new(handle.cast_mut()).map(Recognizer)
 }
 
 /// The version of the ONNX Runtime this process loaded, if it reports one.
@@ -647,7 +701,7 @@ impl OfflineEngine for SherpaParakeet {
                 if options.cancel.is_cancelled() {
                     return Err(EngineError::Cancelled);
                 }
-                self.decode(window)
+                self.decode(window, options.live)
             })?,
         })
     }

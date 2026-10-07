@@ -313,6 +313,7 @@ mod diarizer {
             channel: Channel::Mic,
             context: None,
             cancel: CancelToken::new(),
+            live: false,
         };
         // In turn, twice: each engine answers with the other one loaded and used.
         for round in 0..2 {

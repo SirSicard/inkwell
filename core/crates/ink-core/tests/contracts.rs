@@ -720,6 +720,7 @@ fn options(channel: Channel) -> TranscribeOptions {
         channel,
         context: None,
         cancel: CancelToken::new(),
+        live: false,
     }
 }
 

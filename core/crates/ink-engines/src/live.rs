@@ -553,6 +553,7 @@ impl Shared {
             channel: self.channel,
             context: None,
             cancel: self.cancel.clone(),
+            live: true,
         };
         let transcript = self.engine.transcribe(&window.samples, &options)?;
         Ok(words_of(&transcript, window.samples.len()))

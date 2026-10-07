@@ -275,6 +275,7 @@ fn a_routed_shell_engine_is_the_one_that_answers() {
         channel: Channel::Mic,
         context: None,
         cancel: CancelToken::new(),
+        live: false,
     };
     assert_eq!(chosen.transcribe(&audio, &options).unwrap(), transcript);
     assert_eq!(engine.calls().len(), 1);

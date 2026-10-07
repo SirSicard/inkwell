@@ -921,6 +921,7 @@ impl DictationChain {
             channel: Channel::Mic,
             context: self.settings.dictionary.hotwords(),
             cancel: CancelToken::new(),
+            live: false,
         };
         Some(
             self.services

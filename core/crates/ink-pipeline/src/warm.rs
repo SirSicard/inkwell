@@ -246,6 +246,7 @@ fn run(shared: &Shared, rx: &Receiver<Msg>) {
             channel: Channel::Mic,
             context: None,
             cancel: token,
+            live: false,
         };
         // The answer is dropped unread: see the module docs. A panic in the engine costs the
         // warm-up, never the thread (the next take must still be warmed).

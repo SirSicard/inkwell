@@ -276,6 +276,7 @@ fn a_lease_calls_the_loaded_engine() {
         channel: Channel::Mic,
         context: None,
         cancel: CancelToken::new(),
+        live: false,
     };
     assert_eq!(lease.engine.transcribe(&audio, &options).unwrap(), expected);
 }
