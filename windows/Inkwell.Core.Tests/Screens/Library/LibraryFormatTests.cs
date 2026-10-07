@@ -63,6 +63,19 @@ public class LibraryFormatTests
         Assert.Equal("Today 14:00 · 42 min · Zoom · You, Alex, Robin", LibraryFormat.HeaderLine(meeting, ["You", "Alex", "Robin"], Now, Calendar));
     }
 
+    /// <summary>Windows: a record's app is named as the user knows it, never by the core's identity (its executable).</summary>
+    [Fact]
+    public void AHeaderLineNamesTheAppNotItsExecutable()
+    {
+        var start = Now.ToUnixTimeMilliseconds() - 60 * 60_000;
+        string Header(string app) => LibraryFormat.HeaderLine(Rows($$"""
+            {"type":"library.records","more":false,"records":[{"record":"m","kind":"meeting","started_at_unix_ms":{{start}},"ended_at_unix_ms":{{start + 6 * 60_000}},"source_app":"{{app}}","revision":2,"has_audio":true}]}
+            """)[0], ["Them"], Now, Calendar);
+        Assert.Equal("Today 14:00 · 6 min · WhatsApp · Them", Header("whatsapp.root.exe"));
+        Assert.Equal("Today 14:00 · 6 min · Microsoft Teams · Them", Header("ms-teams.exe"));
+        Assert.Equal("Today 14:00 · 6 min · Callapp · Them", Header("callapp.exe")); // not well known: its stem
+    }
+
     /// <summary>Windows addition: Today's counts start at midnight and at the culture's first day of the week, in the calendar's zone (the Mac leaves this to Foundation's Calendar).</summary>
     [Fact]
     public void TodayAndThisWeekStartAtMidnightOnTheCulturesFirstDay()

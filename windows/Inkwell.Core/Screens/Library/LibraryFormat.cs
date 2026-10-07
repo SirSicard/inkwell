@@ -176,9 +176,11 @@ public static class LibraryFormat
         {
             parts.Add(Duration(length));
         }
-        if (!string.IsNullOrEmpty(record.SourceApp))
+        if (!string.IsNullOrWhiteSpace(record.SourceApp))
         {
-            parts.Add(record.SourceApp);
+            // The app as the user knows it ("WhatsApp"), never the core's identity for it
+            // ("whatsapp.root.exe"): the well-known list, else the executable's stem.
+            parts.Add(AppIdentity.Label(record.SourceApp, NoInstalledApps.Instance).Name);
         }
         if (people.Count > 0)
         {
