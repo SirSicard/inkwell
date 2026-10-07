@@ -67,7 +67,7 @@ public sealed class MicNoticeTests
         // A line from either side ends it in the Drop (a listening-only meeting would never show
         // the other side's lines again otherwise); Live keeps it.
         store.Apply([Ev.Of("""{"type":"meeting.final","record":"r","channel":"far","start_ms":0,"end_ms":900,"text":"Hello"}""")]);
-        Assert.Equal("Hello", MeetingDrop.Live(store.Meeting!, DropInk.Meeting).Detail);
+        Assert.Equal("Teams", MeetingDrop.Live(store.Meeting!, DropInk.Meeting).Detail); // the switch is old news: the app again
         Assert.NotNull(store.Meeting!.MicSwitch);
     }
 

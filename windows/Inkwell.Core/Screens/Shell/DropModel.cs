@@ -3,7 +3,9 @@
 // words where the cause differs (an app running as administrator, not Secure Input; the keyboard
 // hook, not Accessibility; no system-audio permission, so a silent far end has no button).
 //
-//   a meeting recording          "● REC · Teams" over its latest line, the ink in meeting (a meeting outranks a take)
+//   a meeting recording          "● REC" over its app ("Teams"), never its words: the pill is a recording
+//                                light, and the Live screen has the transcript (Windows: the owner's
+//                                call, 2026-10-07); the ink in meeting (a meeting outranks a take)
 //   its far end silent/stopped   an alert, the ink in problem
 //   its final pass               "Blotting · final pass", the ink blotting
 //   a take held or transcribed   its line, the ink dictating (the app in front, its mode, the live words)
@@ -169,6 +171,9 @@ public static class MeetingDrop
     /// <summary>An app's name in a button or a line: "this app" for the core's stand-in for none.</summary>
     public static string Named(string name) => name == Nameless ? "this app" : name;
 
+    /// <summary>A call its app's Always records, once its first words are said: over the app's name.</summary>
+    public const string AutoRecTitle = "● REC · automatic";
+
     public static string AutoTitle(string? name) => $"● Recording {(name is null ? "the call" : Named(name))} automatically";
 
     public static string AutoReminder(string? name) => $"Always is on for {(name is null ? "this app" : Named(name))}. Tell the others you are recording.";
@@ -208,32 +213,40 @@ public static class MeetingDrop
                     : new("The other side stopped", failure ?? "Nothing is arriving from the call. Only your voice may be recorded.", DropLineTone.Alert, Actions: stops);
             case DropInk.Meeting when meeting.Auto:
             {
-                var newest = meeting.Finals.Count > 0 ? meeting.Finals[^1].Text.Trim() : "";
                 // The first automatic call's reminder holds its first minute, while Stop and delete
                 // is there, over a mic that went too. Otherwise a mic that went mid-call is said
-                // first, as for any meeting, then the latest line (before one, the stand-in mic if
-                // there is one).
+                // first, as for any meeting; before the first line, the stand-in mic if there is
+                // one. Never the call's words.
+                var heard = meeting.Finals.Count > 0;
                 var reminder = reminds ? AutoReminder(meeting.AppName) : null;
                 var changed = meeting.MicSwitch is { } micChange && micChange.AtLine == meeting.Ledger.Seen ? SwitchLine(micChange) : null;
-                var detail = (deletable ? reminder : null)
+                var note = (deletable ? reminder : null)
                     ?? changed
-                    ?? (newest.Length > 0 ? newest : null)
-                    ?? (micFallback is { } standIn ? FallbackLine(standIn) : null)
-                    ?? reminder
-                    ?? RecordingLine;
-                return new(AutoTitle(meeting.AppName), failure ?? detail, failure is null ? DropLineTone.Recording : DropLineTone.Alert,
+                    ?? (heard ? null : (micFallback is { } standIn ? FallbackLine(standIn) : null) ?? reminder);
+                if (failure is null && note is null)
+                {
+                    // Past what it has to say: a recording light, as for any call.
+                    return new(AutoRecTitle, meeting.AppName ?? meeting.Title ?? RecordingLine, DropLineTone.Recording, Actions: stops);
+                }
+                return new(AutoTitle(meeting.AppName), failure ?? note ?? RecordingLine, failure is null ? DropLineTone.Recording : DropLineTone.Alert,
                     Actions: stops);
             }
             default:
+            {
+                // A recording light: "● REC" over the app. Something to know (a mic that went, or
+                // until the first line arrives: other apps' sound in it, a stand-in mic) takes the
+                // second line, the app moving up beside REC. Never the call's words.
                 var source = meeting.AppName ?? meeting.Title;
-                var latest = meeting.Finals.Count > 0 ? meeting.Finals[^1].Text.Trim() : "";
-                // Said until the first line arrives: other apps' sound is in this recording.
-                var waiting = meeting.FarEndFallback
-                    ? $"Inkwell couldn't hear {meeting.AppName ?? "the call"} alone, so it is recording everything this PC plays"
-                    : micFallback is { } fallback ? FallbackLine(fallback) : RecordingLine;
-                var title = source is null ? "● REC" : $"● REC · {source}";
+                var heard = meeting.Finals.Count > 0;
+                var waiting = heard ? null
+                    : meeting.FarEndFallback
+                        ? $"Inkwell couldn't hear {meeting.AppName ?? "the call"} alone, so it is recording everything this PC plays"
+                        : micFallback is { } fallback ? FallbackLine(fallback) : null;
                 var switched = meeting.MicSwitch is { } change && change.AtLine == meeting.Ledger.Seen ? SwitchLine(change) : null;
-                return new(title, switched ?? (latest.Length > 0 ? latest : waiting), DropLineTone.Recording);
+                return (switched ?? waiting) is { } note
+                    ? new(source is null ? "● REC" : $"● REC · {source}", note, DropLineTone.Recording)
+                    : new("● REC", source ?? RecordingLine, DropLineTone.Recording);
+            }
         }
     }
 

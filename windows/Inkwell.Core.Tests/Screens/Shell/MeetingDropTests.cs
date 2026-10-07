@@ -141,7 +141,7 @@ public sealed class MeetingDropTests
         rig.Apply(
             Started,
             """{"type":"command.failed","command":"meeting.start","id":"meeting.start","message":"a meeting is already running"}""");
-        Assert.Equal("● REC · Microsoft Teams", rig.Drop.Line!.Title);
+        Assert.Equal(new DropLine("● REC", "Microsoft Teams", DropLineTone.Recording), rig.Drop.Line);
         Assert.Null(rig.Meetings.FailureOn(MeetingPlace.Drop));
         Assert.Contains(logged.Messages, m => m.Contains("its offer had gone", StringComparison.Ordinal));
 
@@ -179,16 +179,16 @@ public sealed class MeetingDropTests
     }
 
     [Fact]
-    public void ARecordingSaysItsAppAndItsLatestLineThenItsFinalPass()
+    public void ARecordingSaysRecOverItsAppNeverItsWordsThenItsFinalPass()
     {
         var rig = new Rig();
         rig.Apply(Offered, Started);
         Assert.Equal(DropInk.Meeting, rig.Drop.Ink);
         Assert.True(rig.Drop.IsLive);
-        Assert.Equal(new DropLine("● REC · Microsoft Teams", "Recording this meeting", DropLineTone.Recording), rig.Drop.Line);
+        Assert.Equal(new DropLine("● REC", "Microsoft Teams", DropLineTone.Recording), rig.Drop.Line);
 
         rig.Apply("""{"type":"meeting.final","record":"r1","channel":"far","start_ms":0,"end_ms":900,"text":" a synthetic line said "}""");
-        Assert.Equal("a synthetic line said", rig.Drop.Line!.Detail);
+        Assert.Equal(new DropLine("● REC", "Microsoft Teams", DropLineTone.Recording), rig.Drop.Line); // a line said: still the app
 
         rig.Apply("""{"type":"meeting.stopped","record":"r1"}""");
         Assert.Equal(DropInk.Blotting, rig.Drop.Ink);
@@ -204,7 +204,7 @@ public sealed class MeetingDropTests
     {
         var rig = new Rig();
         rig.Apply("""{"type":"meeting.started","record":"r2","title":"Weekly sync","far_end":"everything"}""");
-        Assert.Equal("● REC · Weekly sync", rig.Drop.Line!.Title);
+        Assert.Equal(new DropLine("● REC", "Weekly sync", DropLineTone.Recording), rig.Drop.Line);
         rig.Apply("""{"type":"meeting.stopped","record":"r2"}""");
         Assert.Equal(new DropLine("Blotting · final pass", "Weekly sync"), rig.Drop.Line);
 

@@ -204,8 +204,8 @@ public sealed class CallPolicyDropTests
 
         rig.Wakes.Fire();
         Assert.Equal(["Stop"], rig.Titles); // past the minute only Stop is left
-        Assert.Equal("can everyone hear me", rig.Line.Detail);
-        Assert.Equal("● Recording Zoom automatically", rig.Line.Title);
+        // Then a recording light over the app, never the call's words.
+        Assert.Equal(new DropLine(MeetingDrop.AutoRecTitle, "Zoom", DropLineTone.Recording, Actions: rig.Line.Actions), rig.Line);
         Assert.Single(rig.Wakes.Scheduled);
 
         rig.Screens.PerformDropAction(rig.Line.Actions!.At(0)!);
@@ -245,14 +245,14 @@ public sealed class CallPolicyDropTests
         Assert.Single(rig.Sent.Commands, c => c == shown); // remembered
 
         rig.Apply("""{"type":"meeting.finished","record":"r1","revision":2}""", Started(auto: true, InAMinute, "r2"));
-        Assert.Equal(MeetingDrop.RecordingLine, rig.Line.Detail); // the second: no reminder
+        Assert.Equal((MeetingDrop.AutoRecTitle, "Zoom"), (rig.Line.Title, rig.Line.Detail)); // the second: no reminder, a recording light
         Assert.Equal(["Stop", "Stop and delete"], rig.Titles); // its minute's buttons stay
         Assert.Single(rig.Sent.Commands, c => c == shown);
 
         // The next launch reads it as shown.
         var later = new Rig();
         later.Apply("""{"type":"setting.value","key":"meetings.auto_reminder_shown","value":"on"}""", Started(auto: true, InAMinute, "r3"));
-        Assert.Equal(MeetingDrop.RecordingLine, later.Line.Detail);
+        Assert.Equal((MeetingDrop.AutoRecTitle, "Zoom"), (later.Line.Title, later.Line.Detail));
         Assert.DoesNotContain(shown, later.Sent.Commands);
     }
 
@@ -261,7 +261,7 @@ public sealed class CallPolicyDropTests
     {
         var rig = new Rig();
         rig.Apply(Started(auto: false, InAMinute));
-        Assert.Equal("● REC · Zoom", rig.Line.Title);
+        Assert.Equal(new DropLine("● REC", "Zoom", DropLineTone.Recording), rig.Line);
         Assert.Null(rig.Line.Actions);
         Assert.Empty(rig.Wakes.Scheduled);
     }
@@ -308,7 +308,8 @@ public sealed class CallPolicyDropTests
         Assert.Equal(before, rig.Sent.Commands.Count); // not offered, not sent
         // The transcript moving on takes the refusal's words away; the next offer never shows them.
         rig.Apply("""{"type":"meeting.final","record":"r1","channel":"far","start_ms":0,"end_ms":900,"text":"next item"}""");
-        Assert.Equal("next item", rig.Line.Detail);
+        Assert.Equal("Zoom", rig.Line.Detail);
+        Assert.Equal(DropLineTone.Recording, rig.Line.Tone);
         rig.Apply("""{"type":"meeting.finished","record":"r1","revision":2}""", Offered);
         Assert.Equal(MeetingDrop.ConsentLine, rig.Line.Detail);
     }
@@ -448,7 +449,7 @@ public sealed class CallPolicyDropTests
     /// <summary>
     /// Sound's mic lines in a call its app's Always recorded, as the Mac's: a mic that went is said
     /// (in the first minute too) until a line comes after it; past the minute, before any line, the
-    /// stand-in for a chosen mic that isn't connected; then the latest line.
+    /// stand-in for a chosen mic that isn't connected; then the app's name, never the call's words.
     /// </summary>
     [Fact]
     public void AnAutoCallSaysItsMicLines()
@@ -470,7 +471,7 @@ public sealed class CallPolicyDropTests
         // A line after the switch: the switch is old news.
         store.Apply([Ev.Of("""{"type":"meeting.final","record":"r1","channel":"far","start_ms":0,"end_ms":900,"text":"can you hear me now"}""")]);
         Assert.Equal(MeetingDrop.AutoReminder("Zoom"), Line(deletable: true));
-        Assert.Equal("can you hear me now", Line(deletable: false));
+        Assert.Equal("Zoom", Line(deletable: false));
     }
 
     [Fact]
