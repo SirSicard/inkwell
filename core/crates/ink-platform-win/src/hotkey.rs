@@ -425,7 +425,11 @@ fn pump(mut hook: HHOOK) -> (HHOOK, bool) {
                 });
                 // SAFETY: no arguments.
                 let now = unsafe { GetTickCount() };
-                let due = last_input_tick().is_some_and(|last| heartbeat.should_send(now, last));
+                // Not while an elevated window is in front: it would drop the heartbeat (UIPI).
+                let due = last_input_tick().is_some_and(|last| {
+                    heartbeat
+                        .should_send(now, last, || !crate::integrity::foreground_blocks_input())
+                });
                 if due && check_timer == 0 {
                     HEARTBEAT_SEEN.set(false);
                     if crate::insert::send_heartbeat() {
