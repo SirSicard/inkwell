@@ -1161,6 +1161,7 @@ fn read_meeting_command(json: &str) -> Result<Option<MeetingCommand>, String> {
         "meeting.stop" | "meeting.discard" | "meetings.recover" | "meetings.calls.list" => &[],
         "meeting.dismiss" => &["app"],
         "meetings.calls.set" => &["app", "policy", "replace_unreadable"],
+        "meetings.calls.remove" => &["app", "expected_default"],
         "meeting.ask" => &["question"],
         _ => return Ok(None),
     };
@@ -1191,6 +1192,17 @@ fn read_meeting_command(json: &str) -> Result<Option<MeetingCommand>, String> {
         "meeting.stop" => MeetingCommand::Control(Msg::Stop { id }),
         "meeting.discard" => MeetingCommand::Control(Msg::Discard { id }),
         "meetings.calls.list" => MeetingCommand::Control(Msg::CallsList { id }),
+        "meetings.calls.remove" => {
+            let app = needed("app")?;
+            crate::calls::check_app(&app).map_err(|e| format!("{name}: {e}"))?;
+            let expected_default = crate::calls::CallPolicy::parse(&needed("expected_default")?)
+                .ok_or_else(|| format!("{name}: expected_default is always, ask or never"))?;
+            MeetingCommand::Control(Msg::CallsRemove {
+                id,
+                app,
+                expected_default,
+            })
+        }
         "meetings.calls.set" => {
             // An identity is checked as given, never trimmed: it must be the one detection
             // reports.

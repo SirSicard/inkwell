@@ -2794,8 +2794,9 @@ public struct MeetingWorkerFailed: Codable, Sendable, Equatable {
 }
 
 /// The call policies: the default for apps not chosen for, and every app seen or chosen for (at
-/// most 64), most recently seen first. In answer to meetings.calls.list and meetings.calls.set
-/// (with ref), and unasked when the default changed or detection saw a new app.
+/// most 64), most recently seen first. In answer to meetings.calls.list, meetings.calls.set and
+/// meetings.calls.remove (with ref), and unasked when the default changed or detection saw a
+/// new app.
 public struct MeetingsCalls: Codable, Sendable, Equatable {
     /// The apps.
     public let apps: [CallApp]

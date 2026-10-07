@@ -18,6 +18,7 @@ public sealed partial class MeetingsSection : UserControl
     private bool rendering;
     private bool askingStartOver;
     private bool askingAlways;
+    private bool askingRemove;
 
     public MeetingsSection(MeetingModel meetings, CallPolicyModel calls)
     {
@@ -117,6 +118,52 @@ public sealed partial class MeetingsSection : UserControl
         if (calls.Rows.FirstOrDefault(r => r.Id == id) is { } row && row.Choice != choice)
         {
             calls.Choose(choice, id, CallPolicyOrigin.Settings);
+        }
+    }
+
+    private async void OnAppRemove(object sender, RoutedEventArgs e)
+    {
+        if (askingRemove || XamlRoot is null || RowTag.Of(sender) is not string id
+            || calls.Rows.FirstOrDefault(r => r.Id == id) is not { } row)
+        {
+            return;
+        }
+        askingRemove = true;
+        try
+        {
+            // A changed default changes what removing this rule permits: ask with current words.
+            while (true)
+            {
+                var shownDefault = calls.Default;
+                var dialog = new ContentDialog
+                {
+                    XamlRoot = XamlRoot,
+                    Title = $"Remove {row.Label.Name}?",
+                    Content = new TextBlock { Text = calls.RemoveDetail(row.Label.Name), TextWrapping = TextWrapping.Wrap },
+                    PrimaryButtonText = "Remove",
+                    CloseButtonText = "Cancel",
+                    DefaultButton = ContentDialogButton.Close,
+                };
+                if (await dialog.ShowAsync() != ContentDialogResult.Primary)
+                {
+                    return;
+                }
+                if (calls.RemovalDefaultChanged(shownDefault))
+                {
+                    continue;
+                }
+                calls.Remove(id);
+                return;
+            }
+        }
+        catch (Exception ex)
+        {
+            ScreenLog.System.Write($"the app removal step could not be shown ({ex.GetType().Name}); cancelled");
+            Show(CallsFailure, "Couldn't show the removal confirmation. Nothing was removed.");
+        }
+        finally
+        {
+            askingRemove = false;
         }
     }
 
@@ -256,6 +303,8 @@ public sealed record CallAppRowItem
 
     /// <summary>The picker read aloud: "Calls in Zoom".</summary>
     public string PickerName => $"Calls in {Label.Name}";
+
+    public string RemoveName => $"Remove {Label.Name} from the call apps list";
 
     public string SeenName => Seen is null ? "" : $"{Label.Name}: {Seen}";
 

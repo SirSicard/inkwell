@@ -145,6 +145,42 @@ public sealed class CallPolicyModelTests
     }
 
     [Fact]
+    public void RemovalWaitsForTheSavedAnswerAndKeepsTheRowOnFailure()
+    {
+        var sent = new Sent();
+        var calls = new CallPolicyModel(sent.Send);
+        calls.Apply(Calls(List, "always"));
+        Assert.Contains("without asking", calls.RemoveDetail("Zoom"), StringComparison.Ordinal);
+        calls.Remove(Zoom);
+        Assert.Equal(new CoreCommand.MeetingsCallsRemove(Zoom, "always", "calls:1"), sent.Commands[^1]);
+        Assert.Equal(4, calls.Rows.Count);
+        calls.Remove(Zoom); // No double send while waiting.
+        Assert.Single(sent.Commands);
+        calls.Apply(Ev.Of("""{"type":"command.failed","command":"meetings.calls.remove","id":"calls:1","message":"database is locked"}"""));
+        Assert.Equal(4, calls.Rows.Count);
+        Assert.Contains("database is locked", calls.Failure, StringComparison.Ordinal);
+        calls.Remove(Zoom);
+        calls.Apply(Calls("", "always", @ref: "calls:3"));
+        Assert.Empty(calls.Rows);
+        Assert.Equal(CallPolicy.Always, calls.Default);
+    }
+
+    [Fact]
+    public void RemovalRefusesAnUnreadableListAndChecksTheLatestDefaultAtConfirmation()
+    {
+        var sent = new Sent();
+        var calls = new CallPolicyModel(sent.Send);
+        calls.Apply(Calls(List));
+        Assert.False(calls.RemovalDefaultChanged(CallPolicy.Ask));
+        calls.Apply(Calls(List, "always"));
+        Assert.True(calls.RemovalDefaultChanged(CallPolicy.Ask));
+        calls.Apply(Calls(List, message: "unreadable"));
+        calls.Remove(Zoom);
+        Assert.Empty(sent.Commands);
+        Assert.NotNull(calls.Failure);
+    }
+
+    [Fact]
     public void TheLastCallCaption()
     {
         var now = new DateTimeOffset(2026, 10, 6, 10, 0, 0, TimeSpan.Zero);

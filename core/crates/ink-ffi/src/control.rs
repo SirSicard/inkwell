@@ -158,6 +158,15 @@ pub enum Msg {
         /// Start over a stored list that cannot be read (refused without it).
         replace_unreadable: bool,
     },
+    /// Forget one app's choice and seen history, leaving recordings intact.
+    CallsRemove {
+        /// The command's id.
+        id: Option<String>,
+        /// The app identity validated by the command reader.
+        app: String,
+        /// The default explained in the shell's removal confirmation.
+        expected_default: CallPolicy,
+    },
     /// A platform signal, from its callback thread.
     Signal(MeetingSignal),
     /// A meeting's capture ended.
@@ -362,6 +371,11 @@ impl State {
                 policy,
                 replace_unreadable,
             } => self.choose(id.as_deref(), &app, policy, replace_unreadable),
+            Msg::CallsRemove {
+                id,
+                app,
+                expected_default,
+            } => self.remove_app(id.as_deref(), &app, expected_default),
             Msg::Signal(signal) => {
                 let now = self.shared.clock.now_ns();
                 let actions = self.detection.signal(identified(signal), now);
@@ -504,6 +518,54 @@ impl State {
                 );
             }
         }
+    }
+
+    /// Save before applying, on the same worker that observes apps and changes their policies.
+    /// A failed save leaves both the remembered row and the running detector untouched.
+    fn remove_app(&mut self, id: Option<&str>, app: &str, expected_default: CallPolicy) {
+        const NAME: &str = "meetings.calls.remove";
+        if !self.policies_read {
+            return self.failed(
+                NAME,
+                id,
+                "the call policies could not be read; nothing was removed",
+            );
+        }
+        // The shell may show an optimistic default whose save failed. Compare with the store
+        // too: a confirmed Never must never remove an exception under a stored Always.
+        let stored_default = match crate::calls::read_default(self.shared.store.as_ref()) {
+            Ok(policy) => policy,
+            Err(e) => return self.failed(NAME, id, &format!("couldn't read the default: {e}")),
+        };
+        if stored_default != expected_default || self.policies.default_policy() != expected_default
+        {
+            return self.failed(
+                NAME,
+                id,
+                "the default changed; review the current default and remove the app again",
+            );
+        }
+        let mut next = self.policies.clone();
+        if let Err(e) = next.remove(app) {
+            return self.failed(NAME, id, &e);
+        }
+        if let Err(e) = self
+            .shared
+            .store
+            .set_settings(&[(crate::calls::APPS_KEY, &next.to_json())])
+        {
+            return self.failed(NAME, id, &format!("couldn't remove the app: {e}"));
+        }
+        self.policies = next;
+        let now = self.shared.clock.now_ns();
+        let actions = self.detection.set_policies(self.policies.clone(), now);
+        self.listen(self.policies.listens(), None);
+        if self.listening {
+            self.act(actions);
+        }
+        self.shared
+            .events
+            .emit(crate::calls::listing(&self.policies, id));
     }
 
     /// `meetings.calls.set`: saved first, then applied; a save that fails changes nothing. Refused

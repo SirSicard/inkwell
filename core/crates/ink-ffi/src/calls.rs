@@ -285,6 +285,18 @@ impl CallPolicies {
         Ok(started_over)
     }
 
+    /// Forget one app's saved choice and detection history; recordings are untouched.
+    /// Refuse an unreadable list rather than replace unrelated choices.
+    pub fn remove(&mut self, app: &str) -> Result<(), String> {
+        let app = self.key(app);
+        check_app(&app)?;
+        if self.unreadable.is_some() {
+            return Err("the stored app choices cannot be read; nothing was removed".into());
+        }
+        self.apps.remove(&app);
+        Ok(())
+    }
+
     /// The default from now, as the store says it (a list started over: the caller writes Ask
     /// when it lowers Always).
     pub fn set_default(&mut self, default: CallPolicy) {
@@ -719,6 +731,24 @@ mod tests {
             pid: None,
             name: name.into(),
         }
+    }
+
+    #[test]
+    fn removing_an_app_forgets_its_choice_and_seen_history_only() {
+        let mut p = CallPolicies::new(CallPolicy::Always);
+        p.choose("chat", Some(CallPolicy::Never)).unwrap();
+        p.seen(&app("chat", "Chat"), 10);
+        p.seen(&app("other", "Other"), 20);
+        p.remove("chat").unwrap();
+        assert_eq!(p.policy("chat"), CallPolicy::Always);
+        assert_eq!(p.apps().len(), 1);
+        assert_eq!(p.apps()[0].id, "other");
+        p.remove("chat").unwrap();
+        assert!(p.remove(" padded").is_err());
+        p.seen(&app("chat", "Chat"), 30);
+        let seen = p.apps().into_iter().find(|a| a.id == "chat").unwrap();
+        assert_eq!(seen.policy, None);
+        assert_eq!(seen.seen_unix_ms, Some(30));
     }
 
     #[test]

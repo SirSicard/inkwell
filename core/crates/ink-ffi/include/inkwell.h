@@ -202,6 +202,12 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       ("meetings.calls" has a "message"), it is refused with code "list_unreadable" unless it
  *       says "replace_unreadable":true, which starts the list over with this choice (and, under
  *       a default of always, sets the default to ask, said in the answer's "message").
+ *   {"cmd":"meetings.calls.remove","app":"<app id>","expected_default":"always|ask|never","id":"<ref>"}
+ *       Forget this app's choice and last-seen history. Past recordings are kept. The next
+ *       detected call may add it again, following the current default (including Always).
+ *       A save failure, unreadable list, or default changed since confirmation changes nothing.
+ *       Answers meetings.calls with ref.
+ *
  *   Detection listens while any app could be offered or recorded (the default call policy,
  *   "meetings.calls.default", is not never, or an app is chosen always or ask): "meeting.detection"
  *   says whether it listens. An app that has held the microphone for 3 s is offered

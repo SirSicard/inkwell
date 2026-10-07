@@ -217,6 +217,38 @@ public sealed class CallPolicyModel(Action<CoreCommand> send, IAppDirectory? app
         Set(choice, app, origin, replaceUnreadable: false, saved);
     }
 
+    /// <summary>Explain removal before it is confirmed, including the policy inherited next time.</summary>
+    public string RemoveDetail(string name) =>
+        $"Remove {name} and its saved recording rule from this list? Past recordings stay in the library. "
+        + "The app can reappear when another call is detected. "
+        + (Default == CallPolicy.Always
+            ? "Calls in this app will follow Always and record without asking. Tell the people on the call. Choose Never instead to prevent recording."
+            : $"Calls in this app will follow {(Default ?? CallPolicy.Ask).Title()}. Choose Never instead to prevent recording.");
+
+    /// <summary>A confirmation shown under another default must be shown again.</summary>
+    public bool RemovalDefaultChanged(CallPolicy? shown) => Default != shown;
+
+    /// <summary>Forget a remembered app only after the user confirms; keep its row until saved.</summary>
+    public void Remove(string app)
+    {
+        ArgumentNullException.ThrowIfNull(app);
+        if (inFlight.Values.Any(f => f.App == app))
+        {
+            return;
+        }
+        Failure = null;
+        if (Unreadable is not null || Default is null)
+        {
+            Failure = "Couldn't remove the app: the call policies could not be read. Nothing was removed.";
+            Changed();
+            return;
+        }
+        var id = NextRef();
+        inFlight[id] = new InFlight(app, CallChoice.Default, CallPolicyOrigin.Settings, null);
+        Changed();
+        send(new CoreCommand.MeetingsCallsRemove(app, Default.Value.Value(), id));
+    }
+
     /// <summary>The user agreed to start the unreadable list over with <paramref name="shown"/>, the choice the dialog showed.</summary>
     public void ConfirmStartOver((string App, CallChoice Choice) shown)
     {
@@ -374,7 +406,7 @@ public sealed class CallPolicyModel(Action<CoreCommand> send, IAppDirectory? app
                 Default = CallPolicies.Parse(value.Value) ?? CallPolicy.Ask;
                 Changed();
                 break;
-            case CommandFailed failed when failed.Command == "meetings.calls.set":
+            case CommandFailed failed when failed.Command is "meetings.calls.set" or "meetings.calls.remove":
                 InFlight? was = null;
                 if (failed.Id is string id && inFlight.Remove(id, out var gone))
                 {
@@ -435,6 +467,6 @@ public sealed class CallPolicyModel(Action<CoreCommand> send, IAppDirectory? app
     public static bool Handles(CommandFailed failed)
     {
         ArgumentNullException.ThrowIfNull(failed);
-        return failed.Command is "meetings.calls.list" or "meetings.calls.set" || failed.Id == DefaultSettingId;
+        return failed.Command is "meetings.calls.list" or "meetings.calls.set" or "meetings.calls.remove" || failed.Id == DefaultSettingId;
     }
 }

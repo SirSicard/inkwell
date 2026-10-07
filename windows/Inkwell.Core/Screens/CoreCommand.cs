@@ -352,6 +352,13 @@ public abstract record CoreCommand
         }
     }
 
+    /// <summary>Forget an app's call choice and seen history; recordings stay in the library.</summary>
+    public sealed record MeetingsCallsRemove(string App, string ExpectedDefault, string Ref) : CoreCommand
+    {
+        public override string Name => "meetings.calls.remove";
+        private protected override IEnumerable<(string, object)> Fields() => [("cmd", Name), ("app", App), ("expected_default", ExpectedDefault), ("id", Ref)];
+    }
+
     /// <summary><paramref name="Ref"/> comes back in meeting.answered, or as the id of a command.failed.</summary>
     public sealed record MeetingAsk(string Question, string Ref) : CoreCommand
     {

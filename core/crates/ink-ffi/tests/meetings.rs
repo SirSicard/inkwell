@@ -2483,3 +2483,162 @@ fn starting_over_lowers_the_default_from_what_the_store_says() {
         d.r.core.shutdown();
     }
 }
+
+/// Removing an exception under Always never starts recording merely because Settings changed.
+#[test]
+fn removing_a_call_app_keeps_recordings_without_starting_capture() {
+    let store = memory_store();
+    store
+        .set_setting(ink_ffi::calls::DEFAULT_KEY, "always")
+        .unwrap();
+    let d = Driven::new("remove-app", store.clone());
+    d.listening(true);
+    d.command(r#"{"cmd":"meetings.calls.set","app":"com.example.chat","policy":"never","id":"n"}"#);
+    d.answer("meetings.calls", "n");
+    d.hold("com.example.chat", "Example Chat");
+    d.command(r#"{"cmd":"meetings.calls.remove","app":"com.example.chat","expected_default":"always","id":"r"}"#);
+    let listed = d.answer("meetings.calls", "r");
+    assert_eq!(listed["apps"], serde_json::json!([]));
+    assert_eq!(listed["default"], "always");
+    assert_eq!(d.r.events.count("meeting.started"), 0);
+    d.r.events.wait_type("meeting.detected", WAIT);
+    // The list query and removal share the observation worker: no stale row is restored.
+    d.command(r#"{"cmd":"meetings.calls.list","id":"q"}"#);
+    assert_eq!(
+        d.answer("meetings.calls", "q")["apps"],
+        serde_json::json!([])
+    );
+    d.command(r#"{"cmd":"meeting.start","app":"com.example.chat","id":"s"}"#);
+    let started = d.r.events.wait_type("meeting.started", WAIT);
+    let record = ink_core::RecordId(started["record"].as_str().unwrap().to_owned());
+    d.command(r#"{"cmd":"meetings.calls.remove","app":"com.example.chat","expected_default":"always","id":"r2"}"#);
+    d.answer("meetings.calls", "r2");
+    assert!(store.record(&record).unwrap().is_some());
+    d.r.events.assert_valid();
+    d.r.core.shutdown();
+}
+
+#[test]
+fn removing_a_call_app_with_a_failed_save_keeps_its_rule_and_seen_row() {
+    let store = FailingStore::new(memory_store());
+    let d = Driven::new("remove-failure", store.clone());
+    d.listening(true);
+    d.command(r#"{"cmd":"meetings.calls.set","app":"com.example.chat","policy":"never","id":"n"}"#);
+    d.answer("meetings.calls", "n");
+    d.hold("com.example.chat", "Example Chat");
+    store.fail(&["set_settings"]);
+    d.command(r#"{"cmd":"meetings.calls.remove","app":"com.example.chat","expected_default":"ask","id":"r"}"#);
+    let failed = failed_with(&d.r.events, "r");
+    assert_eq!(failed["command"], "meetings.calls.remove");
+    store.heal();
+    d.command(r#"{"cmd":"meetings.calls.list","id":"q"}"#);
+    let listed = d.answer("meetings.calls", "q");
+    assert_eq!(listed["apps"][0]["policy"], "never");
+    assert_eq!(listed["apps"][0]["chosen"], true);
+    assert_eq!(d.r.events.count("meeting.started"), 0);
+    assert!(
+        d.r.core
+            .command(r#"{"cmd":"meetings.calls.remove","app":" padded"}"#)
+            .is_err()
+    );
+    assert!(
+        d.r.core
+            .command(r#"{"cmd":"meetings.calls.remove","app":"com.example.chat","policy":"never"}"#)
+            .is_err()
+    );
+    d.r.events.assert_valid();
+    d.r.core.shutdown();
+}
+
+#[test]
+fn removing_a_call_app_persists_and_the_next_call_can_readd_it() {
+    let store = memory_store();
+    let d = Driven::new("remove-readd", store.clone());
+    d.listening(true);
+    d.hold("com.example.chat", "Example Chat");
+    d.command(r#"{"cmd":"meetings.calls.remove","app":"com.example.chat","expected_default":"ask","id":"r"}"#);
+    assert_eq!(
+        d.answer("meetings.calls", "r")["apps"],
+        serde_json::json!([])
+    );
+    assert!(
+        ink_ffi::calls::load(store.as_ref())
+            .unwrap()
+            .apps()
+            .is_empty()
+    );
+    d.signal(MeetingSignal::MicReleased {
+        app: app("com.example.chat", "Example Chat"),
+    });
+    d.hold("com.example.chat", "Example Chat");
+    d.command(r#"{"cmd":"meetings.calls.list","id":"q"}"#);
+    let listed = d.answer("meetings.calls", "q");
+    assert_eq!(listed["apps"][0]["app"], "com.example.chat");
+    assert_eq!(listed["apps"][0]["chosen"], false);
+    assert_eq!(listed["apps"][0]["policy"], "ask");
+    d.r.events.assert_valid();
+    d.r.core.shutdown();
+}
+
+#[test]
+fn removing_a_call_app_refuses_to_replace_an_unreadable_list() {
+    let store = memory_store();
+    let original = r#"{"apps": [{"app": "com.example.chat", "policy": "bogus"}]}"#;
+    store
+        .set_setting(ink_ffi::calls::APPS_KEY, original)
+        .unwrap();
+    let d = Driven::new("remove-unreadable", store.clone());
+    d.listening(true);
+    d.command(r#"{"cmd":"meetings.calls.remove","app":"com.example.chat","expected_default":"ask","id":"r"}"#);
+    assert_eq!(
+        failed_with(&d.r.events, "r")["command"],
+        "meetings.calls.remove"
+    );
+    assert_eq!(
+        store.setting(ink_ffi::calls::APPS_KEY).unwrap().as_deref(),
+        Some(original)
+    );
+    d.r.events.assert_valid();
+    d.r.core.shutdown();
+}
+
+#[test]
+fn removing_a_call_app_refuses_a_default_the_user_did_not_confirm() {
+    let store = memory_store();
+    store
+        .set_setting(ink_ffi::calls::DEFAULT_KEY, "always")
+        .unwrap();
+    let d = Driven::new("remove-default-race", store.clone());
+    d.listening(true);
+    d.command(r#"{"cmd":"meetings.calls.set","app":"com.example.chat","policy":"never","id":"n"}"#);
+    d.answer("meetings.calls", "n");
+    // The shell optimistically shows Never, but its default save failed.
+    d.command(r#"{"cmd":"meetings.calls.remove","app":"com.example.chat","expected_default":"never","id":"r"}"#);
+    assert_eq!(
+        failed_with(&d.r.events, "r")["command"],
+        "meetings.calls.remove"
+    );
+    assert_eq!(
+        ink_ffi::calls::load(store.as_ref())
+            .unwrap()
+            .policy("com.example.chat"),
+        ink_ffi::calls::CallPolicy::Never
+    );
+    // Also check the stored default when the observation worker has not reloaded it yet.
+    store
+        .set_setting(ink_ffi::calls::DEFAULT_KEY, "ask")
+        .unwrap();
+    d.command(r#"{"cmd":"meetings.calls.remove","app":"com.example.chat","expected_default":"always","id":"r2"}"#);
+    assert_eq!(
+        failed_with(&d.r.events, "r2")["command"],
+        "meetings.calls.remove"
+    );
+    assert_eq!(
+        ink_ffi::calls::load(store.as_ref())
+            .unwrap()
+            .policy("com.example.chat"),
+        ink_ffi::calls::CallPolicy::Never
+    );
+    d.r.events.assert_valid();
+    d.r.core.shutdown();
+}

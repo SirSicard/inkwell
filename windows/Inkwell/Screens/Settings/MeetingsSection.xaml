@@ -94,13 +94,17 @@
                                         TextWrapping="Wrap" />
                                 </Grid>
                                 <StackPanel Spacing="2">
-                                    <ComboBox
-                                        x:Name="Choice"
-                                        MinWidth="170"
-                                        AutomationProperties.Name="{x:Bind PickerName}"
-                                        ItemsSource="{x:Bind Titles}"
-                                        SelectedIndex="{x:Bind Selected}"
-                                        SelectionChanged="OnAppChosen" />
+                                    <local:LineOrStackPanel Fill="0" FillMinimum="200" Spacing="12" StackSpacing="6">
+                                        <ComboBox
+                                            x:Name="Choice"
+                                            MinWidth="0"
+                                            local:LineOrStackPanel.LineWidth="200"
+                                            AutomationProperties.Name="{x:Bind PickerName}"
+                                            ItemsSource="{x:Bind Titles}"
+                                            SelectedIndex="{x:Bind Selected}"
+                                            SelectionChanged="OnAppChosen" />
+                                        <Button Content="Remove" AutomationProperties.Name="{x:Bind RemoveName}" Click="OnAppRemove" />
+                                    </local:LineOrStackPanel>
                                     <TextBlock
                                         AutomationProperties.Name="{x:Bind SeenName}"
                                         Style="{StaticResource InkCaptionStyle}"
