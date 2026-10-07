@@ -7,7 +7,7 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:local="using:Inkwell.Screens"
     Loaded="OnLoaded">
-    <StackPanel Spacing="10">
+    <StackPanel Spacing="14">
         <TextBlock AutomationProperties.HeadingLevel="Level2" Style="{StaticResource InkHeadingStyle}" Text="Storage" />
         <local:SettingColumnsPanel>
             <TextBlock VerticalAlignment="Top" Margin="0,6,0,0" Style="{StaticResource InkBodyStyle}" Text="Keep records" />

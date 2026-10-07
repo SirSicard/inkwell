@@ -10,7 +10,7 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:core="using:Inkwell.Core.Screens"
     xmlns:local="using:Inkwell.Screens">
-    <StackPanel Spacing="10">
+    <StackPanel Spacing="14">
         <TextBlock AutomationProperties.HeadingLevel="Level2" Style="{StaticResource InkHeadingStyle}" Text="Stats" />
         <local:SettingColumnsPanel>
             <TextBlock
@@ -32,98 +32,108 @@
                 <TextBlock AutomationProperties.AccessibilityView="Raw" Style="{StaticResource InkCaptionStyle}" Text="{x:Bind core:StatsModel.CelebrateDetail}" />
             </StackPanel>
         </local:SettingColumnsPanel>
-        <local:SettingColumnsPanel>
-            <TextBlock
-                Margin="0,6,0,0"
-                VerticalAlignment="Top"
-                AutomationProperties.AccessibilityView="Raw"
-                Style="{StaticResource InkBodyStyle}"
-                Text="{x:Bind core:StatsModel.TypingTitle}" />
-            <StackPanel Spacing="4">
-                <StackPanel Orientation="Horizontal" Spacing="8">
-                    <!-- 10 to 200 in steps of 5, as the Mac's Stepper; a typed speed is taken whole. -->
-                    <NumberBox
-                        x:Name="TypingWpm"
-                        MinWidth="120"
-                        AutomationProperties.HelpText="{x:Bind core:StatsModel.TypingDetail}"
-                        AutomationProperties.Name="{x:Bind core:StatsModel.TypingTitle}"
-                        LargeChange="5"
-                        Maximum="{x:Bind core:StatsModel.MaxTypingWpm}"
-                        Minimum="{x:Bind core:StatsModel.MinTypingWpm}"
-                        SmallChange="5"
-                        SpinButtonPlacementMode="Inline"
-                        ValueChanged="OnTypingWpmChanged" />
-                    <TextBlock
-                        VerticalAlignment="Center"
-                        AutomationProperties.AccessibilityView="Raw"
-                        Style="{StaticResource InkBodyStyle}"
-                        Text="wpm" />
+        <Border Style="{StaticResource InkSettingRowStyle}">
+            <local:SettingColumnsPanel>
+                <TextBlock
+                    Margin="0,6,0,0"
+                    VerticalAlignment="Top"
+                    AutomationProperties.AccessibilityView="Raw"
+                    Style="{StaticResource InkBodyStyle}"
+                    Text="{x:Bind core:StatsModel.TypingTitle}" />
+                <StackPanel Spacing="4">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <!-- 10 to 200 in steps of 5, as the Mac's Stepper; a typed speed is taken whole. -->
+                        <NumberBox
+                            x:Name="TypingWpm"
+                            MinWidth="120"
+                            AutomationProperties.HelpText="{x:Bind core:StatsModel.TypingDetail}"
+                            AutomationProperties.Name="{x:Bind core:StatsModel.TypingTitle}"
+                            LargeChange="5"
+                            Maximum="{x:Bind core:StatsModel.MaxTypingWpm}"
+                            Minimum="{x:Bind core:StatsModel.MinTypingWpm}"
+                            SmallChange="5"
+                            SpinButtonPlacementMode="Inline"
+                            ValueChanged="OnTypingWpmChanged" />
+                        <TextBlock
+                            VerticalAlignment="Center"
+                            AutomationProperties.AccessibilityView="Raw"
+                            Style="{StaticResource InkBodyStyle}"
+                            Text="wpm" />
+                    </StackPanel>
+                    <TextBlock AutomationProperties.AccessibilityView="Raw" Style="{StaticResource InkCaptionStyle}" Text="{x:Bind core:StatsModel.TypingDetail}" />
                 </StackPanel>
-                <TextBlock AutomationProperties.AccessibilityView="Raw" Style="{StaticResource InkCaptionStyle}" Text="{x:Bind core:StatsModel.TypingDetail}" />
-            </StackPanel>
-        </local:SettingColumnsPanel>
-        <local:SettingColumnsPanel>
-            <TextBlock
-                Margin="0,6,0,0"
-                VerticalAlignment="Top"
-                AutomationProperties.AccessibilityView="Raw"
-                Style="{StaticResource InkBodyStyle}"
-                Text="{x:Bind core:StatsModel.StreakTitle}" />
-            <StackPanel Spacing="4">
-                <ToggleSwitch
-                    x:Name="StreakShown"
-                    MinWidth="0"
-                    AutomationProperties.HelpText="{x:Bind core:StatsModel.StreakDetail}"
-                    AutomationProperties.Name="{x:Bind core:StatsModel.StreakTitle}"
-                    IsOn="{x:Bind Model.StreakShown, Mode=OneWay}"
-                    OffContent=""
-                    OnContent=""
-                    Toggled="OnStreakToggled" />
-                <TextBlock AutomationProperties.AccessibilityView="Raw" Style="{StaticResource InkCaptionStyle}" Text="{x:Bind core:StatsModel.StreakDetail}" />
-            </StackPanel>
-        </local:SettingColumnsPanel>
-        <local:SettingColumnsPanel>
-            <TextBlock
-                Margin="0,6,0,0"
-                VerticalAlignment="Top"
-                AutomationProperties.AccessibilityView="Raw"
-                Style="{StaticResource InkBodyStyle}"
-                Text="{x:Bind core:StatsModel.RestDaysTitle}" />
-            <StackPanel Spacing="4">
-                <!-- The seven weekdays as toggle buttons, in the order the user's week runs (Render). -->
-                <local:WrapPanel
-                    x:Name="RestDays"
-                    AutomationProperties.HelpText="{x:Bind core:StatsModel.RestDaysDetail}"
-                    AutomationProperties.Name="{x:Bind core:StatsModel.RestDaysTitle}"
-                    RowSpacing="6"
-                    Spacing="6" />
-                <TextBlock AutomationProperties.AccessibilityView="Raw" Style="{StaticResource InkCaptionStyle}" Text="{x:Bind core:StatsModel.RestDaysDetail}" />
-            </StackPanel>
-        </local:SettingColumnsPanel>
-        <local:SettingColumnsPanel>
-            <TextBlock
-                Margin="0,6,0,0"
-                VerticalAlignment="Top"
-                AutomationProperties.AccessibilityView="Raw"
-                Style="{StaticResource InkBodyStyle}"
-                Text="{x:Bind core:StatsModel.PauseTitle}" />
-            <StackPanel Spacing="4">
-                <Button x:Name="PauseButton" Click="OnPauseClicked" />
-                <TextBlock x:Name="PauseCaption" AutomationProperties.AccessibilityView="Raw" Style="{StaticResource InkCaptionStyle}" />
-                <!-- A live region: Narrator reads a failed pause where it appears. -->
-                <TextBlock x:Name="PauseFailure" AutomationProperties.LiveSetting="Polite" Style="{StaticResource InkAlertTextStyle}" />
-            </StackPanel>
-        </local:SettingColumnsPanel>
+            </local:SettingColumnsPanel>
+        </Border>
+        <Border Style="{StaticResource InkSettingRowStyle}">
+            <local:SettingColumnsPanel>
+                <TextBlock
+                    Margin="0,6,0,0"
+                    VerticalAlignment="Top"
+                    AutomationProperties.AccessibilityView="Raw"
+                    Style="{StaticResource InkBodyStyle}"
+                    Text="{x:Bind core:StatsModel.StreakTitle}" />
+                <StackPanel Spacing="4">
+                    <ToggleSwitch
+                        x:Name="StreakShown"
+                        MinWidth="0"
+                        AutomationProperties.HelpText="{x:Bind core:StatsModel.StreakDetail}"
+                        AutomationProperties.Name="{x:Bind core:StatsModel.StreakTitle}"
+                        IsOn="{x:Bind Model.StreakShown, Mode=OneWay}"
+                        OffContent=""
+                        OnContent=""
+                        Toggled="OnStreakToggled" />
+                    <TextBlock AutomationProperties.AccessibilityView="Raw" Style="{StaticResource InkCaptionStyle}" Text="{x:Bind core:StatsModel.StreakDetail}" />
+                </StackPanel>
+            </local:SettingColumnsPanel>
+        </Border>
+        <Border Style="{StaticResource InkSettingRowStyle}">
+            <local:SettingColumnsPanel>
+                <TextBlock
+                    Margin="0,6,0,0"
+                    VerticalAlignment="Top"
+                    AutomationProperties.AccessibilityView="Raw"
+                    Style="{StaticResource InkBodyStyle}"
+                    Text="{x:Bind core:StatsModel.RestDaysTitle}" />
+                <StackPanel Spacing="4">
+                    <!-- The seven weekdays as toggle buttons, in the order the user's week runs (Render). -->
+                    <local:WrapPanel
+                        x:Name="RestDays"
+                        AutomationProperties.HelpText="{x:Bind core:StatsModel.RestDaysDetail}"
+                        AutomationProperties.Name="{x:Bind core:StatsModel.RestDaysTitle}"
+                        RowSpacing="6"
+                        Spacing="6" />
+                    <TextBlock AutomationProperties.AccessibilityView="Raw" Style="{StaticResource InkCaptionStyle}" Text="{x:Bind core:StatsModel.RestDaysDetail}" />
+                </StackPanel>
+            </local:SettingColumnsPanel>
+        </Border>
+        <Border Style="{StaticResource InkSettingRowStyle}">
+            <local:SettingColumnsPanel>
+                <TextBlock
+                    Margin="0,6,0,0"
+                    VerticalAlignment="Top"
+                    AutomationProperties.AccessibilityView="Raw"
+                    Style="{StaticResource InkBodyStyle}"
+                    Text="{x:Bind core:StatsModel.PauseTitle}" />
+                <StackPanel Spacing="4">
+                    <Button x:Name="PauseButton" Click="OnPauseClicked" />
+                    <TextBlock x:Name="PauseCaption" AutomationProperties.AccessibilityView="Raw" Style="{StaticResource InkCaptionStyle}" />
+                    <!-- A live region: Narrator reads a failed pause where it appears. -->
+                    <TextBlock x:Name="PauseFailure" AutomationProperties.LiveSetting="Polite" Style="{StaticResource InkAlertTextStyle}" />
+                </StackPanel>
+            </local:SettingColumnsPanel>
+        </Border>
         <TextBlock
             Style="{StaticResource InkAlertTextStyle}"
             Text="{x:Bind core:StatsModel.SettingsFailedText}"
             Visibility="{x:Bind Model.SettingsFailed, Mode=OneWay}" />
-        <local:SettingColumnsPanel>
-            <TextBlock FontWeight="SemiBold" Style="{StaticResource InkBodyStyle}" Text="Where" />
-            <TextBlock
-                Foreground="{ThemeResource InkSecondaryTextBrush}"
-                Style="{StaticResource InkBodyStyle}"
-                Text="{x:Bind core:StatsModel.WhereText}" />
-        </local:SettingColumnsPanel>
+        <Border Style="{StaticResource InkSettingRowStyle}">
+            <local:SettingColumnsPanel>
+                <TextBlock FontWeight="SemiBold" Style="{StaticResource InkBodyStyle}" Text="Where" />
+                <TextBlock
+                    Foreground="{ThemeResource InkSecondaryTextBrush}"
+                    Style="{StaticResource InkBodyStyle}"
+                    Text="{x:Bind core:StatsModel.WhereText}" />
+            </local:SettingColumnsPanel>
+        </Border>
     </StackPanel>
 </UserControl>

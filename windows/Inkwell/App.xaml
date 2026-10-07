@@ -50,7 +50,9 @@
                     <SolidColorBrush x:Key="InkWindowBrush" Color="{ThemeResource GlowBackgroundColor}" />
                     <SolidColorBrush x:Key="InkSurfaceBrush" Color="Transparent" />
                     <SolidColorBrush x:Key="InkTextBrush" Color="{ThemeResource GlowTextColor}" />
-                    <SolidColorBrush x:Key="InkSecondaryTextBrush" Color="{ThemeResource GlowSecondaryColor}" />
+                    <!-- Lighter than the token's #A49FB4 (6.9:1 on a card): Segoe UI's thin 13 epx captions,
+                         light on dark, read faint at that. #BCB7CA is 9.1:1, still a step under the text. -->
+                    <SolidColorBrush x:Key="InkSecondaryTextBrush" Color="#FFBCB7CA" />
                     <SolidColorBrush x:Key="InkCardBrush" Color="{ThemeResource GlowCardColor}" />
                     <AcrylicBrush
                         x:Key="InkCardAcrylicBrush"
@@ -183,6 +185,13 @@
             </Style>
             <!-- Glow's card: translucent over the orb (in-app acrylic; solid where Windows' transparency
                  effects are off, and in High Contrast), a hairline, 22 px corners. -->
+            <!-- A Settings row after a section's first: a faint rule above it, so one row's caption
+                 doesn't run into the next row's name. -->
+            <Style x:Key="InkSettingRowStyle" TargetType="Border">
+                <Setter Property="BorderBrush" Value="{ThemeResource InkSeparatorBrush}" />
+                <Setter Property="BorderThickness" Value="0,1,0,0" />
+                <Setter Property="Padding" Value="0,14,0,0" />
+            </Style>
             <Style x:Key="InkCardStyle" TargetType="Border">
                 <Setter Property="Background" Value="{ThemeResource InkCardAcrylicBrush}" />
                 <Setter Property="BorderBrush" Value="{ThemeResource InkCardBorderBrush}" />

@@ -21,7 +21,15 @@
                 SelectionMode="Single" />
         </Border>
         <ScrollViewer x:Name="Scroller" Grid.Column="1" ViewChanged="OnScrolled">
-            <StackPanel x:Name="Sections" Padding="40,28" Spacing="16">
+            <!-- At most the Mac's width (its SettingsScreen.maxCardWidth): 760 epx inside a card, plus
+                 the card's padding and border (2 x 23) and the page's (2 x 40). Wider, lines grew too
+                 long to read and a row's buttons drifted far from what they act on. -->
+            <StackPanel
+                x:Name="Sections"
+                MaxWidth="886"
+                HorizontalAlignment="Left"
+                Padding="40,28"
+                Spacing="16">
                 <TextBlock Margin="0,0,0,10" AutomationProperties.HeadingLevel="Level1" Style="{StaticResource InkScreenTitleStyle}" Text="Settings" />
             </StackPanel>
         </ScrollViewer>

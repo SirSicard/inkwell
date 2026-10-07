@@ -15,7 +15,7 @@
             <Setter Property="Margin" Value="0,6,0,0" />
         </Style>
     </UserControl.Resources>
-    <StackPanel Spacing="10">
+    <StackPanel Spacing="14">
         <TextBlock AutomationProperties.HeadingLevel="Level2" Style="{StaticResource InkHeadingStyle}" Text="AI" />
 
         <local:SettingColumnsPanel>
@@ -23,6 +23,9 @@
             <StackPanel Spacing="8">
                 <!-- The provider, its key, its model, Use and Test (LanguageModelRows, shared with the first run). -->
                 <ContentPresenter x:Name="LanguageModelHost" />
+                <!-- What this PC has of its own (LocalLlmModel.Caption): it says "no language model of
+                     its own" only while the core offers none. -->
+                <TextBlock x:Name="LanguageModelCaption" Style="{StaticResource InkCaptionStyle}" />
                 <!-- How to get a free Groq key (GroqKeyGuideView), closed at first. Settings only:
                      the first run has the guide over Groq's own rows. -->
                 <Expander
@@ -37,73 +40,76 @@
                 </Expander>
             </StackPanel>
         </local:SettingColumnsPanel>
-        <!-- What this PC has of its own (LocalLlmModel.Caption): it says "no language model of its
-             own" only while the core offers none. -->
-        <TextBlock x:Name="LanguageModelCaption" Style="{StaticResource InkCaptionStyle}" />
-
         <!-- Local only (llm.local_only): on, no model off this PC is called, whatever is chosen. -->
-        <local:SettingColumnsPanel Margin="0,6,0,0">
-            <TextBlock Style="{StaticResource RowLabelStyle}" Text="Local only" />
-            <StackPanel Spacing="4">
-                <ToggleSwitch
-                    x:Name="LocalOnlySwitch"
-                    AutomationProperties.Name="Local only: nothing leaves this computer"
-                    OffContent=""
-                    OnContent=""
-                    Toggled="OnLocalOnlyToggled" />
-                <TextBlock x:Name="LocalOnlyCaption" AutomationProperties.AccessibilityView="Raw" Style="{StaticResource InkCaptionStyle}" />
-            </StackPanel>
-        </local:SettingColumnsPanel>
+        <Border Style="{StaticResource InkSettingRowStyle}">
+            <local:SettingColumnsPanel Margin="0,6,0,0">
+                <TextBlock Style="{StaticResource RowLabelStyle}" Text="Local only" />
+                <StackPanel Spacing="4">
+                    <ToggleSwitch
+                        x:Name="LocalOnlySwitch"
+                        AutomationProperties.Name="Local only: nothing leaves this computer"
+                        OffContent=""
+                        OnContent=""
+                        Toggled="OnLocalOnlyToggled" />
+                    <TextBlock x:Name="LocalOnlyCaption" AutomationProperties.AccessibilityView="Raw" Style="{StaticResource InkCaptionStyle}" />
+                </StackPanel>
+            </local:SettingColumnsPanel>
+        </Border>
 
-        <local:SettingColumnsPanel Margin="0,6,0,0">
-            <TextBlock Style="{StaticResource RowLabelStyle}" Text="Polish my words" />
-            <StackPanel Spacing="4">
-                <ToggleSwitch
-                    x:Name="PolishSwitch"
-                    AutomationProperties.Name="Polish my words"
-                    OffContent=""
-                    OnContent=""
-                    Toggled="OnPolishToggled" />
-                <TextBlock x:Name="PolishStatus" AutomationProperties.AccessibilityView="Raw" Style="{StaticResource InkCaptionStyle}" />
-            </StackPanel>
-        </local:SettingColumnsPanel>
-        <TextBlock
-            Style="{StaticResource InkCaptionStyle}"
-            Text="Polish tidies a dictation's wording before it is typed: it keeps what you meant and never adds anything. It sends what you dictate to a language model, so it stays off until you turn it on and agree to where that is." />
+        <Border Style="{StaticResource InkSettingRowStyle}">
+            <local:SettingColumnsPanel Margin="0,6,0,0">
+                <TextBlock Style="{StaticResource RowLabelStyle}" Text="Polish my words" />
+                <StackPanel Spacing="4">
+                    <ToggleSwitch
+                        x:Name="PolishSwitch"
+                        AutomationProperties.Name="Polish my words"
+                        OffContent=""
+                        OnContent=""
+                        Toggled="OnPolishToggled" />
+                    <TextBlock x:Name="PolishStatus" AutomationProperties.AccessibilityView="Raw" Style="{StaticResource InkCaptionStyle}" />
+                    <TextBlock Margin="0,4,0,0" Style="{StaticResource InkCaptionStyle}" Text="Polish tidies a dictation's wording before it is typed: it keeps what you meant and never adds anything. It sends what you dictate to a language model, so it stays off until you turn it on and agree to where that is." />
+                </StackPanel>
+            </local:SettingColumnsPanel>
+        </Border>
         <!-- Where polish may send: one OK per destination (a mode may polish on a model of its own,
-             Settings > Modes), each with Revoke. Full width, so a narrow card never squeezes it. -->
-        <StackPanel x:Name="PolishConsents" Margin="0,4,0,0" Spacing="6" />
+             Settings > Modes), each with Revoke beside it. -->
+        <Border Style="{StaticResource InkSettingRowStyle}">
+            <local:SettingColumnsPanel Margin="0,6,0,0">
+                <TextBlock Style="{StaticResource RowLabelStyle}" Text="Polish may send to" />
+                <StackPanel x:Name="PolishConsents" Margin="0,6,0,0" Spacing="8" />
+            </local:SettingColumnsPanel>
+        </Border>
 
-        <local:SettingColumnsPanel Margin="0,6,0,0">
-            <TextBlock Style="{StaticResource RowLabelStyle}" Text="Voice edit" />
-            <StackPanel Spacing="4">
-                <ToggleSwitch
-                    x:Name="EditSwitch"
-                    AutomationProperties.Name="Voice edit"
-                    OffContent=""
-                    OnContent=""
-                    Toggled="OnEditToggled" />
-                <TextBlock x:Name="EditStatus" AutomationProperties.AccessibilityView="Raw" Style="{StaticResource InkCaptionStyle}" />
-            </StackPanel>
-        </local:SettingColumnsPanel>
-        <TextBlock
-            Style="{StaticResource InkCaptionStyle}"
-            Text="Voice edit sends the text you select and what you say to a language model, and replaces the selection with the answer, so it stays off until you turn it on and agree to where that is. Its key is in Dictation." />
+        <Border Style="{StaticResource InkSettingRowStyle}">
+            <local:SettingColumnsPanel Margin="0,6,0,0">
+                <TextBlock Style="{StaticResource RowLabelStyle}" Text="Voice edit" />
+                <StackPanel Spacing="4">
+                    <ToggleSwitch
+                        x:Name="EditSwitch"
+                        AutomationProperties.Name="Voice edit"
+                        OffContent=""
+                        OnContent=""
+                        Toggled="OnEditToggled" />
+                    <TextBlock x:Name="EditStatus" AutomationProperties.AccessibilityView="Raw" Style="{StaticResource InkCaptionStyle}" />
+                    <TextBlock Margin="0,4,0,0" Style="{StaticResource InkCaptionStyle}" Text="Voice edit sends the text you select and what you say to a language model, and replaces the selection with the answer, so it stays off until you turn it on and agree to where that is. Its key is in Dictation." />
+                </StackPanel>
+            </local:SettingColumnsPanel>
+        </Border>
 
-        <local:SettingColumnsPanel Margin="0,6,0,0">
-            <TextBlock Style="{StaticResource RowLabelStyle}" Text="Summaries and Ask" />
-            <StackPanel Spacing="4">
-                <ToggleSwitch
-                    x:Name="MeetingsSwitch"
-                    AutomationProperties.Name="Summaries and Ask"
-                    OffContent=""
-                    OnContent=""
-                    Toggled="OnMeetingsToggled" />
-                <TextBlock x:Name="MeetingsStatus" AutomationProperties.AccessibilityView="Raw" Style="{StaticResource InkCaptionStyle}" />
-            </StackPanel>
-        </local:SettingColumnsPanel>
-        <TextBlock
-            Style="{StaticResource InkCaptionStyle}"
-            Text="A meeting's summary, what was promised in it, and Ask send its transcript to a language model, so they stay off until you turn them on and agree to where that is." />
+        <Border Style="{StaticResource InkSettingRowStyle}">
+            <local:SettingColumnsPanel Margin="0,6,0,0">
+                <TextBlock Style="{StaticResource RowLabelStyle}" Text="Summaries and Ask" />
+                <StackPanel Spacing="4">
+                    <ToggleSwitch
+                        x:Name="MeetingsSwitch"
+                        AutomationProperties.Name="Summaries and Ask"
+                        OffContent=""
+                        OnContent=""
+                        Toggled="OnMeetingsToggled" />
+                    <TextBlock x:Name="MeetingsStatus" AutomationProperties.AccessibilityView="Raw" Style="{StaticResource InkCaptionStyle}" />
+                    <TextBlock Margin="0,4,0,0" Style="{StaticResource InkCaptionStyle}" Text="A meeting's summary, what was promised in it, and Ask send its transcript to a language model, so they stay off until you turn them on and agree to where that is." />
+                </StackPanel>
+            </local:SettingColumnsPanel>
+        </Border>
     </StackPanel>
 </UserControl>

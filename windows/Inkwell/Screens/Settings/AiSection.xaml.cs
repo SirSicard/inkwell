@@ -115,11 +115,6 @@ public sealed partial class AiSection : UserControl
         }
         shownConsents = consents;
         PolishConsents.Children.Clear();
-        PolishConsents.Children.Add(new TextBlock
-        {
-            Text = "Polish may send to",
-            Style = (Style)Application.Current.Resources["InkBodyStyle"],
-        });
         if (consents.Count == 0)
         {
             PolishConsents.Children.Add(Caption("Nowhere yet. Polish asks before it first sends anywhere."));
@@ -127,9 +122,8 @@ public sealed partial class AiSection : UserControl
         }
         foreach (var grant in consents)
         {
-            var row = new Grid { ColumnSpacing = 12 };
-            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            // Its name and line, Revoke beside them; under them at the narrowest window.
+            var row = new LineOrStackPanel { Fill = 0, FillMinimum = 140 };
             var words = new StackPanel { Spacing = 1 };
             words.Children.Add(new TextBlock
             {
@@ -138,10 +132,9 @@ public sealed partial class AiSection : UserControl
                 TextWrapping = TextWrapping.Wrap,
             });
             words.Children.Add(Caption(grant.Detail));
-            var revoke = new Button { Content = "Revoke", VerticalAlignment = VerticalAlignment.Center };
+            var revoke = new Button { Content = "Revoke", HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Center };
             AutomationProperties.SetName(revoke, $"Revoke polish's OK for {grant.Label}");
             revoke.Click += (_, _) => polish.Consent.Revoke(grant);
-            Grid.SetColumn(revoke, 1);
             row.Children.Add(words);
             row.Children.Add(revoke);
             PolishConsents.Children.Add(row);

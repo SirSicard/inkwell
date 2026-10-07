@@ -22,7 +22,7 @@
             <Setter Property="BorderBrush" Value="{ThemeResource InkBorderBrush}" />
         </Style>
     </UserControl.Resources>
-    <StackPanel Spacing="10">
+    <StackPanel Spacing="14">
         <TextBlock AutomationProperties.HeadingLevel="Level2" Style="{StaticResource InkHeadingStyle}" Text="Dictation" />
 
         <local:SettingColumnsPanel>
@@ -42,42 +42,46 @@
         <!-- A key's row: the key, Record and the key as a cap, wrapping between them where the card
              is narrow; how the key is used, then what its check said, under them. The cap sits in a
              row-high cell so it centres on the controls' line. -->
-        <local:SettingColumnsPanel>
-            <TextBlock Style="{StaticResource RowLabelStyle}" Text="Dictate" />
-            <StackPanel Spacing="4">
-                <local:WrapPanel RowSpacing="8" Spacing="12">
-                    <ComboBox x:Name="KeyBox" MinWidth="170" AutomationProperties.Name="Dictate" SelectionChanged="OnKeyChosen" />
-                    <!-- Any key: the next press, checked by the core (ShortcutRecorderModel). -->
-                    <Button x:Name="RecordKeyButton" Click="OnRecordKey" />
-                    <Grid Height="32">
-                        <Border AutomationProperties.AccessibilityView="Raw" Style="{StaticResource KeyCapStyle}">
-                            <TextBlock x:Name="KeyCap" FontFamily="{StaticResource InkMonoFontFamily}" FontSize="12" Foreground="{ThemeResource InkTextBrush}" />
-                        </Border>
-                    </Grid>
-                </local:WrapPanel>
-                <TextBlock Style="{StaticResource InkCaptionStyle}" Text="hold, speak, let go" />
-                <TextBlock x:Name="KeyMessage" TextWrapping="Wrap" Style="{StaticResource InkCaptionStyle}" />
-            </StackPanel>
-        </local:SettingColumnsPanel>
+        <Border Style="{StaticResource InkSettingRowStyle}">
+            <local:SettingColumnsPanel>
+                <TextBlock Style="{StaticResource RowLabelStyle}" Text="Dictate" />
+                <StackPanel Spacing="4">
+                    <local:WrapPanel RowSpacing="8" Spacing="12">
+                        <ComboBox x:Name="KeyBox" MinWidth="170" AutomationProperties.Name="Dictate" SelectionChanged="OnKeyChosen" />
+                        <!-- Any key: the next press, checked by the core (ShortcutRecorderModel). -->
+                        <Button x:Name="RecordKeyButton" Click="OnRecordKey" />
+                        <Grid Height="32">
+                            <Border AutomationProperties.AccessibilityView="Raw" Style="{StaticResource KeyCapStyle}">
+                                <TextBlock x:Name="KeyCap" FontFamily="{StaticResource InkMonoFontFamily}" FontSize="12" Foreground="{ThemeResource InkTextBrush}" />
+                            </Border>
+                        </Grid>
+                    </local:WrapPanel>
+                    <TextBlock Style="{StaticResource InkCaptionStyle}" Text="hold, speak, let go" />
+                    <TextBlock x:Name="KeyMessage" TextWrapping="Wrap" Style="{StaticResource InkCaptionStyle}" />
+                </StackPanel>
+            </local:SettingColumnsPanel>
+        </Border>
 
-        <local:SettingColumnsPanel>
-            <TextBlock Style="{StaticResource RowLabelStyle}" Text="Edit a selection" />
-            <StackPanel Spacing="4">
-                <local:WrapPanel RowSpacing="8" Spacing="12">
-                    <ComboBox x:Name="EditKeyBox" MinWidth="170" AutomationProperties.Name="Edit a selection" SelectionChanged="OnEditKeyChosen" />
-                    <Button x:Name="RecordEditButton" Click="OnRecordEdit" />
-                    <!-- The wrapper is what collapses: WrapPanel counts a 0 x 32 slot, which would leave
-                         a gap or an empty line when the edit key is off. -->
-                    <Grid x:Name="EditKeyCapHost" Height="32">
-                        <Border AutomationProperties.AccessibilityView="Raw" Style="{StaticResource KeyCapStyle}">
-                            <TextBlock x:Name="EditKeyCap" FontFamily="{StaticResource InkMonoFontFamily}" FontSize="12" Foreground="{ThemeResource InkTextBrush}" />
-                        </Border>
-                    </Grid>
-                </local:WrapPanel>
-                <TextBlock Style="{StaticResource InkCaptionStyle}" Text="select text, hold, say what to change" />
-                <TextBlock x:Name="EditMessage" TextWrapping="Wrap" Style="{StaticResource InkCaptionStyle}" />
-            </StackPanel>
-        </local:SettingColumnsPanel>
+        <Border Style="{StaticResource InkSettingRowStyle}">
+            <local:SettingColumnsPanel>
+                <TextBlock Style="{StaticResource RowLabelStyle}" Text="Edit a selection" />
+                <StackPanel Spacing="4">
+                    <local:WrapPanel RowSpacing="8" Spacing="12">
+                        <ComboBox x:Name="EditKeyBox" MinWidth="170" AutomationProperties.Name="Edit a selection" SelectionChanged="OnEditKeyChosen" />
+                        <Button x:Name="RecordEditButton" Click="OnRecordEdit" />
+                        <!-- The wrapper is what collapses: WrapPanel counts a 0 x 32 slot, which would leave
+                             a gap or an empty line when the edit key is off. -->
+                        <Grid x:Name="EditKeyCapHost" Height="32">
+                            <Border AutomationProperties.AccessibilityView="Raw" Style="{StaticResource KeyCapStyle}">
+                                <TextBlock x:Name="EditKeyCap" FontFamily="{StaticResource InkMonoFontFamily}" FontSize="12" Foreground="{ThemeResource InkTextBrush}" />
+                            </Border>
+                        </Grid>
+                    </local:WrapPanel>
+                    <TextBlock Style="{StaticResource InkCaptionStyle}" Text="select text, hold, say what to change" />
+                    <TextBlock x:Name="EditMessage" TextWrapping="Wrap" Style="{StaticResource InkCaptionStyle}" />
+                </StackPanel>
+            </local:SettingColumnsPanel>
+        </Border>
 
         <StackPanel Spacing="4">
             <TextBlock x:Name="StatusText" Style="{StaticResource InkCaptionStyle}" />

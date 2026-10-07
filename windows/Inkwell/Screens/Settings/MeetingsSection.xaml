@@ -10,14 +10,12 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:local="using:Inkwell.Screens">
     <UserControl.Resources>
-        <Style x:Key="FactLabel" TargetType="TextBlock" BasedOn="{StaticResource InkBodyStyle}">
-            <Setter Property="FontWeight" Value="SemiBold" />
-        </Style>
-        <Style x:Key="FactText" TargetType="TextBlock" BasedOn="{StaticResource InkBodyStyle}">
-            <Setter Property="Foreground" Value="{ThemeResource InkSecondaryTextBrush}" />
+        <Style x:Key="FactLabel" TargetType="TextBlock" BasedOn="{StaticResource InkBodyStyle}" />
+        <Style x:Key="FactText" TargetType="TextBlock" BasedOn="{StaticResource InkCaptionStyle}">
+            <Setter Property="Margin" Value="0,2,0,0" />
         </Style>
     </UserControl.Resources>
-    <StackPanel Spacing="10">
+    <StackPanel Spacing="14">
         <TextBlock AutomationProperties.HeadingLevel="Level2" Style="{StaticResource InkHeadingStyle}" Text="Meetings" />
         <!-- The call policies: the default for apps not chosen for, with a warning under Always and a
              hint under Never, then each app the core has seen with its own choice. -->
@@ -67,72 +65,79 @@
             </StackPanel>
         </local:SettingColumnsPanel>
         <TextBlock x:Name="Unreadable" Style="{StaticResource InkAlertTextStyle}" TextWrapping="Wrap" Visibility="Collapsed" />
-        <local:SettingColumnsPanel x:Name="NoApps" Visibility="Collapsed">
-            <TextBlock Style="{StaticResource InkBodyStyle}" Text="{x:Bind local:MeetingsSection.AppsTitle}" />
-            <TextBlock Style="{StaticResource InkCaptionStyle}" Text="{x:Bind local:MeetingsSection.NoAppsText}" />
-        </local:SettingColumnsPanel>
-        <StackPanel x:Name="AppsHost" Spacing="2" Visibility="Collapsed">
-            <TextBlock AutomationProperties.HeadingLevel="Level3" Style="{StaticResource InkEyebrowStyle}" Text="{x:Bind local:MeetingsSection.AppsTitle}" />
-            <ItemsRepeater x:Name="AppRows">
-                <ItemsRepeater.ItemTemplate>
-                    <DataTemplate x:DataType="local:CallAppRowItem">
-                        <local:SettingColumnsPanel Margin="0,6" Tag="{x:Bind Id}">
-                            <Grid ColumnSpacing="8">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="Auto" />
-                                    <ColumnDefinition Width="*" />
-                                </Grid.ColumnDefinitions>
-                                <local:AppIconTile VerticalAlignment="Top" App="{x:Bind Label}" AutomationProperties.AccessibilityView="Raw" />
-                                <TextBlock
-                                    Grid.Column="1"
-                                    VerticalAlignment="Center"
-                                    MaxLines="2"
-                                    Style="{StaticResource InkBodyStyle}"
-                                    Text="{x:Bind Name}"
-                                    TextTrimming="CharacterEllipsis"
-                                    TextWrapping="Wrap" />
-                            </Grid>
-                            <StackPanel Spacing="2">
-                                <ComboBox
-                                    x:Name="Choice"
-                                    MinWidth="170"
-                                    AutomationProperties.Name="{x:Bind PickerName}"
-                                    ItemsSource="{x:Bind Titles}"
-                                    SelectedIndex="{x:Bind Selected}"
-                                    SelectionChanged="OnAppChosen" />
-                                <TextBlock
-                                    AutomationProperties.Name="{x:Bind SeenName}"
-                                    Style="{StaticResource InkCaptionStyle}"
-                                    Text="{x:Bind Seen}"
-                                    Visibility="{x:Bind local:SettingsFormat.Shows(Seen)}" />
-                            </StackPanel>
-                        </local:SettingColumnsPanel>
-                    </DataTemplate>
-                </ItemsRepeater.ItemTemplate>
-            </ItemsRepeater>
-        </StackPanel>
+        <Border x:Name="NoApps" Visibility="Collapsed" Style="{StaticResource InkSettingRowStyle}">
+            <local:SettingColumnsPanel>
+                <TextBlock Style="{StaticResource InkBodyStyle}" Text="{x:Bind local:MeetingsSection.AppsTitle}" />
+                <TextBlock Style="{StaticResource InkCaptionStyle}" Text="{x:Bind local:MeetingsSection.NoAppsText}" />
+            </local:SettingColumnsPanel>
+        </Border>
+        <Border x:Name="AppsHost" Visibility="Collapsed" Style="{StaticResource InkSettingRowStyle}">
+            <StackPanel Spacing="2">
+                <TextBlock AutomationProperties.HeadingLevel="Level3" Style="{StaticResource InkEyebrowStyle}" Text="{x:Bind local:MeetingsSection.AppsTitle}" />
+                <ItemsRepeater x:Name="AppRows">
+                    <ItemsRepeater.ItemTemplate>
+                        <DataTemplate x:DataType="local:CallAppRowItem">
+                            <local:SettingColumnsPanel Margin="0,6" Tag="{x:Bind Id}">
+                                <Grid ColumnSpacing="8">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <local:AppIconTile VerticalAlignment="Top" App="{x:Bind Label}" AutomationProperties.AccessibilityView="Raw" />
+                                    <TextBlock
+                                        Grid.Column="1"
+                                        VerticalAlignment="Center"
+                                        MaxLines="2"
+                                        Style="{StaticResource InkBodyStyle}"
+                                        Text="{x:Bind Name}"
+                                        TextTrimming="CharacterEllipsis"
+                                        TextWrapping="Wrap" />
+                                </Grid>
+                                <StackPanel Spacing="2">
+                                    <ComboBox
+                                        x:Name="Choice"
+                                        MinWidth="170"
+                                        AutomationProperties.Name="{x:Bind PickerName}"
+                                        ItemsSource="{x:Bind Titles}"
+                                        SelectedIndex="{x:Bind Selected}"
+                                        SelectionChanged="OnAppChosen" />
+                                    <TextBlock
+                                        AutomationProperties.Name="{x:Bind SeenName}"
+                                        Style="{StaticResource InkCaptionStyle}"
+                                        Text="{x:Bind Seen}"
+                                        Visibility="{x:Bind local:SettingsFormat.Shows(Seen)}" />
+                                </StackPanel>
+                            </local:SettingColumnsPanel>
+                        </DataTemplate>
+                    </ItemsRepeater.ItemTemplate>
+                </ItemsRepeater>
+            </StackPanel>
+        </Border>
         <TextBlock Style="{StaticResource InkAlertTextStyle}" Text="{x:Bind local:MeetingsSection.SettingsFailedText}" Visibility="{x:Bind Model.SettingsFailed, Mode=OneWay}" />
-        <StackPanel Spacing="8">
-            <local:SettingColumnsPanel>
-                <TextBlock Style="{StaticResource FactLabel}" Text="Consent" />
-                <TextBlock Style="{StaticResource FactText}" Text="Tell the others in the call that you are recording. Inkwell shows while it records, and never hides that it does." />
-            </local:SettingColumnsPanel>
-            <local:SettingColumnsPanel>
-                <TextBlock Style="{StaticResource FactLabel}" Text="You" />
-                <TextBlock Style="{StaticResource FactText}" Text="Your microphone, as &#x201C;Hear you&#x201D; allows." />
-            </local:SettingColumnsPanel>
-            <local:SettingColumnsPanel>
-                <TextBlock Style="{StaticResource FactLabel}" Text="Them" />
-                <TextBlock Style="{StaticResource FactText}" Text="For a call from an app, its own sound. With Record now, or when Inkwell can't hear the call app alone, everything this PC plays, and Inkwell says so." />
-            </local:SettingColumnsPanel>
-            <local:SettingColumnsPanel>
-                <TextBlock Style="{StaticResource FactLabel}" Text="Headphones" />
-                <TextBlock Style="{StaticResource FactText}" Text="With classic Bluetooth headphones, Automatic records another microphone: a headset microphone carries only call-quality sound. Settings &gt; Sound picks another." />
-            </local:SettingColumnsPanel>
-            <local:SettingColumnsPanel>
-                <TextBlock Style="{StaticResource FactLabel}" Text="Where" />
-                <TextBlock Style="{StaticResource FactText}" Text="Recordings and transcripts stay on this PC. Nothing is sent anywhere unless you add your own key for a model online." />
-            </local:SettingColumnsPanel>
-        </StackPanel>
+        <Border Style="{StaticResource InkSettingRowStyle}">
+            <StackPanel Margin="0,10,0,0" Spacing="8">
+                <TextBlock AutomationProperties.HeadingLevel="Level3" Style="{StaticResource InkEyebrowStyle}" Text="How Inkwell records a call" />
+                <local:SettingColumnsPanel>
+                    <TextBlock Style="{StaticResource FactLabel}" Text="Consent" />
+                    <TextBlock Style="{StaticResource FactText}" Text="Tell the others in the call that you are recording. Inkwell shows while it records, and never hides that it does." />
+                </local:SettingColumnsPanel>
+                <local:SettingColumnsPanel>
+                    <TextBlock Style="{StaticResource FactLabel}" Text="You" />
+                    <TextBlock Style="{StaticResource FactText}" Text="Your microphone, as &#x201C;Hear you&#x201D; allows." />
+                </local:SettingColumnsPanel>
+                <local:SettingColumnsPanel>
+                    <TextBlock Style="{StaticResource FactLabel}" Text="Them" />
+                    <TextBlock Style="{StaticResource FactText}" Text="For a call from an app, its own sound. With Record now, or when Inkwell can't hear the call app alone, everything this PC plays, and Inkwell says so." />
+                </local:SettingColumnsPanel>
+                <local:SettingColumnsPanel>
+                    <TextBlock Style="{StaticResource FactLabel}" Text="Headphones" />
+                    <TextBlock Style="{StaticResource FactText}" Text="With classic Bluetooth headphones, Automatic records another microphone: a headset microphone carries only call-quality sound. Settings &gt; Sound picks another." />
+                </local:SettingColumnsPanel>
+                <local:SettingColumnsPanel>
+                    <TextBlock Style="{StaticResource FactLabel}" Text="Where" />
+                    <TextBlock Style="{StaticResource FactText}" Text="Recordings and transcripts stay on this PC. Nothing is sent anywhere unless you add your own key for a model online." />
+                </local:SettingColumnsPanel>
+            </StackPanel>
+        </Border>
     </StackPanel>
 </UserControl>

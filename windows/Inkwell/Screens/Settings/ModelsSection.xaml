@@ -8,7 +8,7 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:local="using:Inkwell.Screens"
     Loaded="OnLoaded">
-    <StackPanel Spacing="10">
+    <StackPanel Spacing="14">
         <TextBlock AutomationProperties.HeadingLevel="Level2" Style="{StaticResource InkHeadingStyle}" Text="Models" />
         <TextBlock Style="{StaticResource InkAlertTextStyle}" FontSize="14" Text="{x:Bind local:ModelsSection.FailedText}" Visibility="{x:Bind Model.Failed, Mode=OneWay}" />
         <ItemsRepeater x:Name="Lines">

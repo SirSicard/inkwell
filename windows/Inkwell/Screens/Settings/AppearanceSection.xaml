@@ -21,7 +21,7 @@
             <Setter Property="TextWrapping" Value="Wrap" />
         </Style>
     </UserControl.Resources>
-    <StackPanel Spacing="10">
+    <StackPanel Spacing="14">
         <TextBlock AutomationProperties.HeadingLevel="Level2" Style="{StaticResource InkHeadingStyle}" Text="Appearance" />
 
         <local:SettingColumnsPanel>
@@ -37,60 +37,68 @@
             </RadioButtons>
         </local:SettingColumnsPanel>
 
-        <local:SettingColumnsPanel>
-            <TextBlock AutomationProperties.HeadingLevel="Level3" Style="{StaticResource RowEyebrowStyle}" Text="Dots" />
-            <StackPanel MaxWidth="560" HorizontalAlignment="Left" Spacing="6">
-                <Grid x:Name="Presets" ColumnSpacing="8" RowSpacing="8">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="*" />
-                    </Grid.ColumnDefinitions>
-                </Grid>
-                <TextBlock x:Name="DotsNote" Style="{StaticResource InkCaptionStyle}" />
-            </StackPanel>
-        </local:SettingColumnsPanel>
+        <Border Style="{StaticResource InkSettingRowStyle}">
+            <local:SettingColumnsPanel>
+                <TextBlock AutomationProperties.HeadingLevel="Level3" Style="{StaticResource RowEyebrowStyle}" Text="Dots" />
+                <StackPanel MaxWidth="560" HorizontalAlignment="Left" Spacing="6">
+                    <Grid x:Name="Presets" ColumnSpacing="8" RowSpacing="8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                    </Grid>
+                    <TextBlock x:Name="DotsNote" Style="{StaticResource InkCaptionStyle}" />
+                </StackPanel>
+            </local:SettingColumnsPanel>
+        </Border>
 
-        <local:SettingColumnsPanel>
-            <TextBlock x:Name="ColoursHeading" AutomationProperties.HeadingLevel="Level3" Style="{StaticResource RowEyebrowStyle}" />
-            <StackPanel MaxWidth="560" HorizontalAlignment="Left" Spacing="6">
-                <StackPanel x:Name="ColourRows" Spacing="8" />
-                <TextBlock
-                    Style="{StaticResource InkCaptionStyle}"
-                    Text="The orb's lighter shade follows. A colour too dark for night or too pale for day is adjusted so it stays visible." />
-            </StackPanel>
-        </local:SettingColumnsPanel>
+        <Border Style="{StaticResource InkSettingRowStyle}">
+            <local:SettingColumnsPanel>
+                <TextBlock x:Name="ColoursHeading" AutomationProperties.HeadingLevel="Level3" Style="{StaticResource RowEyebrowStyle}" />
+                <StackPanel MaxWidth="560" HorizontalAlignment="Left" Spacing="6">
+                    <StackPanel x:Name="ColourRows" Spacing="8" />
+                    <TextBlock
+                        Style="{StaticResource InkCaptionStyle}"
+                        Text="The orb's lighter shade follows. A colour too dark for night or too pale for day is adjusted so it stays visible." />
+                </StackPanel>
+            </local:SettingColumnsPanel>
+        </Border>
 
-        <local:SettingColumnsPanel>
-            <TextBlock Style="{StaticResource RowLabelStyle}" Text="Glow the window's edge" />
-            <StackPanel Spacing="4">
-                <ToggleSwitch
-                    x:Name="EdgeSwitch"
-                    MinWidth="0"
-                    AutomationProperties.Name="Glow the window's edge"
-                    OffContent=""
-                    OnContent=""
-                    Toggled="OnEdgeToggled" />
-                <TextBlock Style="{StaticResource InkCaptionStyle}" Text="While you dictate or a call records" />
-            </StackPanel>
-        </local:SettingColumnsPanel>
+        <Border Style="{StaticResource InkSettingRowStyle}">
+            <local:SettingColumnsPanel>
+                <TextBlock Style="{StaticResource RowLabelStyle}" Text="Glow the window's edge" />
+                <StackPanel Spacing="4">
+                    <ToggleSwitch
+                        x:Name="EdgeSwitch"
+                        MinWidth="0"
+                        AutomationProperties.Name="Glow the window's edge"
+                        OffContent=""
+                        OnContent=""
+                        Toggled="OnEdgeToggled" />
+                    <TextBlock Style="{StaticResource InkCaptionStyle}" Text="While you dictate or a call records" />
+                </StackPanel>
+            </local:SettingColumnsPanel>
+        </Border>
 
-        <local:SettingColumnsPanel>
-            <TextBlock AutomationProperties.AccessibilityView="Raw" Style="{StaticResource RowLabelStyle}" Text="The ink moves" />
-            <StackPanel Spacing="6">
-                <RadioButtons
-                    x:Name="MotionChoice"
-                    AutomationProperties.Name="The ink moves"
-                    SelectionChanged="OnMotionChosen">
-                    <x:String>Follow Windows' Animation effects</x:String>
-                    <x:String>Always still</x:String>
-                </RadioButtons>
-                <TextBlock
-                    MaxWidth="560"
-                    HorizontalAlignment="Left"
-                    Style="{StaticResource InkCaptionStyle}"
-                    Text="High Contrast gives solid cards, no translucency and stronger borders, and dims the orb behind the text." />
-            </StackPanel>
-        </local:SettingColumnsPanel>
+        <Border Style="{StaticResource InkSettingRowStyle}">
+            <local:SettingColumnsPanel>
+                <TextBlock AutomationProperties.AccessibilityView="Raw" Style="{StaticResource RowLabelStyle}" Text="The ink moves" />
+                <StackPanel Spacing="6">
+                    <RadioButtons
+                        x:Name="MotionChoice"
+                        AutomationProperties.Name="The ink moves"
+                        SelectionChanged="OnMotionChosen">
+                        <x:String>Follow Windows' Animation effects</x:String>
+                        <x:String>Always still</x:String>
+                    </RadioButtons>
+                    <TextBlock
+                        MaxWidth="560"
+                        HorizontalAlignment="Left"
+                        Style="{StaticResource InkCaptionStyle}"
+                        Text="High Contrast gives solid cards, no translucency and stronger borders, and dims the orb behind the text." />
+                </StackPanel>
+            </local:SettingColumnsPanel>
+        </Border>
         <TextBlock x:Name="FailureLine" Style="{StaticResource InkAlertTextStyle}" />
     </StackPanel>
 </UserControl>

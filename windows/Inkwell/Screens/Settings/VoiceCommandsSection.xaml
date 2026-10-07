@@ -8,7 +8,7 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:local="using:Inkwell.Screens"
     Loaded="OnLoaded">
-    <StackPanel Spacing="10">
+    <StackPanel Spacing="14">
         <TextBlock AutomationProperties.HeadingLevel="Level2" Style="{StaticResource InkHeadingStyle}" Text="Voice commands" />
         <!-- The failure wraps beside Start over (a Grid: a horizontal panel would never wrap it). -->
         <Grid ColumnSpacing="10" Visibility="{x:Bind local:SettingsFormat.Shows(Model.Failure), Mode=OneWay}">
@@ -43,20 +43,22 @@
                 <TextBlock VerticalAlignment="Center" Style="{StaticResource InkBodyStyle}" Foreground="{ThemeResource InkSecondaryTextBrush}" Text="{x:Bind Model.StatusLine, Mode=OneWay}" TextWrapping="Wrap" />
             </local:LineOrStackPanel>
         </local:SettingColumnsPanel>
-        <local:SettingColumnsPanel>
-            <TextBlock VerticalAlignment="Center" Style="{StaticResource InkBodyStyle}" Text="Wake word" />
-            <local:LineOrStackPanel>
-                <TextBox
-                    x:Name="Wake"
-                    local:LineOrStackPanel.LineWidth="160"
-                    AutomationProperties.Name="Wake word"
-                    IsEnabled="{x:Bind Model.Loaded, Mode=OneWay}"
-                    KeyDown="OnWakeKeyDown"
-                    PlaceholderText="Wake word"
-                    TextChanged="OnWakeChanged" />
-                <Button x:Name="SaveWake" AutomationProperties.Name="Save the wake word" Click="OnSaveWake" Content="Save" IsEnabled="False" />
-            </local:LineOrStackPanel>
-        </local:SettingColumnsPanel>
+        <Border Style="{StaticResource InkSettingRowStyle}">
+            <local:SettingColumnsPanel>
+                <TextBlock VerticalAlignment="Center" Style="{StaticResource InkBodyStyle}" Text="Wake word" />
+                <local:LineOrStackPanel>
+                    <TextBox
+                        x:Name="Wake"
+                        local:LineOrStackPanel.LineWidth="160"
+                        AutomationProperties.Name="Wake word"
+                        IsEnabled="{x:Bind Model.Loaded, Mode=OneWay}"
+                        KeyDown="OnWakeKeyDown"
+                        PlaceholderText="Wake word"
+                        TextChanged="OnWakeChanged" />
+                    <Button x:Name="SaveWake" AutomationProperties.Name="Save the wake word" Click="OnSaveWake" Content="Save" IsEnabled="False" />
+                </local:LineOrStackPanel>
+            </local:SettingColumnsPanel>
+        </Border>
         <TextBlock Style="{StaticResource InkCaptionStyle}" Text="{x:Bind local:VoiceCommandsSection.FromImportText}" Visibility="{x:Bind Model.FromImport, Mode=OneWay}" />
         <ContentControl x:Name="RowsHost" HorizontalContentAlignment="Stretch" IsTabStop="False">
             <ItemsRepeater x:Name="Rows">

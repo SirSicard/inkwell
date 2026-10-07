@@ -10,7 +10,7 @@
     xmlns:core="using:Inkwell.Core.Screens"
     xmlns:local="using:Inkwell.Screens"
     Loaded="OnLoaded">
-    <StackPanel Spacing="10">
+    <StackPanel Spacing="14">
         <!-- The heading and its line; the line under it where they don't fit side by side. -->
         <local:LineOrStackPanel Fill="1" FillMinimum="150" Spacing="10" StackSpacing="2">
             <TextBlock AutomationProperties.HeadingLevel="Level2" Style="{StaticResource InkHeadingStyle}" Text="Snippets" />

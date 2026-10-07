@@ -14,7 +14,7 @@
             <Setter Property="VerticalAlignment" Value="Top" />
         </Style>
     </UserControl.Resources>
-    <StackPanel Spacing="10">
+    <StackPanel Spacing="14">
         <TextBlock AutomationProperties.HeadingLevel="Level2" Style="{StaticResource InkHeadingStyle}" Text="Sound" />
 
         <local:SettingColumnsPanel>
@@ -46,58 +46,62 @@
             </StackPanel>
         </local:SettingColumnsPanel>
 
-        <local:SettingColumnsPanel x:Name="OutputRow">
-            <TextBlock AutomationProperties.AccessibilityView="Raw" Style="{StaticResource RowLabelStyle}" Text="Their sound from" />
-            <StackPanel Spacing="4">
-                <ComboBox
-                    x:Name="OutputPicker"
-                    MinWidth="0"
-                    MaxWidth="420"
-                    HorizontalAlignment="Stretch"
-                    AutomationProperties.Name="Their sound from"
-                    SelectionChanged="OnOutputChosen" />
-                <TextBlock x:Name="OutputCaption" Style="{StaticResource InkCaptionStyle}" TextWrapping="Wrap" />
-                <TextBlock
-                    x:Name="OutputProblem"
-                    AutomationProperties.LiveSetting="Polite"
-                    Style="{StaticResource InkAlertTextStyle}"
-                    TextWrapping="Wrap" />
-            </StackPanel>
-        </local:SettingColumnsPanel>
-
-        <local:SettingColumnsPanel>
-            <TextBlock AutomationProperties.AccessibilityView="Raw" Style="{StaticResource RowLabelStyle}" Text="Test" />
-            <StackPanel Spacing="4">
-                <!-- The button, then the meter in what it leaves (a Grid, so the meter narrows with the card). -->
-                <Grid ColumnSpacing="12">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="*" />
-                    </Grid.ColumnDefinitions>
-                    <Button x:Name="TestButton" Click="OnTest" />
-                    <!-- Moves only on the core's levels while a test runs; at rest it is drawn once. -->
-                    <ProgressBar
-                        x:Name="Meter"
-                        Grid.Column="1"
-                        MaxWidth="240"
+        <Border x:Name="OutputRow" Style="{StaticResource InkSettingRowStyle}">
+            <local:SettingColumnsPanel>
+                <TextBlock AutomationProperties.AccessibilityView="Raw" Style="{StaticResource RowLabelStyle}" Text="Their sound from" />
+                <StackPanel Spacing="4">
+                    <ComboBox
+                        x:Name="OutputPicker"
+                        MinWidth="0"
+                        MaxWidth="420"
                         HorizontalAlignment="Stretch"
-                        VerticalAlignment="Center"
-                        AutomationProperties.Name="Microphone level"
-                        Maximum="1"
-                        Minimum="0" />
-                </Grid>
-                <!-- How the test went, read as it changes; a problem in the alert colour. -->
-                <TextBlock
-                    x:Name="TestLine"
-                    AutomationProperties.LiveSetting="Polite"
-                    Style="{StaticResource InkCaptionStyle}"
-                    TextWrapping="Wrap" />
-                <TextBlock
-                    x:Name="TestProblem"
-                    AutomationProperties.LiveSetting="Assertive"
-                    Style="{StaticResource InkAlertTextStyle}"
-                    TextWrapping="Wrap" />
-            </StackPanel>
-        </local:SettingColumnsPanel>
+                        AutomationProperties.Name="Their sound from"
+                        SelectionChanged="OnOutputChosen" />
+                    <TextBlock x:Name="OutputCaption" Style="{StaticResource InkCaptionStyle}" TextWrapping="Wrap" />
+                    <TextBlock
+                        x:Name="OutputProblem"
+                        AutomationProperties.LiveSetting="Polite"
+                        Style="{StaticResource InkAlertTextStyle}"
+                        TextWrapping="Wrap" />
+                </StackPanel>
+            </local:SettingColumnsPanel>
+        </Border>
+
+        <Border Style="{StaticResource InkSettingRowStyle}">
+            <local:SettingColumnsPanel>
+                <TextBlock AutomationProperties.AccessibilityView="Raw" Style="{StaticResource RowLabelStyle}" Text="Test" />
+                <StackPanel Spacing="4">
+                    <!-- The button, then the meter in what it leaves (a Grid, so the meter narrows with the card). -->
+                    <Grid ColumnSpacing="12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Button x:Name="TestButton" Click="OnTest" />
+                        <!-- Moves only on the core's levels while a test runs; at rest it is drawn once. -->
+                        <ProgressBar
+                            x:Name="Meter"
+                            Grid.Column="1"
+                            MaxWidth="240"
+                            HorizontalAlignment="Stretch"
+                            VerticalAlignment="Center"
+                            AutomationProperties.Name="Microphone level"
+                            Maximum="1"
+                            Minimum="0" />
+                    </Grid>
+                    <!-- How the test went, read as it changes; a problem in the alert colour. -->
+                    <TextBlock
+                        x:Name="TestLine"
+                        AutomationProperties.LiveSetting="Polite"
+                        Style="{StaticResource InkCaptionStyle}"
+                        TextWrapping="Wrap" />
+                    <TextBlock
+                        x:Name="TestProblem"
+                        AutomationProperties.LiveSetting="Assertive"
+                        Style="{StaticResource InkAlertTextStyle}"
+                        TextWrapping="Wrap" />
+                </StackPanel>
+            </local:SettingColumnsPanel>
+        </Border>
     </StackPanel>
 </UserControl>

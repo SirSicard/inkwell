@@ -15,7 +15,7 @@
             <Setter Property="VerticalAlignment" Value="Top" />
         </Style>
     </UserControl.Resources>
-    <StackPanel Spacing="10">
+    <StackPanel Spacing="14">
         <TextBlock AutomationProperties.HeadingLevel="Level2" Style="{StaticResource InkHeadingStyle}" Text="General" />
 
         <local:SettingColumnsPanel>
@@ -32,48 +32,52 @@
             </StackPanel>
         </local:SettingColumnsPanel>
 
-        <local:SettingColumnsPanel>
-            <TextBlock Style="{StaticResource InkBodyStyle}" Text="Notification area" />
-            <TextBlock
-                MaxWidth="460"
-                HorizontalAlignment="Left"
-                Margin="0,2,0,0"
-                Style="{StaticResource InkCaptionStyle}"
-                Text="Inkwell's icon is always there: closing the window keeps Inkwell listening, and the icon's menu has Quit." />
-        </local:SettingColumnsPanel>
+        <Border Style="{StaticResource InkSettingRowStyle}">
+            <local:SettingColumnsPanel>
+                <TextBlock Style="{StaticResource InkBodyStyle}" Text="Notification area" />
+                <TextBlock
+                    MaxWidth="460"
+                    HorizontalAlignment="Left"
+                    Margin="0,2,0,0"
+                    Style="{StaticResource InkCaptionStyle}"
+                    Text="Inkwell's icon is always there: closing the window keeps Inkwell listening, and the icon's menu has Quit." />
+            </local:SettingColumnsPanel>
+        </Border>
 
         <!-- Updates: the automatic check, then Check Now and where things are, under the switch. -->
-        <local:SettingColumnsPanel>
-            <TextBlock x:Name="AutoCheckLabel" Style="{StaticResource RowLabelStyle}" />
-            <StackPanel Spacing="4">
-                <ToggleSwitch
-                    x:Name="AutoCheckSwitch"
-                    MinWidth="0"
-                    OffContent=""
-                    OnContent=""
-                    Toggled="OnAutoCheckToggled" />
-                <TextBlock x:Name="AutoCheckCaption" Style="{StaticResource InkCaptionStyle}" />
-                <TextBlock x:Name="AutoCheckFailure" Style="{StaticResource InkAlertTextStyle}" />
-                <!-- The line is a live region: Narrator reads each change. It wraps in what the button
-                     leaves (a Grid, not a horizontal panel, which would never wrap it); the button's
-                     margin, not column spacing, so a hidden button leaves no gap. The row collapses
-                     when both are hidden (Render). -->
-                <Grid x:Name="UpdatesRow" Margin="0,4,0,0">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="*" />
-                    </Grid.ColumnDefinitions>
-                    <Button x:Name="UpdatesButton" Margin="0,0,12,0" Click="OnUpdatesAct" />
-                    <TextBlock
-                        x:Name="UpdatesLine"
-                        Grid.Column="1"
-                        VerticalAlignment="Center"
-                        AutomationProperties.LiveSetting="Polite"
-                        Style="{StaticResource InkCaptionStyle}"
-                        TextWrapping="Wrap" />
-                </Grid>
-            </StackPanel>
-        </local:SettingColumnsPanel>
+        <Border Style="{StaticResource InkSettingRowStyle}">
+            <local:SettingColumnsPanel>
+                <TextBlock x:Name="AutoCheckLabel" Style="{StaticResource RowLabelStyle}" />
+                <StackPanel Spacing="4">
+                    <ToggleSwitch
+                        x:Name="AutoCheckSwitch"
+                        MinWidth="0"
+                        OffContent=""
+                        OnContent=""
+                        Toggled="OnAutoCheckToggled" />
+                    <TextBlock x:Name="AutoCheckCaption" Style="{StaticResource InkCaptionStyle}" />
+                    <TextBlock x:Name="AutoCheckFailure" Style="{StaticResource InkAlertTextStyle}" />
+                    <!-- The line is a live region: Narrator reads each change. It wraps in what the button
+                         leaves (a Grid, not a horizontal panel, which would never wrap it); the button's
+                         margin, not column spacing, so a hidden button leaves no gap. The row collapses
+                         when both are hidden (Render). -->
+                    <Grid x:Name="UpdatesRow" Margin="0,4,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Button x:Name="UpdatesButton" Margin="0,0,12,0" Click="OnUpdatesAct" />
+                        <TextBlock
+                            x:Name="UpdatesLine"
+                            Grid.Column="1"
+                            VerticalAlignment="Center"
+                            AutomationProperties.LiveSetting="Polite"
+                            Style="{StaticResource InkCaptionStyle}"
+                            TextWrapping="Wrap" />
+                    </Grid>
+                </StackPanel>
+            </local:SettingColumnsPanel>
+        </Border>
 
         <!-- Inkwell 0.2's history (moved here from Dictation). -->
         <ContentPresenter x:Name="ImportHost" />
