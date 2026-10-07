@@ -405,6 +405,10 @@ public class ModesEditorModelTests
             [FailureCode.ListUnreadable] = "Your modes can't be read, so this wasn't saved. Start over replaces them with the default.",
             [FailureCode.MeetingRecording] = "Couldn't save the mode. Try again.",
             [FailureCode.DeleteWindowOver] = "Couldn't save the mode. Try again.",
+            // The model rows' refusals (a download, a removal), which a save never gets: the general words.
+            [FailureCode.NotEnoughSpace] = "Couldn't save the mode. Try again.",
+            [FailureCode.ModelInUse] = "Couldn't save the mode. Try again.",
+            [FailureCode.NotDownloading] = "Couldn't save the mode. Try again.",
         };
         foreach (var code in Enum.GetValues<FailureCode>())
         {
