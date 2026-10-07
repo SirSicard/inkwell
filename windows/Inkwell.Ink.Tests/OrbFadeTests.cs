@@ -17,6 +17,20 @@ public sealed class OrbFadeTests
         Assert.Equal(0.3f, OrbFade.BehindText(live: true, dimmed: true));
     }
 
+    /// <summary>The user's strength is the opacity at rest; live keeps 3/7 of it up to the default, then climbs to 80 % at the strongest; High Contrast still caps it.</summary>
+    [Fact]
+    public void BehindTextFollowsTheUsersStrength()
+    {
+        Assert.Equal(1f, OrbFade.BehindText(live: false, dimmed: false, rest: 1f));
+        Assert.Equal(0.8f, OrbFade.BehindText(live: true, dimmed: false, rest: 1f), 5);
+        Assert.Equal(0.3f, OrbFade.BehindText(live: true, dimmed: false, rest: 0.7f), 5);
+        Assert.Equal(0.55f, OrbFade.BehindText(live: true, dimmed: false, rest: 0.85f), 5);
+        Assert.Equal(0.3f * 0.4f / 0.7f, OrbFade.BehindText(live: true, dimmed: false, rest: 0.4f), 5);
+        Assert.Equal(0.1f, OrbFade.BehindText(live: false, dimmed: false, rest: 0.1f));
+        Assert.Equal(0.1f, OrbFade.BehindText(live: false, dimmed: false, rest: 0f)); // held at the slider's least
+        Assert.Equal(0.45f, OrbFade.BehindText(live: false, dimmed: true, rest: 1f));
+    }
+
     [Fact]
     public void ItFadesToItsTargetOverEightTenthsOfASecondAndBack()
     {

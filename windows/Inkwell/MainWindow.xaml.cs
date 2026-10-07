@@ -137,10 +137,12 @@ public sealed partial class MainWindow : Window
     }
 
     /// <summary>
-    /// The orb behind the text: 70 % at rest, 30 % while anything is live (dictating, a meeting,
-    /// the final pass), and no more than 45 % under High Contrast, so what is written over it reads.
+    /// The orb behind the text: the user's strength at rest (70 % unless set), less while anything
+    /// is live (dictating, a meeting, the final pass: 30 % at the default, OrbFade.BehindText), and
+    /// no more than 45 % under High Contrast, so what is written over it reads.
     /// </summary>
-    private void DimOrb() => Orb.OrbOpacity = OrbFade.BehindText(Orb.State.IsLive(), theme?.HighContrast == true);
+    private void DimOrb() => Orb.OrbOpacity = OrbFade.BehindText(
+        Orb.State.IsLive(), theme?.HighContrast == true, theme?.OrbStrength ?? OrbFade.RestBehindText);
 
     /// <summary>UI thread. The window was activated: a resting orb that has held its spot for a while moves (OrbWander.RestInterval).</summary>
     internal void WindowActivated() => Orb.Activated();

@@ -111,6 +111,9 @@ pub const SHELL_SETTINGS: &[(&str, &[&str])] = &[
     // `still` draws the orb and the edge glow without motion; `system` follows the system's
     // reduce-motion setting.
     ("appearance.motion", &["system", "still"]),
+    // How strongly the main window's orb shows behind its text, in percent at rest (live it fades
+    // back to 3/7 of that, as at the default 70). Windows only so far; the Mac reads none.
+    ("appearance.orb", ORB_PERCENTS),
     // The typing speed the Stats screen measures time saved against (crate::stats): whole words
     // a minute, 40 unless set.
     (crate::stats::TYPING_WPM_KEY, &[TYPING_WPM]),
@@ -149,6 +152,9 @@ pub const HEX_COLOUR: &str = "#rrggbb";
 /// stored in its one spelling.
 pub const ANY_KEY: &str = "<key>";
 
+/// The values `appearance.orb` takes: 10 to 100 percent in steps of 10.
+pub const ORB_PERCENTS: &[&str] = &["10", "20", "30", "40", "50", "60", "70", "80", "90", "100"];
+
 /// The dot colour presets, by id: the `presets` of design/tokens.json.
 pub const DOT_PRESETS: &[&str] = &[
     "indigo",
@@ -172,6 +178,7 @@ pub const APPEARANCE_DEFAULTS: &[(&str, &str)] = &[
     ("appearance.them.dark", "preset"),
     ("appearance.edge_glow", "on"),
     ("appearance.motion", "system"),
+    ("appearance.orb", "70"),
 ];
 
 /// The longest name `speaker.name` takes, in characters: a person's name, which Ask's transcript
@@ -1497,6 +1504,8 @@ mod tests {
             ("appearance.them.dark", "preset"),
             ("appearance.edge_glow", "off"),
             ("appearance.motion", "still"),
+            ("appearance.orb", "100"),
+            ("appearance.orb", "10"),
         ] {
             assert_eq!(
                 set(key, value),
@@ -1522,6 +1531,9 @@ mod tests {
             ("appearance.them.dark", "indigo"),
             ("appearance.edge_glow", "true"),
             ("appearance.motion", "reduce"),
+            ("appearance.orb", "75"),
+            ("appearance.orb", "0"),
+            ("appearance.orb", "110"),
             ("appearance.accent", "preset"),
         ] {
             assert!(

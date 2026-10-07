@@ -80,6 +80,35 @@
             </local:SettingColumnsPanel>
         </Border>
 
+        <!-- How strongly the window's orb shows behind its text (appearance.orb): 70 % unless set. -->
+        <Border Style="{StaticResource InkSettingRowStyle}">
+            <local:SettingColumnsPanel>
+                <TextBlock AutomationProperties.AccessibilityView="Raw" Style="{StaticResource RowLabelStyle}" Text="The orb" />
+                <StackPanel Spacing="4">
+                    <local:LineOrStackPanel>
+                        <Slider
+                            x:Name="OrbSlider"
+                            local:LineOrStackPanel.LineWidth="320"
+                            VerticalAlignment="Center"
+                            AutomationProperties.Name="How strongly the orb shows behind the text"
+                            IsThumbToolTipEnabled="False"
+                            Maximum="100"
+                            Minimum="10"
+                            StepFrequency="10"
+                            TickFrequency="10"
+                            TickPlacement="Outside"
+                            ValueChanged="OnOrbChanged" />
+                        <TextBlock x:Name="OrbValue" VerticalAlignment="Center" AutomationProperties.AccessibilityView="Raw" Style="{StaticResource InkBodyStyle}" />
+                    </local:LineOrStackPanel>
+                    <TextBlock
+                        MaxWidth="560"
+                        HorizontalAlignment="Left"
+                        Style="{StaticResource InkCaptionStyle}"
+                        Text="How strongly it shows behind the window's text. 70 % is the default, where all text reads over it; stronger, text over its brightest part may read less easily. While something is live it fades back." />
+                </StackPanel>
+            </local:SettingColumnsPanel>
+        </Border>
+
         <Border Style="{StaticResource InkSettingRowStyle}">
             <local:SettingColumnsPanel>
                 <TextBlock AutomationProperties.AccessibilityView="Raw" Style="{StaticResource RowLabelStyle}" Text="The ink moves" />

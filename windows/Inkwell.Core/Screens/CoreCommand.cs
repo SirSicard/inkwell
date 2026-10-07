@@ -780,6 +780,8 @@ public enum ShellSetting
     AppearanceEdgeGlow,
     /// <summary>"system" (the default: Windows' Animation effects) or "still".</summary>
     AppearanceMotion,
+    /// <summary>"10" to "100" in tens ("70" unless set): how strongly the window's orb shows behind its text, at rest.</summary>
+    AppearanceOrb,
     /// <summary>"on" (the default) or "off": local-only mode (Settings > AI's "Nothing leaves this computer").</summary>
     LlmLocalOnly,
     /// <summary>The typing speed the Stats screen measures time saved against: a whole number of words a minute, 10 to 200 (40 unless set).</summary>
@@ -822,6 +824,7 @@ public static class ShellSettings
         ShellSetting.AppearanceThemDark => "appearance.them.dark",
         ShellSetting.AppearanceEdgeGlow => "appearance.edge_glow",
         ShellSetting.AppearanceMotion => "appearance.motion",
+        ShellSetting.AppearanceOrb => "appearance.orb",
         ShellSetting.LlmLocalOnly => "llm.local_only",
         ShellSetting.StatsTypingWpm => "stats.typing_wpm",
         ShellSetting.StatsCelebrate => "stats.celebrate",

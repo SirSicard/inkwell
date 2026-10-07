@@ -60,6 +60,9 @@ internal sealed class GlowTheme
     /// <summary>Whether the window's edge glows while something is live.</summary>
     public bool EdgeGlow => appearance.EdgeGlow;
 
+    /// <summary>How strongly the window's orb shows behind its text at rest, 0.1 to 1 (Settings > Appearance).</summary>
+    public float OrbStrength => appearance.OrbStrength / 100f;
+
     /// <summary>The user's Always still.</summary>
     public bool AlwaysStill => appearance.Motion == AppearanceMotion.Still;
 

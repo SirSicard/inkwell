@@ -362,10 +362,11 @@ and the appearance settings: `appearance.mode` (`light`, `dark` or `system`),
 `appearance.dots.light` and `appearance.dots.dark` (a preset from
 [`design/tokens.json`](../design/tokens.json)), `appearance.you.light`, `appearance.them.light`,
 `appearance.you.dark` and `appearance.them.dark` (`preset`, or a `#rrggbb` colour in lowercase),
-`appearance.edge_glow` (`on` or `off`) and `appearance.motion` (`system` or `still`). The core
-does nothing with the appearance settings itself. A setting never set answers `setting.value`
-without a value, and the shell reads it as its default (for appearance, `APPEARANCE_DEFAULTS`:
-`system`, `indigo`, `preset`, `on` and `system`).
+`appearance.edge_glow` (`on` or `off`), `appearance.motion` (`system` or `still`) and
+`appearance.orb` (the main window's orb behind its text, `10` to `100` percent in tens; Windows
+reads it). The core does nothing with the appearance settings itself. A setting never set answers
+`setting.value` without a value, and the shell reads it as its default (for appearance,
+`APPEARANCE_DEFAULTS`: `system`, `indigo`, `preset`, `on`, `system` and `70`).
 
 - They run on their own core thread, `ink-queries`, in order among themselves. The command thread
   can be held for minutes by a model download; a note or a permission card never waits for it.
