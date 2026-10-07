@@ -230,6 +230,8 @@ public sealed record VoiceCommandItem(VoiceCommandDraft Row)
 {
     public string Id => Row.Id;
     public string Triggers => string.Join(" · ", Row.Triggers);
+    public string PrimaryTrigger => Row.Triggers.Count > 0 ? Row.Triggers[0] : "";
+    public string Aliases => Row.Triggers.Count > 1 ? $"Also: {string.Join(" · ", Row.Triggers.Skip(1))}" : "";
     public string Does => VoiceCommandsModel.Describe(Row);
     public bool Enabled => Row.Enabled;
     public bool NotCarriedOut => !Row.CarriedOut;

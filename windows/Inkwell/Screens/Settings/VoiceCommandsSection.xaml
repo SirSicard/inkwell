@@ -44,20 +44,19 @@
             </local:LineOrStackPanel>
         </local:SettingColumnsPanel>
         <Border Style="{StaticResource InkSettingRowStyle}">
-            <local:SettingColumnsPanel>
-                <TextBlock VerticalAlignment="Center" Style="{StaticResource InkBodyStyle}" Text="Wake word" />
+            <StackPanel Spacing="6">
+                <TextBlock Style="{StaticResource InkBodyStyle}" Text="Wake word" />
                 <local:LineOrStackPanel>
                     <TextBox
                         x:Name="Wake"
-                        local:LineOrStackPanel.LineWidth="160"
+                        local:LineOrStackPanel.LineWidth="220"
                         AutomationProperties.Name="Wake word"
                         IsEnabled="{x:Bind Model.Loaded, Mode=OneWay}"
                         KeyDown="OnWakeKeyDown"
-                        PlaceholderText="Wake word"
                         TextChanged="OnWakeChanged" />
-                    <Button x:Name="SaveWake" AutomationProperties.Name="Save the wake word" Click="OnSaveWake" Content="Save" IsEnabled="False" />
+                    <Button x:Name="SaveWake" MinHeight="36" VerticalAlignment="Top" AutomationProperties.Name="Save the wake word" Click="OnSaveWake" Content="Save" IsEnabled="False" />
                 </local:LineOrStackPanel>
-            </local:SettingColumnsPanel>
+            </StackPanel>
         </Border>
         <TextBlock Style="{StaticResource InkCaptionStyle}" Text="{x:Bind local:VoiceCommandsSection.FromImportText}" Visibility="{x:Bind Model.FromImport, Mode=OneWay}" />
         <ContentControl x:Name="RowsHost" HorizontalContentAlignment="Stretch" IsTabStop="False">
@@ -72,23 +71,26 @@
                             BorderThickness="0,0,0,1"
                             Tag="{x:Bind Id}">
                             <local:SettingColumnsPanel TitleColumn="220">
-                                <TextBlock FontFamily="{StaticResource InkMonoFontFamily}" Opacity="{x:Bind local:SettingsFormat.Dimmed(Enabled)}" Style="{StaticResource InkBodyStyle}" Text="{x:Bind Triggers}" TextWrapping="Wrap" />
+                                <StackPanel VerticalAlignment="Center" Spacing="4" Opacity="{x:Bind local:SettingsFormat.Dimmed(Enabled)}">
+                                    <TextBlock Style="{StaticResource InkBodyStyle}" Text="{x:Bind PrimaryTrigger}" />
+                                    <TextBlock Style="{StaticResource InkCaptionStyle}" Text="{x:Bind Aliases}" Visibility="{x:Bind local:SettingsFormat.Shows(Aliases)}" />
+                                </StackPanel>
                                 <local:LineOrStackPanel Fill="0" FillMinimum="140">
-                                    <StackPanel Spacing="2">
-                                        <TextBlock MaxLines="2" Opacity="{x:Bind local:SettingsFormat.Dimmed(Enabled)}" Style="{StaticResource InkBodyStyle}" Text="{x:Bind Does}" TextTrimming="CharacterEllipsis" />
+                                    <StackPanel VerticalAlignment="Center" Spacing="4">
+                                        <TextBlock Opacity="{x:Bind local:SettingsFormat.Dimmed(Enabled)}" Style="{StaticResource InkBodyStyle}" Text="{x:Bind Does}" />
                                         <TextBlock Style="{StaticResource InkCaptionStyle}" Text="Its action comes in a later version. While on, saying it types nothing." Visibility="{x:Bind NotCarriedOut}" />
                                     </StackPanel>
-                                    <StackPanel VerticalAlignment="Top" Orientation="Horizontal" Spacing="12">
+                                    <StackPanel VerticalAlignment="Center" Orientation="Horizontal" Spacing="12">
                                         <ToggleSwitch
                                             x:Name="Toggle"
                                             MinWidth="0"
-                                            VerticalAlignment="Top"
+                                            VerticalAlignment="Center"
                                             AutomationProperties.Name="{x:Bind Name}"
                                             IsOn="{x:Bind Enabled}"
                                             OffContent=""
                                             OnContent=""
                                             Toggled="OnToggled" />
-                                        <Button x:Name="Delete" VerticalAlignment="Top" Click="OnDelete" Content="Delete" />
+                                        <Button x:Name="Delete" MinHeight="36" VerticalAlignment="Center" Click="OnDelete" Content="Delete" />
                                     </StackPanel>
                                 </local:LineOrStackPanel>
                             </local:SettingColumnsPanel>
@@ -98,15 +100,24 @@
             </ItemsRepeater>
         </ContentControl>
         <ContentControl x:Name="AddHost" Margin="0,4,0,0" HorizontalContentAlignment="Stretch" IsTabStop="False">
-            <!-- One line, or one field under another at the narrowest window. -->
-            <local:LineOrStackPanel Fill="2" FillMinimum="120" Spacing="8">
-                <TextBox x:Name="NewTriggers" local:LineOrStackPanel.LineWidth="200" AutomationProperties.Name="Phrases, comma-separated" PlaceholderText="Phrases, comma-separated" TextChanged="OnNewChanged" />
-                <ComboBox x:Name="NewAction" AutomationProperties.Name="Does" SelectedIndex="0" SelectionChanged="OnNewActionChanged">
-                    <x:String>Type text</x:String>
-                    <x:String>Switch style</x:String>
-                </ComboBox>
-                <TextBox x:Name="NewValue" AutomationProperties.Name="Text to type" PlaceholderText="Text to type" TextChanged="OnNewChanged" />
-                <Button x:Name="Add" AutomationProperties.Name="Add a voice command" Click="OnAdd" Content="Add" IsEnabled="False" />
+            <!-- Labels stay visible after typing. Each field stacks at the narrowest window. -->
+            <local:LineOrStackPanel Fill="2" FillMinimum="150" Spacing="8" StackSpacing="10">
+                <StackPanel local:LineOrStackPanel.LineWidth="200" Spacing="6">
+                    <TextBlock Style="{StaticResource InkCaptionStyle}" Text="Phrases (comma-separated)" />
+                    <TextBox x:Name="NewTriggers" AutomationProperties.Name="Phrases, comma-separated" TextChanged="OnNewChanged" />
+                </StackPanel>
+                <StackPanel local:LineOrStackPanel.LineWidth="130" Spacing="6">
+                    <TextBlock Style="{StaticResource InkCaptionStyle}" Text="Action" />
+                    <ComboBox x:Name="NewAction" HorizontalAlignment="Stretch" AutomationProperties.Name="Action" SelectedIndex="0" SelectionChanged="OnNewActionChanged">
+                        <x:String>Type text</x:String>
+                        <x:String>Switch style</x:String>
+                    </ComboBox>
+                </StackPanel>
+                <StackPanel Spacing="6">
+                    <TextBlock x:Name="NewValueLabel" Style="{StaticResource InkCaptionStyle}" Text="Text to type" />
+                    <TextBox x:Name="NewValue" AutomationProperties.Name="Text to type" TextChanged="OnNewChanged" />
+                </StackPanel>
+                <Button x:Name="Add" MinHeight="36" VerticalAlignment="Bottom" AutomationProperties.Name="Add a voice command" Click="OnAdd" Content="Add" IsEnabled="False" />
             </local:LineOrStackPanel>
         </ContentControl>
     </StackPanel>

@@ -103,7 +103,7 @@ public sealed partial class VoiceCommandsSection : UserControl
             return;
         }
         var text = ActionAt(NewAction.SelectedIndex) == CommandAction.InsertText ? "Text to type" : "Style or mode name";
-        NewValue.PlaceholderText = text;
+        NewValueLabel.Text = text;
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(NewValue, text);
     }
 
