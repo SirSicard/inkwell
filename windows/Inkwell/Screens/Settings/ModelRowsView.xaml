@@ -9,14 +9,20 @@
     xmlns:local="using:Inkwell.Screens">
     <ItemsRepeater x:Name="Rows">
         <ItemsRepeater.Layout>
-            <StackLayout Spacing="8" />
+            <StackLayout Spacing="16" />
         </ItemsRepeater.Layout>
         <ItemsRepeater.ItemTemplate>
             <DataTemplate x:DataType="local:ModelRowItem">
                 <!-- The model's lines and its button; the button under them at the narrowest. -->
                 <local:LineOrStackPanel Fill="0" FillMinimum="160" Tag="{x:Bind Id}">
                     <StackPanel VerticalAlignment="Center" Spacing="4">
-                        <TextBlock Style="{StaticResource InkCaptionStyle}" Text="{x:Bind Text}" />
+                        <local:LineOrStackPanel Fill="0" FillMinimum="160" Spacing="8">
+                            <TextBlock Style="{StaticResource InkBodyStyle}" FontWeight="SemiBold" Text="{x:Bind Row.Name}" />
+                            <Border Padding="8,2" CornerRadius="8" HorizontalAlignment="Left" Background="{ThemeResource InkChipBrush}" Visibility="{x:Bind local:SettingsFormat.ShowsIf(Row.Installed)}">
+                                <TextBlock Style="{StaticResource InkCaptionStyle}" Text="Installed" />
+                            </Border>
+                        </local:LineOrStackPanel>
+                        <TextBlock Style="{StaticResource InkCaptionStyle}" Text="{x:Bind local:ModelRowsView.Metadata(Row)}" />
                         <TextBlock Style="{StaticResource InkCaptionStyle}" Text="{x:Bind From}" Visibility="{x:Bind local:SettingsFormat.Shows(From)}" />
                         <ProgressBar
                             AutomationProperties.Name="{x:Bind ProgressName}"

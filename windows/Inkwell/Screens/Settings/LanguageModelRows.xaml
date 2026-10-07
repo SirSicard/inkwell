@@ -72,7 +72,14 @@
         </StackPanel>
         <!-- This PC's own model, while it is in the picker (Settings only). -->
         <StackPanel x:Name="LocalPanel" Spacing="6" Visibility="Collapsed">
+            <local:LineOrStackPanel Fill="0" FillMinimum="160" Spacing="8">
+                <TextBlock x:Name="LocalName" Style="{StaticResource InkBodyStyle}" FontWeight="SemiBold" />
+                <Border x:Name="LocalInstalled" Padding="8,2" CornerRadius="8" HorizontalAlignment="Left" Background="{ThemeResource InkChipBrush}">
+                    <TextBlock Style="{StaticResource InkCaptionStyle}" Text="Installed" />
+                </Border>
+            </local:LineOrStackPanel>
             <TextBlock x:Name="LocalLine" Style="{StaticResource InkCaptionStyle}" />
+            <TextBlock x:Name="LocalSource" Style="{StaticResource InkCaptionStyle}" />
             <ProgressBar x:Name="LocalProgress" MaxWidth="360" HorizontalAlignment="Stretch" Maximum="1" />
             <TextBlock x:Name="LocalStatus" Style="{StaticResource InkCaptionStyle}" />
             <TextBlock x:Name="LocalFreeSpace" Style="{StaticResource InkCaptionStyle}" />

@@ -23,6 +23,10 @@ public sealed partial class ModelRowsView : UserControl
         Render();
     }
 
+    /// <summary>Secondary details keep the model's name and installed state easy to scan.</summary>
+    public static string Metadata(ModelRow row) =>
+        $"{StorageModel.Size(row.Entry.SizeBytes, System.Globalization.CultureInfo.CurrentCulture)} · {row.Entry.Licence}";
+
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
         // Loaded can come twice without Unloaded between: one subscription only.

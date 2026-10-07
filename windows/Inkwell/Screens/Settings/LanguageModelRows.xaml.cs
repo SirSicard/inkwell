@@ -152,7 +152,10 @@ public sealed partial class LanguageModelRows : UserControl
             return;
         }
         var format = System.Globalization.CultureInfo.CurrentCulture;
-        LocalLine.Text = local.Line(format) ?? "";
+        LocalName.Text = row.Name;
+        LocalInstalled.Visibility = Visible(row.Installed);
+        LocalLine.Text = ModelRowsView.Metadata(row);
+        Line(LocalSource, $"From {CatalogueModel.Source(row.Id)}", false);
         LocalProgress.Visibility = Visible(local.Progress is not null);
         LocalProgress.Value = local.Progress ?? 0;
         AutomationProperties.SetName(LocalProgress, row.ProgressName);
