@@ -173,7 +173,7 @@ fn an_installed_language_model_is_engine_local_and_the_ai_settings_model() {
         ink_ffi::engines::context_tokens(rig.core().shared()),
         ink_ffi::local::LOCAL_CONTEXT_TOKENS
     );
-    assert_eq!(ink_ffi::local::LOCAL_CONTEXT_TOKENS, 4_096);
+    assert_eq!(ink_ffi::local::LOCAL_CONTEXT_TOKENS, 8_192);
     assert_eq!(rig.local.loads(), 0, "listing never loads it");
     rig.finish();
 }

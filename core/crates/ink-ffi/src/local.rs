@@ -43,9 +43,10 @@ pub type LocalModel = Box<dyn Llm>;
 /// `polish_model`, whichever row is installed.
 pub const LOCAL_ID: &str = "local";
 
-/// The context the local model is given, in tokens: the same as Apple's on-device model, so a
-/// long meeting's summary is written in the windows already proven on the Mac.
-pub const LOCAL_CONTEXT_TOKENS: u32 = 4_096;
+/// The context the local model is given, in tokens. Twice Apple's on-device model's 4,096: with
+/// those windows, the bench's 34-minute meeting got no summary (its first window's answer ran past
+/// the token budget); with 8,192 it is summarized in 13 s on an RTX 3090 (round-5 bench, Qwen3-4B).
+pub const LOCAL_CONTEXT_TOKENS: u32 = 8_192;
 
 /// The core's setting naming the language row last installed, the one in use while it is
 /// installed. Not a shell setting.

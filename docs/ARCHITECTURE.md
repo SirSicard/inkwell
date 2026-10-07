@@ -328,8 +328,8 @@ no speech job, so the router never picks it. The Mac lists none: Apple's model d
   call. It loads on first use, or at the start of a take that will polish or edit on it under a
   consent that covers it, and unloads after five idle minutes: one thread, `ink-llm-local`,
   sleeps until the next unload is due or a take or a call wakes it. Shutdown unloads it.
-- **Context** 4,096 tokens, as Apple's model, so summaries are written in the windows proven on
-  the Mac. Every answer has a think block at its start taken off (an unclosed one is an error);
+- **Context** 8,192 tokens, twice Apple's model's: in 4,096-token windows a 34-minute meeting's
+  first window ran past its answer budget and got no summary. Every answer has a think block at its start taken off (an unclosed one is an error);
   a row for a hybrid thinking model would also get the empty think block its template writes
   for `enable_thinking=false` (`ChatQuirks::no_think`). A structured answer is held to one JSON
   object by a grammar applied only to a token sampled freely that breaks it.
