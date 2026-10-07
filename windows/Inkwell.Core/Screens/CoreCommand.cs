@@ -13,6 +13,17 @@ public abstract record CoreCommand
 {
     private CoreCommand() { }
 
+    public sealed record MeetingsShortcutSuspend(bool Suspended, string? Id = null) : CoreCommand
+    {
+        public override string Name => "meetings.shortcut.suspend";
+        private protected override IEnumerable<(string Key, object Value)> Fields()
+        {
+            yield return ("cmd", Name);
+            yield return ("suspended", Suspended);
+            if (Id is not null) yield return ("id", Id);
+        }
+    }
+
     /// <summary>The command's name, for a log line (never its fields: a note's words travel in them).</summary>
     public abstract string Name { get; }
 
@@ -751,6 +762,7 @@ public enum ShellSetting
     /// replaced "meetings.detect" ("Offer to record calls"), which the core migrates.
     /// </summary>
     MeetingsCallsDefault,
+    MeetingsKey,
     /// <summary>"on" once the reminder to tell the others has been shown during a call its app's Always recorded: it shows on the first such call only (MeetingModel).</summary>
     MeetingsAutoReminderShown,
     /// <summary>"on" or "off": the switch for a meeting's summary and Ask. Only "off" is set this way.</summary>
@@ -812,6 +824,7 @@ public static class ShellSettings
     {
         ShellSetting.OnboardingDone => "onboarding.done",
         ShellSetting.DictationPolish => "dictation.polish",
+        ShellSetting.MeetingsKey => "meetings.key",
         ShellSetting.MeetingsCallsDefault => "meetings.calls.default",
         ShellSetting.MeetingsAutoReminderShown => "meetings.auto_reminder_shown",
         ShellSetting.MeetingsLlm => "meetings.llm",

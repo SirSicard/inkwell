@@ -54,6 +54,7 @@ pub const SHELL_SETTINGS: &[(&str, &[&str])] = &[
     // one edits nothing (crate::consent).
     (crate::voice::KEY_SETTING, &[ANY_KEY]),
     (crate::voice::EDIT_KEY_SETTING, &["off", ANY_KEY]),
+    (crate::meeting_keys::KEY_SETTING, &["off", ANY_KEY]),
     // Whether the shell turns dictation on at launch (Settings > Voice). The shell reads it and
     // sends dictation.enable or not; the core does nothing with it itself.
     ("dictation.enabled", &["on", "off"]),
@@ -289,6 +290,11 @@ pub enum Query {
     },
     /// `dictation.disable`.
     DictationDisable,
+    /// Ordered after dictation.disable when capturing a shortcut.
+    MeetingShortcutSuspend {
+        /// Whether capture is in progress.
+        suspended: bool,
+    },
     /// `consent.get`: a feature's switch, destination and consent ([`crate::consent::state`]).
     ConsentGet(ink_pipeline::consent::Feature),
     /// `consent.allow`: the user agreed a feature may send where its model goes now.
@@ -341,6 +347,7 @@ fn fields(name: &str) -> Option<&'static [&'static str]> {
         "hotkey.check" => &["binding"],
         "dictation.enable" => &["utc_offset_minutes"],
         "dictation.disable" => &[],
+        "meetings.shortcut.suspend" => &["suspended"],
         "consent.get" => &["feature"],
         "consent.allow" => &["feature", "to", "endpoint", "key"],
         "consent.revoke" => &["feature", "to", "endpoint"],
@@ -486,9 +493,7 @@ fn parse_known(name: &str, allowed: &[&str], v: &Value) -> Result<Query, String>
         "setting.set" => {
             let key = shell_setting(name, &text("key")?)?;
             let mut value = text("value")?;
-            if key == crate::voice::KEY_SETTING
-                || (key == crate::voice::EDIT_KEY_SETTING && value != "off")
-            {
+            if crate::hotkey::is_key_setting(&key) && value != "off" {
                 // A key is judged by the platform's own parser and stored in its one spelling;
                 // the refusal says why, in its words.
                 value = crate::hotkey::stored_value(&value)
@@ -535,6 +540,12 @@ fn parse_known(name: &str, allowed: &[&str], v: &Value) -> Result<Query, String>
             },
         },
         "dictation.disable" => Query::DictationDisable,
+        "meetings.shortcut.suspend" => Query::MeetingShortcutSuspend {
+            suspended: obj
+                .get("suspended")
+                .and_then(Value::as_bool)
+                .ok_or_else(|| format!("{name}: needs a boolean suspended"))?,
+        },
         "consent.get" => Query::ConsentGet(feature(name, &text("feature")?)?),
         "consent.revoke" => Query::ConsentRevoke(
             feature(name, &text("feature")?)?,
@@ -944,7 +955,13 @@ impl Ctx<'_> {
             } else {
                 store.setting(&key).map_err(|e| e.to_string())
             } {
-                Ok(value) => emit(setting(&key, value)),
+                Ok(value) => {
+                    emit(setting(&key, value));
+                    if key == crate::meeting_keys::KEY_SETTING {
+                        self.shared
+                            .tell_meetings(crate::control::Msg::ShortcutState { id: id.clone() });
+                    }
+                }
                 Err(e) => fail(e),
             },
             Query::SettingSet { key, value } => {
@@ -963,6 +980,11 @@ impl Ctx<'_> {
                     _ if key == crate::control::DETECT_KEY => {
                         crate::calls::set_detect(store, &value)
                     }
+                    _ if crate::hotkey::is_key_setting(&key) => {
+                        crate::hotkey::unique_setting(store, &key, &value).and_then(|()| {
+                            store.set_setting(&key, &value).map_err(|e| e.to_string())
+                        })
+                    }
                     _ => store.set_setting(&key, &value).map_err(|e| e.to_string()),
                 } {
                     Ok(()) => {
@@ -973,6 +995,10 @@ impl Ctx<'_> {
                         let sweep = key == crate::retention::RETENTION_KEY;
                         let switched = crate::consent::feature_switched_by(&key);
                         emit(setting(&key, Some(value)));
+                        if crate::hotkey::is_key_setting(&key) {
+                            self.shared
+                                .tell_meetings(crate::control::Msg::ShortcutReload);
+                        }
                         if calls {
                             if key == crate::control::DETECT_KEY {
                                 // The default it set, for a screen that shows the default.
@@ -1012,6 +1038,13 @@ impl Ctx<'_> {
                 crate::voice::enable(self.shared, self.models, utc_offset_minutes, id.as_deref())
             }
             Query::DictationDisable => crate::voice::disable(self.shared, id.as_deref()),
+            Query::MeetingShortcutSuspend { suspended } => {
+                self.shared
+                    .tell_meetings(crate::control::Msg::ShortcutSuspend {
+                        id: id.clone(),
+                        suspended,
+                    })
+            }
             Query::ConsentGet(feature) => {
                 emit(crate::consent::state(self.shared, feature, id.as_deref()))
             }

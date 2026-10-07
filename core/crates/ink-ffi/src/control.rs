@@ -105,6 +105,22 @@ fn start_app(app_id: &str, offered: Option<&AppRef>) -> AppRef {
 
 /// A message to the meetings thread.
 pub enum Msg {
+    /// Bind after startup or a confirmed shortcut-setting change.
+    ShortcutReload,
+    /// Suspend all meeting key actions while the shell records a new shortcut.
+    ShortcutSuspend {
+        /// The command id, acknowledged after the hook stops or resumes.
+        id: Option<String>,
+        /// Whether the shell is capturing a shortcut.
+        suspended: bool,
+    },
+    /// Answer a settings screen without resetting a held key.
+    ShortcutState {
+        /// The query id.
+        id: Option<String>,
+    },
+    /// A global shortcut callback; its binding identity is checked on this thread.
+    Shortcut(crate::meeting_keys::KeyEvent),
     /// `meeting.start`.
     Start {
         /// The command's id.
@@ -199,6 +215,7 @@ struct Recovery {
 
 /// What the thread owns.
 struct State {
+    keys: crate::meeting_keys::MeetingKeys,
     shared: Arc<Shared>,
     runs: Arc<Mutex<Runs>>,
     capture: Arc<dyn MeetingCapture>,
@@ -228,10 +245,12 @@ impl Control {
         runs: Arc<Mutex<Runs>>,
         capture: Arc<dyn MeetingCapture>,
         detector: Option<Arc<dyn MeetingDetector>>,
+        keys: Option<Arc<dyn ink_core::HotkeySource>>,
     ) -> io::Result<Self> {
         let (tx, rx) = mpsc::channel();
         let recovery: Arc<Mutex<Recovery>> = Arc::default();
         let state = State {
+            keys: crate::meeting_keys::MeetingKeys::new(keys),
             shared,
             runs,
             capture,
@@ -323,6 +342,7 @@ impl State {
     }
 
     fn quit(mut self) {
+        self.keys.stop();
         self.listen(false, None);
     }
 
@@ -339,6 +359,22 @@ impl State {
 
     fn handle(&mut self, msg: Msg) {
         match msg {
+            Msg::ShortcutReload => self.bind_shortcut(None),
+            Msg::ShortcutState { id } => self.shared.events.emit(self.keys.state(id.as_deref())),
+            Msg::ShortcutSuspend { id, suspended } => {
+                self.keys.suspend(suspended);
+                self.bind_shortcut(id.as_deref());
+            }
+            Msg::Shortcut(crate::meeting_keys::KeyEvent::Pressed(generation)) => {
+                if self.keys.accepts(generation) {
+                    self.toggle_shortcut();
+                }
+            }
+            Msg::Shortcut(crate::meeting_keys::KeyEvent::Lost(generation)) => {
+                if self.keys.lost(generation) {
+                    self.shared.events.emit(self.keys.state(None));
+                }
+            }
             Msg::Start { id, app, title } => self.start(id.as_deref(), app, title),
             Msg::Stop { id } => self.stop(id.as_deref()),
             Msg::Discard { id } => self.discard(id.as_deref()),
@@ -387,6 +423,33 @@ impl State {
             }
             Msg::Quit => {}
         }
+    }
+
+    fn bind_shortcut(&mut self, reference: Option<&str>) {
+        let tx = self.tx.clone();
+        self.keys.bind(
+            self.shared.store.as_ref(),
+            Arc::new(move |event| {
+                // A disconnected receiver means shutdown; no audio or model work on the hook thread.
+                if tx.send(Msg::Shortcut(event)).is_err() {
+                    log::debug!("meeting shortcut: meetings thread stopped");
+                }
+            }),
+        );
+        self.shared.events.emit(self.keys.state(reference));
+    }
+
+    fn toggle_shortcut(&mut self) {
+        let (capturing, over) = lock(&self.runs)
+            .meeting
+            .as_ref()
+            .map_or((false, true), |m| (m.is_capturing(), m.is_over()));
+        if capturing {
+            self.stop(None);
+        } else if over {
+            self.start(None, None, None);
+        }
+        // While capture is stopping or its final pass runs, another press starts nothing.
     }
 
     /// Runs what detection decided.

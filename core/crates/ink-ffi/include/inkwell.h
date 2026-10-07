@@ -155,6 +155,17 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *
  *   Meetings run on their own thread (starting one never waits behind a model download), and
  *   questions about one on another. A failure is "command.failed" with the "id".
+ *   {"cmd":"meetings.shortcut.suspend","suspended":true,"id":"<ref>"}
+ *       Windows' global meeting shortcut is independent of dictation: setting meetings.key
+ *       defaults to ctrl+shift+r; off disables it. A fresh press starts a manual recording,
+ *       or stops capture; repeats and presses while stopping/finalizing do neither.
+ *       A chord held when its hook is resumed must be released before a fresh press can act.
+ *       meetings.shortcut.state gives key, active, suspended, an optional error, and ref.
+ *       Suspend runs on the queries thread after a preceding dictation.disable; the ref
+ *       acknowledgement is emitted only after both hooks have stopped. Resume with false.
+ *       A setting.get for meetings.key also returns current shortcut state, without rebinding.
+ *       Meeting, dictation and edit shortcuts must be distinct in the platform's canonical
+ *       spelling. Unreadable conflicts refuse a write; a failed save leaves the old hook held.
  *   {"cmd":"meeting.start","app":"<app id>","title":"..."}
  *       Records a meeting from this machine: the mic ("audio.input"; Automatic records the
  *       built-in one with Bluetooth output) and the far end ("app", when the start answers a

@@ -214,6 +214,9 @@ pub fn check_key(feature: Feature, key: Option<&str>) -> Result<Option<String>, 
 /// to, the model changed while the user read (the shell asks again), or the store refused (then
 /// nothing is saved).
 pub fn allow(shared: &Shared, allow: &Allow, reference: Option<&str>) -> Result<Value, String> {
+    if let (Feature::Edit, Some(key)) = (allow.feature, allow.key.as_deref()) {
+        crate::hotkey::unique_setting(shared.store.as_ref(), crate::voice::EDIT_KEY_SETTING, key)?;
+    }
     let feature = allow.feature;
     if shared.llms.choices().is_empty() {
         return Err(format!(

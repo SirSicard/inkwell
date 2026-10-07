@@ -146,6 +146,8 @@ pub struct MeetingPlatform {
     pub capture: Arc<dyn MeetingCapture>,
     /// Watches for apps taking the mic, when the platform has a detector.
     pub detector: Option<Arc<dyn MeetingDetector>>,
+    /// A global manual meeting shortcut, independent of dictation.
+    pub keys: Option<Arc<dyn ink_core::HotkeySource>>,
 }
 
 impl Default for MeetingPlatform {
@@ -154,6 +156,7 @@ impl Default for MeetingPlatform {
         Self {
             capture: Arc::new(NoCapture),
             detector: None,
+            keys: None,
         }
     }
 }
@@ -169,6 +172,8 @@ impl MeetingPlatform {
                 ink_platform_mac::MacCapture::new(clock),
             )),
             detector: Some(Arc::new(ink_platform_mac::MacMeetingDetector::new())),
+            // The Windows shortcut settings do not change the Mac shell's existing shortcuts.
+            keys: None,
         })
     }
 
@@ -183,6 +188,7 @@ impl MeetingPlatform {
                 ink_platform_win::WinCapture::new(clock),
             )),
             detector: Some(Arc::new(ink_platform_win::WinMeetingDetector::new())),
+            keys: Some(Arc::new(ink_platform_win::WinHotkeySource::new(clock))),
         })
     }
 
@@ -769,6 +775,7 @@ impl Core {
             runs.clone(),
             meetings.capture,
             meetings.detector,
+            meetings.keys,
         )?;
         let _ = shared.control.set(Mutex::new(control.sender()));
         let asking = Asking::start(shared.clone(), runs.clone())?;
@@ -776,6 +783,9 @@ impl Core {
         let local_thread = crate::local::LocalThread::start(shared.clone())?;
         let sound = crate::sound::SoundThread::start(shared.clone(), runs.clone())?;
         shared.events.emit(events::ready());
+        control
+            .send(Msg::ShortcutReload)
+            .map_err(io::Error::other)?;
         // Detection follows the call policies (crate::calls): it listens while any app could be
         // offered or recorded, which with no choices made is the old switch, on unless turned off
         // (migrated into the default here, once). What it finds is offered only once the shell is

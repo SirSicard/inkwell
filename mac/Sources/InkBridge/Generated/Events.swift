@@ -201,6 +201,8 @@ public enum InkEvent: Codable, Sendable, Equatable {
     case statsCounted(StatsCounted)
     /// `milestones.reached`
     case milestonesReached(MilestonesReached)
+    /// `meetings.shortcut.state`
+    case meetingsShortcutState(MeetingsShortcutState)
     /// An event this build does not know. The core and the shell ship together, so this
     /// means a mismatched build.
     case unknown(type: String)
@@ -320,6 +322,7 @@ public enum InkEvent: Codable, Sendable, Equatable {
             case "library.swept": self = .librarySwept(try LibrarySwept(from: decoder))
             case "stats.counted": self = .statsCounted(try StatsCounted(from: decoder))
             case "milestones.reached": self = .milestonesReached(try MilestonesReached(from: decoder))
+            case "meetings.shortcut.state": self = .meetingsShortcutState(try MeetingsShortcutState(from: decoder))
             default: self = .unknown(type: type)
             }
         } catch {
@@ -425,6 +428,7 @@ public enum InkEvent: Codable, Sendable, Equatable {
         case .librarySwept(let event): try event.encode(to: encoder)
         case .statsCounted(let event): try event.encode(to: encoder)
         case .milestonesReached(let event): try event.encode(to: encoder)
+        case .meetingsShortcutState(let event): try event.encode(to: encoder)
         case .unknown(let type):
             var keys = encoder.container(keyedBy: TypeKey.self)
             try keys.encode(type, forKey: .type)
@@ -2823,6 +2827,23 @@ public struct MeetingsRecovered: Codable, Sendable, Equatable {
     /// what failed, never a meeting's words.
     public let message: String?
     /// Always `meetings.recovered`.
+    public let type: String
+}
+
+/// The confirmed global meeting shortcut and whether it is held. Suspension acknowledges that
+/// no meeting shortcut can fire while the shell records a new key.
+public struct MeetingsShortcutState: Codable, Sendable, Equatable {
+    /// The global hook is held and can toggle recording.
+    public let active: Bool
+    /// Why the configured shortcut could not be held.
+    public let error: String?
+    /// The configured canonical shortcut, or off.
+    public let key: String
+    /// The suspend/resume command id, when answering one.
+    public let ref: String?
+    /// The shell suspended the hook while recording a shortcut.
+    public let suspended: Bool
+    /// Always `meetings.shortcut.state`.
     public let type: String
 }
 

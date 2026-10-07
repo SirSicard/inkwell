@@ -6,8 +6,8 @@
 // when the store, the router, the owed list or the appearance does.
 //
 // The window's keys (Windows has no menu bar; the title bar's "…" lists them under File and View):
-// Ctrl+1–4 the routes, Ctrl+, Settings, Ctrl+F the search, Ctrl+Shift+R Record now, Ctrl+. Stop.
-// While Live shows, Ctrl+1–4 and Ctrl+. are its own (the asks it answers, and Stop).
+// Ctrl+1–4 the routes, Ctrl+, Settings, Ctrl+F the search. The core owns the configurable global meeting toggle.
+// While Live shows, Ctrl+1–4 are its own (the asks it answers).
 using Inkwell.Core;
 using Inkwell.Core.Screens;
 using Inkwell.Ink;
@@ -31,7 +31,7 @@ public sealed partial class MainWindow : Window
     private readonly InfoBadge liveDot = new() { Value = -1 };
     private readonly Storyboard pulse = new() { RepeatBehavior = RepeatBehavior.Forever, AutoReverse = true };
     private readonly List<KeyboardAccelerator> routeKeys = [];
-    private KeyboardAccelerator? stopKey;
+    public MeetingShortcutModel? MeetingShortcut { get; set; }
     private Router? router;
     private CoreStore? store;
     private MeetingModel? meetings;
@@ -340,15 +340,12 @@ public sealed partial class MainWindow : Window
             Orb.MoveAtRest();
         }
         shownRoute = route;
-        // Live's own Ctrl+1–4 (the asks) and Ctrl+. (Stop) take over while it shows.
+        // Live's own Ctrl+1–4 (the asks) take over while it shows.
         foreach (var key in routeKeys)
         {
             key.IsEnabled = route != Route.Live;
         }
-        if (stopKey is not null)
-        {
-            stopKey.IsEnabled = route != Route.Live;
-        }
+
     }
 
     /// <summary>UI thread. The core's state: shown in the title bar only while it is not ready.</summary>
@@ -379,12 +376,9 @@ public sealed partial class MainWindow : Window
         }
         Key(Comma, VirtualKeyModifiers.Control, () => router?.Open(Route.Settings));
         Key(VirtualKey.F, VirtualKeyModifiers.Control, FocusSearch);
-        Key(VirtualKey.R, VirtualKeyModifiers.Control | VirtualKeyModifiers.Shift, RecordNow);
-        stopKey = Key(Period, VirtualKeyModifiers.Control, Stop);
     }
 
     private const VirtualKey Comma = (VirtualKey)188;
-    private const VirtualKey Period = (VirtualKey)190;
 
     private KeyboardAccelerator Key(VirtualKey key, VirtualKeyModifiers modifiers, Action action)
     {
@@ -432,11 +426,11 @@ public sealed partial class MainWindow : Window
         var file = new MenuFlyoutSubItem { Text = "File" };
         if (store?.Meeting is { } meeting)
         {
-            file.Items.Add(Item("Stop Recording", "Ctrl+.", Stop, enabled: !meeting.Stopping));
+            file.Items.Add(Item("Stop Recording", MeetingShortcut?.ShortcutLabel ?? "", Stop, enabled: !meeting.Stopping));
         }
         else
         {
-            file.Items.Add(Item("Record Now", "Ctrl+Shift+R", RecordNow, enabled: store?.Status.Kind == CoreStatusKind.Ready));
+            file.Items.Add(Item("Record Now", MeetingShortcut?.ShortcutLabel ?? "", RecordNow, enabled: store?.Status.Kind == CoreStatusKind.Ready));
         }
         OverflowMenu.Items.Add(file);
 

@@ -63,7 +63,8 @@ public sealed partial class TodayScreen : UserControl
         RecordControlsModel controls,
         MeetingModel meetings,
         LiveModel live,
-        CatalogueModel catalogue)
+        CatalogueModel catalogue,
+        MeetingShortcutModel shortcut)
     {
         ArgumentNullException.ThrowIfNull(catalogue);
         this.catalogue = catalogue;
@@ -90,6 +91,13 @@ public sealed partial class TodayScreen : UserControl
         this.open = open;
         this.openRecord = openRecord;
         InitializeComponent();
+        void ShortcutChanged()
+        {
+            AutomationProperties.SetAcceleratorKey(RecordNow, shortcut.ShortcutLabel);
+            AutomationProperties.SetAcceleratorKey(LiveStop, shortcut.ShortcutLabel);
+        }
+        shortcut.PropertyChanged += (_, _) => ShortcutChanged();
+        ShortcutChanged();
         minute = DispatcherQueue.GetForCurrentThread().CreateTimer();
         minute.IsRepeating = false;
         minute.Tick += (_, _) => MinuteTick();

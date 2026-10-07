@@ -20,8 +20,6 @@ namespace Inkwell.Screens;
 
 public sealed partial class LiveScreen : UserControl
 {
-    /// <summary>VK_OEM_PERIOD: Ctrl+. stops, as ⌘. does on the Mac.</summary>
-    private const VirtualKey PeriodKey = (VirtualKey)190;
 
     private readonly CoreStore store;
     private readonly LiveModel live;
@@ -41,7 +39,7 @@ public sealed partial class LiveScreen : UserControl
     /// <param name="meetings">Stop, Record now and their failures (the meetings model, Settings' area).</param>
     /// <param name="presence">Whether the window is on screen: the clock stops while it is hidden to the tray.</param>
     /// <param name="catalogue">Whether a speech model is installed (the waiting line says when none is).</param>
-    public LiveScreen(CoreStore store, LiveModel live, MeetingModel meetings, WindowPresence presence, CatalogueModel catalogue)
+    public LiveScreen(CoreStore store, LiveModel live, MeetingModel meetings, WindowPresence presence, CatalogueModel catalogue, MeetingShortcutModel shortcut)
     {
         ArgumentNullException.ThrowIfNull(catalogue);
         this.catalogue = catalogue;
@@ -54,6 +52,13 @@ public sealed partial class LiveScreen : UserControl
         this.live = live;
         this.meetings = meetings;
         InitializeComponent();
+        void ShortcutChanged()
+        {
+            AutomationProperties.SetAcceleratorKey(StopButton, shortcut.ShortcutLabel);
+            ToolTipService.SetToolTip(StopButton, shortcut.ShortcutLabel.Length == 0 ? "Stop recording" : $"Stop recording ({shortcut.ShortcutLabel})");
+        }
+        shortcut.PropertyChanged += (_, _) => ShortcutChanged();
+        ShortcutChanged();
         NotesColumn.MinWidth = LiveLayout.NotesMinWidth + LiveLayout.ColumnGutter;
         NotesArea.Margin = new Thickness(0, 0, LiveLayout.ColumnGutter, 0);
         LedgerColumn.MinWidth = LiveLayout.LedgerMinWidth + LiveLayout.ColumnGutter;
@@ -74,13 +79,7 @@ public sealed partial class LiveScreen : UserControl
             var s = slot;
             Accelerator(VirtualKey.Number1 + slot, () => live.AnswerStacked(s));
         }
-        Accelerator(PeriodKey, () =>
-        {
-            if (store.Meeting is { Stopping: false })
-            {
-                meetings.Stop();
-            }
-        });
+
 
         store.PropertyChanged += (_, _) => Render();
         live.PropertyChanged += (_, _) => Render();

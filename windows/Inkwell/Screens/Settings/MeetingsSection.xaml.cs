@@ -7,12 +7,19 @@ using Inkwell.Core.Events;
 using Inkwell.Core.Screens;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Automation;
+using Microsoft.UI.Xaml.Automation.Peers;
 
 namespace Inkwell.Screens;
 
 public sealed partial class MeetingsSection : UserControl
 {
     private readonly CallPolicyModel calls;
+    private readonly MeetingShortcutModel shortcut;
+    private readonly DictationModel dictation;
+    private readonly ShortcutRecorderModel recorder;
+    private readonly ShortcutCaptureHost captureHost;
+    private readonly List<string> keyTokens = [];
     private IReadOnlyList<CallApp>? shownApps;
     private CallPolicy? shownDefault;
     private bool rendering;
@@ -20,11 +27,17 @@ public sealed partial class MeetingsSection : UserControl
     private bool askingAlways;
     private bool askingRemove;
 
-    public MeetingsSection(MeetingModel meetings, CallPolicyModel calls)
+    public MeetingsSection(MeetingModel meetings, CallPolicyModel calls, MeetingShortcutModel shortcut, DictationModel dictation, ShortcutRecorderModel recorder)
     {
         Model = meetings ?? throw new ArgumentNullException(nameof(meetings));
         this.calls = calls ?? throw new ArgumentNullException(nameof(calls));
+        this.shortcut = shortcut;
+        this.dictation = dictation;
+        this.recorder = recorder;
+        captureHost = new ShortcutCaptureHost(recorder);
         InitializeComponent();
+        Loaded += (_, _) => { shortcut.PropertyChanged += OnShortcutChanged; recorder.PropertyChanged += OnShortcutChanged; Render(); };
+        Unloaded += (_, _) => { shortcut.PropertyChanged -= OnShortcutChanged; recorder.PropertyChanged -= OnShortcutChanged; if (recorder.Recording == ShortcutTarget.Meeting || recorder.Waiting == ShortcutTarget.Meeting || recorder.Checking?.Target == ShortcutTarget.Meeting) recorder.Cancel(); captureHost.Capture(null, false); };
         calls.PropertyChanged += (_, _) => Render();
         Render();
     }
@@ -50,6 +63,7 @@ public sealed partial class MeetingsSection : UserControl
         rendering = true;
         try
         {
+            RenderShortcut();
             Show(CallsFailure, calls.Failure);
             Show(Note, calls.Note);
             Show(Unreadable, calls.Unreadable is string why ? CallPolicyModel.UnreadableLine(why) : null);
@@ -82,6 +96,56 @@ public sealed partial class MeetingsSection : UserControl
         {
             AskStartOver(choice);
         }
+    }
+
+    private void OnShortcutChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e) => Render();
+
+    private void RenderShortcut()
+    {
+        var tokens = new List<string> { "off" };
+        tokens.AddRange(DictationModel.Keys.Select(k => k.Token));
+        if (!tokens.Contains(shortcut.Key)) tokens.Add(shortcut.Key);
+        if (!tokens.SequenceEqual(keyTokens))
+        {
+            keyTokens.Clear();
+            keyTokens.AddRange(tokens);
+            MeetingKeyBox.Items.Clear();
+            foreach (var token in keyTokens) MeetingKeyBox.Items.Add(token == "off" ? "Off" : recorder.Describe(token).Name);
+        }
+        MeetingKeyBox.SelectedIndex = keyTokens.IndexOf(shortcut.Key);
+        MeetingKeyBox.IsEnabled = shortcut.Loaded && !recorder.Busy;
+        RecordMeetingKey.Content = recorder.ButtonTitle(ShortcutTarget.Meeting);
+        AutomationProperties.SetName(RecordMeetingKey, recorder.ButtonName(ShortcutTarget.Meeting));
+        AutomationProperties.SetHelpText(RecordMeetingKey, recorder.ButtonHint(ShortcutTarget.Meeting));
+        Show(MeetingKeyProblem, shortcut.Problem);
+        Show(MeetingKeyMessage, recorder.Message(ShortcutTarget.Meeting)?.Text);
+        captureHost.Capture(XamlRoot?.Content as UIElement, recorder.Capturing == ShortcutTarget.Meeting);
+    }
+
+    private void OnMeetingKeyChosen(object sender, SelectionChangedEventArgs e)
+    {
+        var index = MeetingKeyBox.SelectedIndex;
+        if (rendering || index < 0 || index >= keyTokens.Count || keyTokens[index] == shortcut.Key) return;
+        var key = keyTokens[index];
+        if (key != "off" && (key == dictation.CurrentKey || key == dictation.EditKey))
+        {
+            Show(MeetingKeyMessage, "That key is used for dictation or editing. Pick another.");
+            rendering = true;
+            MeetingKeyBox.SelectedIndex = keyTokens.IndexOf(shortcut.Key);
+            rendering = false;
+            return;
+        }
+        shortcut.SetKey(key);
+    }
+
+    private void OnRecordMeetingKey(object sender, RoutedEventArgs e)
+    {
+        recorder.Announce = text =>
+        {
+            var peer = FrameworkElementAutomationPeer.FromElement(RecordMeetingKey) ?? FrameworkElementAutomationPeer.CreatePeerForElement(RecordMeetingKey);
+            peer?.RaiseNotificationEvent(AutomationNotificationKind.ActionCompleted, AutomationNotificationProcessing.ImportantMostRecent, text, "InkwellMeetingShortcutRecorder");
+        };
+        recorder.Toggle(ShortcutTarget.Meeting);
     }
 
     private static void Show(TextBlock block, string? text)

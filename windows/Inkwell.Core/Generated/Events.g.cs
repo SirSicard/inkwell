@@ -139,6 +139,7 @@ public abstract record InkEvent
                 "library.swept" => root.Deserialize(InkEventsJson.Default.LibrarySwept)!,
                 "stats.counted" => root.Deserialize(InkEventsJson.Default.StatsCounted)!,
                 "milestones.reached" => root.Deserialize(InkEventsJson.Default.MilestonesReached)!,
+                "meetings.shortcut.state" => root.Deserialize(InkEventsJson.Default.MeetingsShortcutState)!,
                 _ => new UnknownEvent { Type = type },
             };
         }
@@ -287,6 +288,7 @@ public sealed class StrictEnumConverter<T> : JsonStringEnumConverter<T>
 [JsonSerializable(typeof(LibrarySwept))]
 [JsonSerializable(typeof(StatsCounted))]
 [JsonSerializable(typeof(MilestonesReached))]
+[JsonSerializable(typeof(MeetingsShortcutState))]
 public sealed partial class InkEventsJson : JsonSerializerContext
 {
 }
@@ -4287,6 +4289,43 @@ public sealed record MeetingsRecovered : InkEvent
     /// </summary>
     [JsonPropertyName("message")]
     public string? Message { get; init; }
+}
+
+/// <summary>
+/// The confirmed global meeting shortcut and whether it is held. Suspension acknowledges that
+/// no meeting shortcut can fire while the shell records a new key.
+/// </summary>
+public sealed record MeetingsShortcutState : InkEvent
+{
+    /// <summary>
+    /// The global hook is held and can toggle recording.
+    /// </summary>
+    [JsonPropertyName("active")]
+    public required bool Active { get; init; }
+
+    /// <summary>
+    /// Why the configured shortcut could not be held.
+    /// </summary>
+    [JsonPropertyName("error")]
+    public string? Error { get; init; }
+
+    /// <summary>
+    /// The configured canonical shortcut, or off.
+    /// </summary>
+    [JsonPropertyName("key")]
+    public required string Key { get; init; }
+
+    /// <summary>
+    /// The suspend/resume command id, when answering one.
+    /// </summary>
+    [JsonPropertyName("ref")]
+    public string? Ref { get; init; }
+
+    /// <summary>
+    /// The shell suspended the hook while recording a shortcut.
+    /// </summary>
+    [JsonPropertyName("suspended")]
+    public required bool Suspended { get; init; }
 }
 
 /// <summary>

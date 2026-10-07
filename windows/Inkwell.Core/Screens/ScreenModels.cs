@@ -64,7 +64,8 @@ public sealed class ScreenModels
         EditConsent = AiSettings.NewEditConsent(send);
         MeetingsConsent = AiSettings.NewMeetingsConsent(send);
         Ai = new AiSettings(Polish, Dictation, EditConsent, MeetingsConsent, send);
-        Recorder = new ShortcutRecorderModel(send, Dictation, token => Ai.ChooseEditKey(token), wake ?? NoWake.Instance);
+        MeetingShortcut = new MeetingShortcutModel(send);
+        Recorder = new ShortcutRecorderModel(send, Dictation, token => Ai.ChooseEditKey(token), wake ?? NoWake.Instance, MeetingShortcut);
         Cloud = new CloudModel(send)
         {
             // This PC's model by the catalogue's name for it.
@@ -92,6 +93,7 @@ public sealed class ScreenModels
 
     /// <summary>"Record a shortcut…" for both keys (Settings > Dictation).</summary>
     public ShortcutRecorderModel Recorder { get; }
+    public MeetingShortcutModel MeetingShortcut { get; }
     public CatalogueModel Catalogue { get; }
     public ModesModel Modes { get; }
     public OwedModel Owed { get; }
@@ -176,6 +178,7 @@ public sealed class ScreenModels
                 Modes.Load();
             }
             Dictation.Apply(e);
+            MeetingShortcut.Apply(e);
             Recorder.Apply(e);
             EditConsent.Apply(e);
             MeetingsConsent.Apply(e);
@@ -220,6 +223,7 @@ public sealed class ScreenModels
         Catalogue.Requery();
         // Reads the switch, then (unless it is off) the core holds the keys.
         Dictation.Load();
+        MeetingShortcut.Load();
         EditConsent.Load();
         MeetingsConsent.Load();
         // Whether an own-key provider is ready decides whether the AI switches can be used.
@@ -275,7 +279,7 @@ public sealed class ScreenModels
         ArgumentNullException.ThrowIfNull(failed);
         return PermissionsModel.Handles(failed) || Polish.Handles(failed) || CatalogueModel.Handles(failed)
             || ModesModel.Handles(failed) || OwedModel.Handles(failed) || LiveModel.Handles(failed)
-            || MeetingModel.Handles(failed) || CallPolicyModel.Handles(failed) || OnboardingModel.Handles(failed) || DictationModel.Handles(failed) || ShortcutRecorderModel.Handles(failed)
+            || MeetingShortcutModel.Handles(failed) || MeetingModel.Handles(failed) || CallPolicyModel.Handles(failed) || OnboardingModel.Handles(failed) || DictationModel.Handles(failed) || ShortcutRecorderModel.Handles(failed)
             || Ai.Handles(failed) || CloudModel.Handles(failed) || SnippetsModel.Handles(failed) || VoiceCommandsModel.Handles(failed)
             || Library.Handles(failed) || Import02Model.Handles(failed) || AppearanceModel.Handles(failed) || StatsModel.Handles(failed)
             || SoundModel.Handles(failed);

@@ -214,6 +214,16 @@ fn rig(label: &str, seconds: f64, clock: Arc<dyn Clock>) -> Rig {
 
 /// [`rig`] over `store`.
 fn rig_with(label: &str, seconds: f64, clock: Arc<dyn Clock>, store: Arc<dyn Store>) -> Rig {
+    rig_with_keys(label, seconds, clock, store, None)
+}
+
+fn rig_with_keys(
+    label: &str,
+    seconds: f64,
+    clock: Arc<dyn Clock>,
+    store: Arc<dyn Store>,
+    keys: Option<Arc<dyn ink_core::HotkeySource>>,
+) -> Rig {
     let dir = TempDir::new(label);
     let (mic, far) = (dir.path().join("mic.wav"), dir.path().join("far.wav"));
     speech_wav(&mic, seconds, 31);
@@ -249,6 +259,7 @@ fn rig_with(label: &str, seconds: f64, clock: Arc<dyn Clock>, store: Arc<dyn Sto
         meetings: MeetingPlatform {
             capture: capture.clone(),
             detector: Some(detector.clone()),
+            keys,
         },
     };
     let (core, events) = start_parts(parts);
@@ -2641,4 +2652,169 @@ fn removing_a_call_app_refuses_a_default_the_user_did_not_confirm() {
     );
     d.r.events.assert_valid();
     d.r.core.shutdown();
+}
+
+#[derive(Default)]
+struct FakeShortcut {
+    held: Mutex<Option<(String, EventSink<ink_core::HotkeyEvent>)>>,
+}
+
+impl ink_core::HotkeySource for FakeShortcut {
+    fn start(
+        &self,
+        binding: &ink_core::HotkeyBinding,
+        sink: EventSink<ink_core::HotkeyEvent>,
+    ) -> Result<(), PlatformError> {
+        *self.held.lock().unwrap() = Some((binding.0.clone(), sink));
+        Ok(())
+    }
+    fn stop(&self) {
+        *self.held.lock().unwrap() = None;
+    }
+}
+
+impl FakeShortcut {
+    fn sink(&self) -> EventSink<ink_core::HotkeyEvent> {
+        self.held
+            .lock()
+            .unwrap()
+            .as_ref()
+            .expect("meeting hook held")
+            .1
+            .clone()
+    }
+    fn binding(&self) -> Option<String> {
+        self.held.lock().unwrap().as_ref().map(|v| v.0.clone())
+    }
+}
+
+fn shortcut_state(r: &Rig, id: &str, suspended: bool) -> Value {
+    r.core
+        .command(
+            &serde_json::json!({"cmd":"meetings.shortcut.suspend","suspended":suspended,"id":id})
+                .to_string(),
+        )
+        .unwrap();
+    r.events
+        .wait_for(WAIT, |v| {
+            v["type"] == "meetings.shortcut.state" && v["ref"] == id
+        })
+        .expect("shortcut acknowledgement")
+}
+
+#[cfg(windows)]
+#[test]
+fn global_meeting_shortcut_toggles_once_and_capture_suspension_invalidates_queued_keys() {
+    use ink_core::HotkeyEvent::{Pressed, Released};
+    let store = Arc::new(ink_store::SqliteStore::open_in_memory().unwrap());
+    let keys = Arc::new(FakeShortcut::default());
+    let r = rig_with_keys("shortcut-toggle", 30.0, clock(), store, Some(keys.clone()));
+    let ready = r.events.wait_type("meetings.shortcut.state", WAIT);
+    assert_eq!(ready["active"], true);
+    assert_eq!(keys.binding().as_deref(), Some("ctrl+shift+r"));
+    let old = keys.sink();
+    old(Pressed { at_ns: 1 });
+    let started = r.events.wait_type("meeting.started", WAIT);
+    assert!(
+        started.get("auto").is_none(),
+        "manual shortcut start is never automatic"
+    );
+    assert!(started.get("app").is_none());
+    old(Pressed { at_ns: 2 });
+    let paused = shortcut_state(&r, "pause", true);
+    assert_eq!(paused["suspended"], true);
+    assert_eq!(paused["active"], false);
+    assert!(keys.binding().is_none());
+    assert_eq!(
+        r.events.count("meeting.stopped"),
+        0,
+        "a held repeat never stopped the recording"
+    );
+    old(Released { at_ns: 3 });
+    old(Pressed { at_ns: 4 });
+    shortcut_state(&r, "barrier", true);
+    assert_eq!(
+        r.events.count("meeting.stopped"),
+        0,
+        "a queued old binding cannot fire after acknowledgement"
+    );
+    assert_eq!(shortcut_state(&r, "resume", false)["active"], true);
+    let current = keys.sink();
+    current(Pressed { at_ns: 5 });
+    r.events.wait_type("meeting.stopped", WAIT);
+    current(Pressed { at_ns: 6 });
+    shortcut_state(&r, "end-barrier", true);
+    assert_eq!(
+        r.capture.opened_for.lock().unwrap().len(),
+        1,
+        "a held stop never immediately starts a new recording"
+    );
+    r.events.assert_valid();
+    r.core.shutdown();
+    assert!(keys.binding().is_none());
+}
+
+#[cfg(windows)]
+#[test]
+fn global_meeting_shortcut_failed_save_and_unreadable_conflict_checks_preserve_settings() {
+    let inner = Arc::new(ink_store::SqliteStore::open_in_memory().unwrap());
+    inner.set_setting("meetings.key", "f13").unwrap();
+    let store = FailingStore::new(inner.clone());
+    let keys = Arc::new(FakeShortcut::default());
+    let r = rig_with_keys(
+        "shortcut-failures",
+        1.0,
+        clock(),
+        store.clone(),
+        Some(keys.clone()),
+    );
+    assert_eq!(
+        r.events.wait_type("meetings.shortcut.state", WAIT)["active"],
+        true
+    );
+    store.fail(&["set_setting"]);
+    r.core
+        .command(r#"{"cmd":"setting.set","key":"meetings.key","value":"f14","id":"save-failed"}"#)
+        .unwrap();
+    failed_with(&r.events, "save-failed");
+    assert_eq!(keys.binding().as_deref(), Some("f13"));
+    assert_eq!(
+        inner.setting("meetings.key").unwrap().as_deref(),
+        Some("f13")
+    );
+    store.heal();
+    r.core
+        .command(r#"{"cmd":"setting.set","key":"dictation.key","value":"F13","id":"clash"}"#)
+        .unwrap();
+    assert!(
+        failed_with(&r.events, "clash")["message"]
+            .as_str()
+            .unwrap()
+            .contains("meetings")
+    );
+    assert!(inner.setting("dictation.key").unwrap().is_none());
+    r.core.command(r#"{"cmd":"consent.allow","feature":"edit","to":"on_device","key":"F13","id":"edit-clash"}"#).unwrap();
+    assert!(
+        failed_with(&r.events, "edit-clash")["message"]
+            .as_str()
+            .unwrap()
+            .contains("meetings")
+    );
+    assert!(inner.setting("dictation.edit_key").unwrap().is_none());
+    store.fail(&["setting"]);
+    r.core
+        .command(r#"{"cmd":"setting.set","key":"dictation.key","value":"f15","id":"read-failed"}"#)
+        .unwrap();
+    failed_with(&r.events, "read-failed");
+    assert!(inner.setting("dictation.key").unwrap().is_none());
+    let paused = shortcut_state(&r, "unreadable-pause", true);
+    assert_eq!(paused["active"], false);
+    let resumed = shortcut_state(&r, "unreadable-resume", false);
+    assert_eq!(resumed["active"], false);
+    assert!(resumed["error"].as_str().unwrap().contains("read"));
+    assert!(keys.binding().is_none());
+    store.heal();
+    assert_eq!(shortcut_state(&r, "healed", false)["active"], true);
+    r.events.assert_valid();
+    r.core.shutdown();
 }

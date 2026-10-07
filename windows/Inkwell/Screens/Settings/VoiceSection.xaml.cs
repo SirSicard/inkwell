@@ -22,21 +22,24 @@ public sealed partial class VoiceSection : UserControl
 {
     private readonly DictationModel dictation;
     private readonly AiSettings ai;
+    private readonly MeetingShortcutModel? meeting;
     private readonly ShortcutRecorderModel recorder;
     /// <summary>The window's content while a shortcut is recorded (its key events are the recorder's).</summary>
-    private UIElement? capturing;
+    private readonly ShortcutCaptureHost captureHost;
     /// <summary>The tokens behind the pickers' items, in order (the edit picker's first item is Off).</summary>
     private readonly List<string?> keyTokens = [];
     private readonly List<string?> editTokens = [];
     private bool rendering;
 
     /// <param name="importNote">The Inkwell 0.2 key note's view and the import's row, shown under the keys, if any.</param>
-    public VoiceSection(AiSettings ai, ShortcutRecorderModel recorder, UIElement? importNote = null)
+    public VoiceSection(AiSettings ai, ShortcutRecorderModel recorder, UIElement? importNote = null, MeetingShortcutModel? meeting = null)
     {
         ArgumentNullException.ThrowIfNull(ai);
         ArgumentNullException.ThrowIfNull(recorder);
         this.ai = ai;
+        this.meeting = meeting;
         this.recorder = recorder;
+        captureHost = new ShortcutCaptureHost(recorder);
         dictation = ai.Dictation;
         InitializeComponent();
         ImportNoteHost.Content = importNote;
@@ -67,50 +70,11 @@ public sealed partial class VoiceSection : UserControl
         peer?.RaiseNotificationEvent(AutomationNotificationKind.ActionCompleted, AutomationNotificationProcessing.ImportantMostRecent, text, "InkwellShortcutRecorder");
     }
 
-    /// <summary>Takes (or gives back) the window's key events for the recorder.</summary>
-    private void Capture(bool on)
-    {
-        if (on && capturing is null && XamlRoot?.Content is UIElement content)
-        {
-            capturing = content;
-            content.PreviewKeyDown += OnPreviewKeyDown;
-            content.PreviewKeyUp += OnPreviewKeyUp;
-        }
-        else if (!on && capturing is not null)
-        {
-            capturing.PreviewKeyDown -= OnPreviewKeyDown;
-            capturing.PreviewKeyUp -= OnPreviewKeyUp;
-            capturing = null;
-        }
-    }
+    private void Capture(bool on) => captureHost.Capture(XamlRoot?.Content as UIElement, on);
 
-    private void OnPreviewKeyDown(object sender, KeyRoutedEventArgs e) =>
-        e.Handled = recorder.Feed(new ShortcutCapture.Input.KeyDown(Key(e), e.KeyStatus.WasKeyDown));
+    private void OnRecordKey(object sender, RoutedEventArgs e) { recorder.Announce = Announce; recorder.Toggle(ShortcutTarget.Dictation); }
 
-    private void OnPreviewKeyUp(object sender, KeyRoutedEventArgs e) =>
-        e.Handled = recorder.Feed(new ShortcutCapture.Input.KeyUp(Key(e)));
-
-    /// <summary>A key by its side, as the core names modifiers: right Ctrl and right Alt are extended keys, right Shift is scan code 0x36.</summary>
-    private static CapturedKey Key(KeyRoutedEventArgs e)
-    {
-        var extended = e.KeyStatus.IsExtendedKey;
-        return e.Key switch
-        {
-            VirtualKey.Control or VirtualKey.LeftControl or VirtualKey.RightControl =>
-                CapturedKey.Side(e.Key == VirtualKey.RightControl || (e.Key == VirtualKey.Control && extended) ? "right_control" : "left_control"),
-            VirtualKey.Menu or VirtualKey.LeftMenu or VirtualKey.RightMenu =>
-                CapturedKey.Side(e.Key == VirtualKey.RightMenu || (e.Key == VirtualKey.Menu && extended) ? "right_alt" : "left_alt"),
-            VirtualKey.Shift or VirtualKey.LeftShift or VirtualKey.RightShift =>
-                CapturedKey.Side(e.Key == VirtualKey.RightShift || (e.Key == VirtualKey.Shift && e.KeyStatus.ScanCode == 0x36) ? "right_shift" : "left_shift"),
-            VirtualKey.LeftWindows => CapturedKey.Side("left_win"),
-            VirtualKey.RightWindows => CapturedKey.Side("right_win"),
-            var key => CapturedKey.Of((uint)key),
-        };
-    }
-
-    private void OnRecordKey(object sender, RoutedEventArgs e) => recorder.Toggle(ShortcutTarget.Dictation);
-
-    private void OnRecordEdit(object sender, RoutedEventArgs e) => recorder.Toggle(ShortcutTarget.Edit);
+    private void OnRecordEdit(object sender, RoutedEventArgs e) { recorder.Announce = Announce; recorder.Toggle(ShortcutTarget.Edit); }
 
     private void OnChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e) => Render();
 
@@ -153,13 +117,13 @@ public sealed partial class VoiceSection : UserControl
             AutomationProperties.SetHelpText(RecordKeyButton, recorder.ButtonHint(ShortcutTarget.Dictation));
             AutomationProperties.SetHelpText(RecordEditButton, recorder.ButtonHint(ShortcutTarget.Edit));
             // While recording, the key comes from the keyboard: the switch and the pickers wait.
-            var idle = recorder.Recording is null;
+            var idle = !recorder.Busy;
             DictationSwitch.IsEnabled = idle;
             KeyBox.IsEnabled = idle;
             EditKeyBox.IsEnabled = idle;
             Message(KeyMessage, recorder.Message(ShortcutTarget.Dictation));
             Message(EditMessage, recorder.Message(ShortcutTarget.Edit));
-            Capture(recorder.Recording is not null);
+            Capture(recorder.Capturing is ShortcutTarget.Dictation or ShortcutTarget.Edit);
 
             StatusText.Text = dictation.StatusLine;
             StatusText.Style = (Style)Application.Current.Resources[dictation.IsProblem ? "InkAlertTextStyle" : "InkCaptionStyle"];
@@ -189,6 +153,12 @@ public sealed partial class VoiceSection : UserControl
         var i = KeyBox.SelectedIndex;
         if (!rendering && i >= 0 && i < keyTokens.Count && keyTokens[i] is string token && token != dictation.CurrentKey)
         {
+            if (meeting?.Key == token)
+            {
+                Render();
+                Line(KeyMessage, "That key is used for meetings. Pick another, or change the meeting key first.");
+                return;
+            }
             dictation.SetKey(token);
         }
     }
@@ -198,6 +168,12 @@ public sealed partial class VoiceSection : UserControl
         var i = EditKeyBox.SelectedIndex;
         if (!rendering && i >= 0 && i < editTokens.Count && editTokens[i] != dictation.EditKey)
         {
+            if (editTokens[i] is string token && meeting?.Key == token)
+            {
+                Render();
+                Line(EditMessage, "That key is used for meetings. Pick another, or change the meeting key first.");
+                return;
+            }
             ai.ChooseEditKey(editTokens[i]);
             // The pick shows only once the core holds it (or the consent step is answered).
             Render();

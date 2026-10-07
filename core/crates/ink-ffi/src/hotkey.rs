@@ -56,6 +56,52 @@ pub fn spelling(key: &str) -> String {
     check(key).unwrap_or_else(|_| key.trim().to_owned())
 }
 
+/// Refuses a shortcut already assigned to another Inkwell action, before any write.
+pub fn unique_setting(store: &dyn ink_core::Store, key: &str, value: &str) -> Result<(), String> {
+    if value == "off" || !is_key_setting(key) {
+        return Ok(());
+    }
+    let wanted = spelling(value);
+    for (other, default, action) in [
+        (
+            crate::voice::KEY_SETTING,
+            crate::voice::DEFAULT_KEY,
+            "dictation",
+        ),
+        (crate::voice::EDIT_KEY_SETTING, "off", "editing a selection"),
+        (
+            crate::meeting_keys::KEY_SETTING,
+            crate::meeting_keys::DEFAULT_KEY,
+            "meetings",
+        ),
+    ] {
+        if other == key {
+            continue;
+        }
+        let chosen = store
+            .setting(other)
+            .map_err(|e| format!("couldn't check the {action} shortcut: {e}"))?
+            .filter(|v| !v.trim().is_empty())
+            .unwrap_or_else(|| default.into());
+        if chosen != "off" && spelling(&chosen) == wanted {
+            return Err(format!(
+                "that shortcut is used for {action}; choose another shortcut or change that one first"
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// The settings whose assignments must remain distinct.
+pub fn is_key_setting(key: &str) -> bool {
+    [
+        crate::voice::KEY_SETTING,
+        crate::voice::EDIT_KEY_SETTING,
+        crate::meeting_keys::KEY_SETTING,
+    ]
+    .contains(&key)
+}
+
 /// `hotkey.checked`: the binding as asked, and the check's answer.
 pub fn checked(
     binding: &str,
@@ -81,6 +127,28 @@ pub fn checked(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ink_core::Store;
+
+    #[cfg(windows)]
+    #[test]
+    fn meeting_shortcut_conflicts_are_canonical_and_symmetric() {
+        let store = ink_store::SqliteStore::open_in_memory().unwrap();
+        store.set_setting("dictation.key", "Ctrl+Space").unwrap();
+        assert!(unique_setting(&store, "meetings.key", "ctrl+space").is_err());
+        store.set_setting("meetings.key", "Shift+Ctrl+R").unwrap();
+        assert!(unique_setting(&store, "dictation.key", "ctrl+shift+r").is_err());
+        assert!(unique_setting(&store, "dictation.edit_key", "shift+ctrl+r").is_err());
+        assert!(unique_setting(&store, "meetings.key", "off").is_ok());
+        assert!(unique_setting(&store, "dictation.key", "f13").is_ok());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn meeting_shortcut_defaults_also_reserve_their_chord() {
+        let store = ink_store::SqliteStore::open_in_memory().unwrap();
+        assert!(unique_setting(&store, "dictation.key", "ctrl+shift+r").is_err());
+        assert!(unique_setting(&store, "meetings.key", crate::voice::DEFAULT_KEY).is_err());
+    }
 
     /// Every named token is storable on every OS, whether or not this one can watch it: as it is,
     /// or in this OS's spelling (the Mac's right_alt is right_option).

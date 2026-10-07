@@ -62,11 +62,11 @@ internal sealed class AppScreens(CoreStore store, ScreenModels models, Router ro
     {
         Route.Today => new TodayScreen(
             store, models.Library, models.Owed, models.Permissions, models.UpNext, Presence, router.Open, OpenRecord,
-            models.RecordControls, models.Meetings, models.Live, models.Catalogue),
+            models.RecordControls, models.Meetings, models.Live, models.Catalogue, models.MeetingShortcut),
         Route.Library => new LibraryScreen(models.Library, () => models.Ai.SummaryOffNote, Presence),
         Route.Owed => new OwedScreen(models.Owed, (record, ms) => OpenRecord(record, ms, play: true)),
         Route.Stats => new StatsScreen(models.Stats, theme, Presence, WindowHandle),
-        Route.Live => new LiveScreen(store, models.Live, models.Meetings, Presence, models.Catalogue),
+        Route.Live => new LiveScreen(store, models.Live, models.Meetings, Presence, models.Catalogue, models.MeetingShortcut),
         Route.Settings => new SettingsScreen(SettingsSections()),
         _ => throw new ArgumentOutOfRangeException(nameof(route)),
     };
@@ -109,12 +109,12 @@ internal sealed class AppScreens(CoreStore store, ScreenModels models, Router ro
             new("Appearance", new AppearanceSection(theme)),
             new("Permissions", new PermissionsSection(models.Permissions)),
             new("Sound", new SoundSection(models.Sound)),
-            new("Dictation", new VoiceSection(models.Ai, models.Recorder, importNote)),
+            new("Dictation", new VoiceSection(models.Ai, models.Recorder, importNote, models.MeetingShortcut)),
             new("Modes", new ModesSection(models.Modes, WindowHandle)),
             new("Snippets", new SnippetsSection(models.Snippets)),
             new("Voice commands", new VoiceCommandsSection(models.VoiceCommands)),
             new("AI", new AiSection(models.Ai, models.Cloud, models.Local)),
-            new("Meetings", new MeetingsSection(models.Meetings, models.Calls)),
+            new("Meetings", new MeetingsSection(models.Meetings, models.Calls, models.MeetingShortcut, models.Dictation, models.Recorder)),
             new("Stats", new StatsSettingsSection(models.Stats)),
             new("Models", new ModelsSection(models.Catalogue)),
             new("Storage", new StorageSection(models.Storage, models.Meetings)),

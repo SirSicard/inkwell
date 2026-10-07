@@ -140,6 +140,7 @@ public enum ShortcutTarget
 {
     Dictation,
     Edit,
+    Meeting,
 }
 
 /// <summary>What shows under a key's row after a recording.</summary>
@@ -158,6 +159,13 @@ public sealed class ShortcutRecorderModel : ObservableModel
     private readonly DictationModel dictation;
     private readonly Action<string> saveEditKey;
     private readonly IWakeScheduler wake;
+    private readonly MeetingShortcutModel? meeting;
+    private string? suspensionRef;
+    private readonly HashSet<CapturedKey> heldKeys = [];
+    private HotkeyChecked? checkedWhileHeld;
+    public ShortcutTarget? Capturing => Recording ?? (heldKeys.Count > 0 ? Checking?.Target : null);
+    public ShortcutTarget? Waiting { get; private set; }
+    public bool Busy => Recording is not null || Checking is not null || Waiting is not null;
     private readonly Dictionary<ShortcutTarget, ShortcutMessage> messages = [];
     private ShortcutCapture capture = new();
     private int nextRef;
@@ -166,7 +174,7 @@ public sealed class ShortcutRecorderModel : ObservableModel
 
     /// <param name="saveEditKey">Saves a recorded edit key (AiSettings.ChooseEditKey: it asks for consent first when voice edit is not on yet).</param>
     /// <param name="wake">Runs the 5 s check timeout on the UI thread.</param>
-    public ShortcutRecorderModel(Action<CoreCommand> send, DictationModel dictation, Action<string> saveEditKey, IWakeScheduler wake)
+    public ShortcutRecorderModel(Action<CoreCommand> send, DictationModel dictation, Action<string> saveEditKey, IWakeScheduler wake, MeetingShortcutModel? meeting = null)
     {
         ArgumentNullException.ThrowIfNull(send);
         ArgumentNullException.ThrowIfNull(dictation);
@@ -176,6 +184,7 @@ public sealed class ShortcutRecorderModel : ObservableModel
         this.dictation = dictation;
         this.saveEditKey = saveEditKey;
         this.wake = wake;
+        this.meeting = meeting;
     }
 
     /// <summary>How long the core has to answer a check before the recorder gives up on it.</summary>
@@ -198,12 +207,12 @@ public sealed class ShortcutRecorderModel : ObservableModel
 
     /// <summary>The button beside <paramref name="target"/>'s picker.</summary>
     public string ButtonTitle(ShortcutTarget target) =>
-        Recording == target ? RecordingTitle : Checking?.Target == target ? CancelTitle : RecordTitle;
+        Waiting == target ? "Waiting for shortcuts to pause…" : Recording == target ? RecordingTitle : Checking?.Target == target ? CancelTitle : RecordTitle;
 
     /// <summary>The button's name for Narrator, which says what it is for in each state.</summary>
     public string ButtonName(ShortcutTarget target)
     {
-        var what = target == ShortcutTarget.Dictation ? "dictation" : "editing a selection";
+        var what = target == ShortcutTarget.Dictation ? "dictation" : target == ShortcutTarget.Meeting ? "meeting recording" : "editing a selection";
         return Recording == target ? $"Recording a shortcut for {what}"
             : Checking?.Target == target ? $"Cancel checking the shortcut for {what}"
             : $"Record a shortcut for {what}";
@@ -215,12 +224,12 @@ public sealed class ShortcutRecorderModel : ObservableModel
             : Checking?.Target == target ? ""
             : "Then press the keys you want to use.";
 
-    private static string Spoken(ShortcutTarget target) => target == ShortcutTarget.Dictation ? "the dictation key" : "the edit key";
+    private static string Spoken(ShortcutTarget target) => target == ShortcutTarget.Dictation ? "the dictation key" : target == ShortcutTarget.Meeting ? "the meeting key" : "the edit key";
 
     /// <summary>Starts recording <paramref name="target"/>'s key, or (pressed again, while recording or checking) stops.</summary>
     public void Toggle(ShortcutTarget target)
     {
-        if (Recording == target || Checking?.Target == target)
+        if (Recording == target || Checking?.Target == target || Waiting == target)
         {
             Cancel();
             Announce("Recording cancelled. The key is unchanged.");
@@ -233,11 +242,28 @@ public sealed class ShortcutRecorderModel : ObservableModel
 
     public void Start(ShortcutTarget target)
     {
+        Cancel();
         dictation.SuspendForRecording();
-        Recording = target;
+        Recording = meeting is null ? target : null;
+        Waiting = meeting is null ? null : target;
         EndCheck();
         capture = new ShortcutCapture();
+        heldKeys.Clear();
+        checkedWhileHeld = null;
         messages.Remove(target);
+        if (meeting is not null)
+        {
+            suspensionRef = $"{RefPrefix}pause:{++nextRef}";
+            send(new CoreCommand.MeetingsShortcutSuspend(true, suspensionRef));
+            var id = suspensionRef;
+            timeout = wake.After(CheckTimeout, () =>
+            {
+                if (suspensionRef != id || Waiting is not ShortcutTarget waiting) return;
+                Cancel();
+                Show("Couldn't pause the meeting shortcut. The key is unchanged.", waiting);
+                Changed();
+            });
+        }
         Changed();
         Announce($"Recording a shortcut for {Spoken(target)}. Press the keys. Escape on its own cancels.");
     }
@@ -245,22 +271,38 @@ public sealed class ShortcutRecorderModel : ObservableModel
     /// <summary>Escape, the button pressed again, the window gone or in the background: nothing changes, and dictation comes back.</summary>
     public void Cancel()
     {
-        if (Recording is null && Checking is null)
+        if (!Busy)
         {
             return;
         }
         Recording = null;
+        Waiting = null;
+        suspensionRef = null;
+        heldKeys.Clear();
+        checkedWhileHeld = null;
         EndCheck();
-        dictation.ResumeAfterRecording();
+        Resume();
         Changed();
     }
 
     /// <summary>One key event in the recorder's window. Returns whether the recorder took it (it then goes no further).</summary>
     public bool Feed(ShortcutCapture.Input input)
     {
+        if (Capturing is null) return false;
+        switch (input)
+        {
+            case ShortcutCapture.Input.KeyDown down: heldKeys.Add(down.Key); break;
+            case ShortcutCapture.Input.KeyUp up: heldKeys.Remove(up.Key); break;
+        }
         if (Recording is not ShortcutTarget target)
         {
-            return false;
+            if (heldKeys.Count == 0 && checkedWhileHeld is { } answer)
+            {
+                checkedWhileHeld = null;
+                Apply(answer);
+            }
+            Changed();
+            return true;
         }
         switch (capture.Feed(input))
         {
@@ -271,10 +313,15 @@ public sealed class ShortcutRecorderModel : ObservableModel
             case ShortcutCapture.Outcome.UnknownKey:
                 Recording = null;
                 Show("Inkwell doesn't know that key (keypad and media keys, for one). Try another.", target);
-                dictation.ResumeAfterRecording();
+                Resume();
                 Changed();
                 break;
             case ShortcutCapture.Outcome.Captured captured:
+                // AltGr releases as the synthetic left Ctrl; Windows may never send right Alt up.
+                if (captured.Token == "right_alt" && input is ShortcutCapture.Input.KeyUp)
+                {
+                    heldKeys.Clear();
+                }
                 Recording = null;
                 Checking = (target, captured.Token);
                 nextRef++;
@@ -295,9 +342,32 @@ public sealed class ShortcutRecorderModel : ObservableModel
     {
         switch (e)
         {
+            case MeetingsShortcutState state when state.Ref == suspensionRef && suspensionRef is not null && state.Suspended:
+                suspensionRef = null;
+                timeout?.Dispose();
+                timeout = null;
+                Recording = Waiting;
+                Waiting = null;
+                Changed();
+                break;
+            case CommandFailed failed when failed.Id == suspensionRef && suspensionRef is not null:
+                var waiting = Waiting;
+                Cancel();
+                if (waiting is ShortcutTarget pausedTarget)
+                {
+                    Show("Couldn't pause the meeting shortcut. The key is unchanged.", pausedTarget);
+                }
+                Changed();
+                break;
             case HotkeyChecked checkedKey when checkedKey.Ref is not null && checkedKey.Ref == reference:
                 if (Checking is not var (target, token))
                 {
+                    return;
+                }
+                // Do not rebind a key while the recording press is still physically held.
+                if (meeting is not null && heldKeys.Count > 0)
+                {
+                    checkedWhileHeld = checkedKey;
                     return;
                 }
                 EndCheck();
@@ -309,7 +379,7 @@ public sealed class ShortcutRecorderModel : ObservableModel
                 {
                     Show($"Can't use {Describe(token).Cap}: {checkedKey.Reason ?? "Windows can't watch it"}.", target);
                 }
-                dictation.ResumeAfterRecording();
+                Resume();
                 Changed();
                 break;
             case CommandFailed failed when failed.Id is not null && failed.Id == reference:
@@ -318,15 +388,19 @@ public sealed class ShortcutRecorderModel : ObservableModel
                     EndCheck();
                     Show("Couldn't check that shortcut. The key before still works.", failedTarget);
                 }
-                dictation.ResumeAfterRecording();
+                Resume();
                 Changed();
                 break;
             case CoreStopped:
                 // Nothing will answer the check now; the restarted core turns dictation on from its
                 // switch (DictationModel forgets the pause too).
-                if (Recording is not null || Checking is not null)
+                if (Busy)
                 {
                     Recording = null;
+                    Waiting = null;
+                    suspensionRef = null;
+                    heldKeys.Clear();
+                    checkedWhileHeld = null;
                     EndCheck();
                     Changed();
                 }
@@ -343,6 +417,12 @@ public sealed class ShortcutRecorderModel : ObservableModel
         return failed.Id?.StartsWith(RefPrefix, StringComparison.Ordinal) ?? false;
     }
 
+    private void Resume()
+    {
+        dictation.ResumeAfterRecording();
+        if (meeting is not null) send(new CoreCommand.MeetingsShortcutSuspend(false));
+    }
+
     private void TimedOut(string id)
     {
         if (reference != id || Checking is not var (target, _))
@@ -351,13 +431,15 @@ public sealed class ShortcutRecorderModel : ObservableModel
         }
         EndCheck();
         Show("Couldn't check that shortcut in time. The key before still works.", target);
-        dictation.ResumeAfterRecording();
+        Resume();
         Changed();
     }
 
     /// <summary>Forgets the check in flight, and its "Checking…" line.</summary>
     private void EndCheck()
     {
+        checkedWhileHeld = null;
+        heldKeys.Clear();
         if (Checking is var (target, _) && messages.TryGetValue(target, out var message) && !message.IsProblem)
         {
             messages.Remove(target);
@@ -377,8 +459,21 @@ public sealed class ShortcutRecorderModel : ObservableModel
     /// <summary>The two keys are never one: the core would refuse the edit key, and a key that dictates and edits at once does neither well.</summary>
     private void Save(string canonical, ShortcutTarget target, DictationKey key)
     {
+        if (target != ShortcutTarget.Meeting && meeting?.Key == canonical)
+        {
+            Show($"{key.Cap} is the meeting key. Pick another, or change the meeting key first.", target);
+            return;
+        }
         switch (target)
         {
+            case ShortcutTarget.Meeting:
+                if (canonical == dictation.CurrentKey || canonical == dictation.EditKey)
+                {
+                    Show($"{key.Cap} is a dictation or edit key. Pick another.", target);
+                    return;
+                }
+                meeting?.SetKey(canonical);
+                break;
             case ShortcutTarget.Dictation:
                 if (canonical == dictation.EditKey)
                 {
@@ -397,7 +492,7 @@ public sealed class ShortcutRecorderModel : ObservableModel
                 break;
         }
         // The edit key may still wait on the consent step, so it is "chosen", not set.
-        var saved = target == ShortcutTarget.Dictation ? $"Dictation key set to {key.Name}." : $"Edit key chosen: {key.Name}.";
+        var saved = target == ShortcutTarget.Meeting ? $"Meeting key chosen: {key.Name}." : target == ShortcutTarget.Dictation ? $"Dictation key set to {key.Name}." : $"Edit key chosen: {key.Name}.";
         if (KeyNotation.Clash(canonical, key.Cap) is string clash)
         {
             messages[target] = new ShortcutMessage(clash, true);

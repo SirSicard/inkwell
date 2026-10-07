@@ -223,6 +223,7 @@ fn rig(label: &str, seconds: f64) -> Rig {
         meetings: MeetingPlatform {
             capture: Arc::new(WinMeetingCapture::new(Devices(devices.clone()))),
             detector: Some(detector.clone()),
+            keys: None,
         },
     };
     let (core, events) = start_parts(parts);

@@ -61,6 +61,7 @@ pub mod local;
 pub mod logging;
 pub mod mailbox;
 pub mod meeting;
+pub mod meeting_keys;
 pub mod models;
 pub mod modes;
 pub mod phrases;

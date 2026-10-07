@@ -291,6 +291,9 @@
     },
     {
       "$ref": "#/$defs/MilestonesReached"
+    },
+    {
+      "$ref": "#/$defs/MeetingsShortcutState"
     }
   ],
   "$defs": {
@@ -5480,6 +5483,42 @@
       },
       "required": [
         "to"
+      ],
+      "additionalProperties": false
+    },
+    "MeetingsShortcutState": {
+      "type": "object",
+      "description": "The confirmed global meeting shortcut and whether it is held. Suspension acknowledges that no meeting shortcut can fire while the shell records a new key.",
+      "properties": {
+        "type": {
+          "const": "meetings.shortcut.state"
+        },
+        "key": {
+          "type": "string",
+          "description": "The configured canonical shortcut, or off."
+        },
+        "active": {
+          "type": "boolean",
+          "description": "The global hook is held and can toggle recording."
+        },
+        "suspended": {
+          "type": "boolean",
+          "description": "The shell suspended the hook while recording a shortcut."
+        },
+        "error": {
+          "type": "string",
+          "description": "Why the configured shortcut could not be held."
+        },
+        "ref": {
+          "type": "string",
+          "description": "The suspend/resume command id, when answering one."
+        }
+      },
+      "required": [
+        "type",
+        "key",
+        "active",
+        "suspended"
       ],
       "additionalProperties": false
     }

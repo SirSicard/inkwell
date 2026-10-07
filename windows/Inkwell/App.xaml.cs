@@ -222,6 +222,7 @@ public partial class App : Application
         {
             WindowHandle = () => (nint)Microsoft.UI.Win32Interop.GetWindowFromWindowId(shownWindow.AppWindow.Id),
         };
+        window.MeetingShortcut = models.MeetingShortcut;
         window.Attach(core.Store, router, made.Screen, made.Search, models.Meetings, models.Owed);
         made.AttachFirstRun(window.Content as FrameworkElement);
         window.ShowMilestones(models.Stats, made.Presence);

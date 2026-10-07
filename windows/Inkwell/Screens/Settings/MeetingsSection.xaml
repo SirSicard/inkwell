@@ -17,6 +17,18 @@
     </UserControl.Resources>
     <StackPanel Spacing="14">
         <TextBlock AutomationProperties.HeadingLevel="Level2" Style="{StaticResource InkHeadingStyle}" Text="Meetings" />
+        <local:SettingColumnsPanel>
+            <TextBlock Text="Start or stop recording" Style="{StaticResource InkBodyStyle}" TextWrapping="Wrap" />
+            <StackPanel Spacing="6">
+                <local:LineOrStackPanel>
+                    <ComboBox x:Name="MeetingKeyBox" MinWidth="170" AutomationProperties.Name="Meeting shortcut" SelectionChanged="OnMeetingKeyChosen" />
+                    <Button x:Name="RecordMeetingKey" Content="Record a shortcut…" Click="OnRecordMeetingKey" />
+                </local:LineOrStackPanel>
+                <TextBlock Text="Works in any app. Press once to start a meeting recording, and again to stop." Style="{StaticResource InkCaptionStyle}" TextWrapping="Wrap" />
+                <TextBlock x:Name="MeetingKeyProblem" Style="{StaticResource InkAlertTextStyle}" TextWrapping="Wrap" Visibility="Collapsed" />
+                <TextBlock x:Name="MeetingKeyMessage" Style="{StaticResource InkCaptionStyle}" TextWrapping="Wrap" Visibility="Collapsed" />
+            </StackPanel>
+        </local:SettingColumnsPanel>
         <!-- The call policies: the default for apps not chosen for, with a warning under Always and a
              hint under Never, then each app the core has seen with its own choice. -->
         <TextBlock x:Name="CallsFailure" Style="{StaticResource InkAlertTextStyle}" TextWrapping="Wrap" Visibility="Collapsed" />
