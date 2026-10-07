@@ -37,14 +37,11 @@
         </Style>
     </UserControl.Resources>
     <StackPanel Spacing="10">
-        <Grid ColumnSpacing="10">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="*" />
-            </Grid.ColumnDefinitions>
+        <!-- The heading and its line; the line under it where they don't fit side by side. -->
+        <local:LineOrStackPanel Fill="1" FillMinimum="150" Spacing="10" StackSpacing="2">
             <TextBlock AutomationProperties.HeadingLevel="Level2" Style="{StaticResource InkHeadingStyle}" Text="Modes" />
-            <TextBlock Grid.Column="1" VerticalAlignment="Bottom" Margin="0,0,0,2" Style="{StaticResource InkCaptionStyle}" Text="Picked by the app you&#x2019;re typing in" />
-        </Grid>
+            <TextBlock VerticalAlignment="Bottom" Margin="0,0,0,2" Style="{StaticResource InkCaptionStyle}" Text="Picked by the app you&#x2019;re typing in" TextWrapping="Wrap" />
+        </local:LineOrStackPanel>
         <StackPanel x:Name="Failure" Spacing="6" Visibility="Collapsed">
             <TextBlock Style="{StaticResource InkAlertTextStyle}" Text="{x:Bind local:ModesSection.FailedText}" />
             <Button x:Name="TryAgainButton" Content="Try again" Click="OnTryAgain" />

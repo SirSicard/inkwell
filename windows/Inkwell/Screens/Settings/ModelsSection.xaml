@@ -14,18 +14,14 @@
         <ItemsRepeater x:Name="Lines">
             <ItemsRepeater.ItemTemplate>
                 <DataTemplate x:DataType="local:CatalogueLineItem">
-                    <Grid Padding="0,6" ColumnSpacing="12">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="150" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
+                    <local:SettingColumnsPanel Margin="0,6">
                         <TextBlock Style="{StaticResource InkBodyStyle}" FontWeight="SemiBold" Text="{x:Bind Title}" />
-                        <StackPanel Grid.Column="1" Spacing="2">
+                        <StackPanel Spacing="2">
                             <TextBlock Style="{StaticResource InkBodyStyle}" Text="{x:Bind Engine}" Visibility="{x:Bind HasEngine}" />
                             <TextBlock Style="{StaticResource InkBodyStyle}" Foreground="{ThemeResource InkSecondaryTextBrush}" Text="{x:Bind Engine}" Visibility="{x:Bind local:SettingsFormat.HidesIf(HasEngine)}" />
                             <TextBlock Style="{StaticResource InkCaptionStyle}" Text="{x:Bind Accuracy}" Visibility="{x:Bind local:SettingsFormat.Shows(Accuracy)}" />
                         </StackPanel>
-                    </Grid>
+                    </local:SettingColumnsPanel>
                 </DataTemplate>
             </ItemsRepeater.ItemTemplate>
         </ItemsRepeater>

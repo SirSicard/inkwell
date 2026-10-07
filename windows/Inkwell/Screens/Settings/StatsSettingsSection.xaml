@@ -12,18 +12,14 @@
     xmlns:local="using:Inkwell.Screens">
     <StackPanel Spacing="10">
         <TextBlock AutomationProperties.HeadingLevel="Level2" Style="{StaticResource InkHeadingStyle}" Text="Stats" />
-        <Grid ColumnSpacing="12">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="150" />
-                <ColumnDefinition Width="*" />
-            </Grid.ColumnDefinitions>
+        <local:SettingColumnsPanel>
             <TextBlock
                 Margin="0,6,0,0"
                 VerticalAlignment="Top"
                 AutomationProperties.AccessibilityView="Raw"
                 Style="{StaticResource InkBodyStyle}"
                 Text="{x:Bind core:StatsModel.CelebrateTitle}" />
-            <StackPanel Grid.Column="1" Spacing="4">
+            <StackPanel Spacing="4">
                 <ToggleSwitch
                     x:Name="Celebrate"
                     MinWidth="0"
@@ -35,19 +31,15 @@
                     Toggled="OnCelebrateToggled" />
                 <TextBlock AutomationProperties.AccessibilityView="Raw" Style="{StaticResource InkCaptionStyle}" Text="{x:Bind core:StatsModel.CelebrateDetail}" />
             </StackPanel>
-        </Grid>
-        <Grid ColumnSpacing="12">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="150" />
-                <ColumnDefinition Width="*" />
-            </Grid.ColumnDefinitions>
+        </local:SettingColumnsPanel>
+        <local:SettingColumnsPanel>
             <TextBlock
                 Margin="0,6,0,0"
                 VerticalAlignment="Top"
                 AutomationProperties.AccessibilityView="Raw"
                 Style="{StaticResource InkBodyStyle}"
                 Text="{x:Bind core:StatsModel.TypingTitle}" />
-            <StackPanel Grid.Column="1" Spacing="4">
+            <StackPanel Spacing="4">
                 <StackPanel Orientation="Horizontal" Spacing="8">
                     <!-- 10 to 200 in steps of 5, as the Mac's Stepper; a typed speed is taken whole. -->
                     <NumberBox
@@ -69,19 +61,15 @@
                 </StackPanel>
                 <TextBlock AutomationProperties.AccessibilityView="Raw" Style="{StaticResource InkCaptionStyle}" Text="{x:Bind core:StatsModel.TypingDetail}" />
             </StackPanel>
-        </Grid>
-        <Grid ColumnSpacing="12">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="150" />
-                <ColumnDefinition Width="*" />
-            </Grid.ColumnDefinitions>
+        </local:SettingColumnsPanel>
+        <local:SettingColumnsPanel>
             <TextBlock
                 Margin="0,6,0,0"
                 VerticalAlignment="Top"
                 AutomationProperties.AccessibilityView="Raw"
                 Style="{StaticResource InkBodyStyle}"
                 Text="{x:Bind core:StatsModel.StreakTitle}" />
-            <StackPanel Grid.Column="1" Spacing="4">
+            <StackPanel Spacing="4">
                 <ToggleSwitch
                     x:Name="StreakShown"
                     MinWidth="0"
@@ -93,19 +81,15 @@
                     Toggled="OnStreakToggled" />
                 <TextBlock AutomationProperties.AccessibilityView="Raw" Style="{StaticResource InkCaptionStyle}" Text="{x:Bind core:StatsModel.StreakDetail}" />
             </StackPanel>
-        </Grid>
-        <Grid ColumnSpacing="12">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="150" />
-                <ColumnDefinition Width="*" />
-            </Grid.ColumnDefinitions>
+        </local:SettingColumnsPanel>
+        <local:SettingColumnsPanel>
             <TextBlock
                 Margin="0,6,0,0"
                 VerticalAlignment="Top"
                 AutomationProperties.AccessibilityView="Raw"
                 Style="{StaticResource InkBodyStyle}"
                 Text="{x:Bind core:StatsModel.RestDaysTitle}" />
-            <StackPanel Grid.Column="1" Spacing="4">
+            <StackPanel Spacing="4">
                 <!-- The seven weekdays as toggle buttons, in the order the user's week runs (Render). -->
                 <local:WrapPanel
                     x:Name="RestDays"
@@ -115,40 +99,31 @@
                     Spacing="6" />
                 <TextBlock AutomationProperties.AccessibilityView="Raw" Style="{StaticResource InkCaptionStyle}" Text="{x:Bind core:StatsModel.RestDaysDetail}" />
             </StackPanel>
-        </Grid>
-        <Grid ColumnSpacing="12">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="150" />
-                <ColumnDefinition Width="*" />
-            </Grid.ColumnDefinitions>
+        </local:SettingColumnsPanel>
+        <local:SettingColumnsPanel>
             <TextBlock
                 Margin="0,6,0,0"
                 VerticalAlignment="Top"
                 AutomationProperties.AccessibilityView="Raw"
                 Style="{StaticResource InkBodyStyle}"
                 Text="{x:Bind core:StatsModel.PauseTitle}" />
-            <StackPanel Grid.Column="1" Spacing="4">
+            <StackPanel Spacing="4">
                 <Button x:Name="PauseButton" Click="OnPauseClicked" />
                 <TextBlock x:Name="PauseCaption" AutomationProperties.AccessibilityView="Raw" Style="{StaticResource InkCaptionStyle}" />
                 <!-- A live region: Narrator reads a failed pause where it appears. -->
                 <TextBlock x:Name="PauseFailure" AutomationProperties.LiveSetting="Polite" Style="{StaticResource InkAlertTextStyle}" />
             </StackPanel>
-        </Grid>
+        </local:SettingColumnsPanel>
         <TextBlock
             Style="{StaticResource InkAlertTextStyle}"
             Text="{x:Bind core:StatsModel.SettingsFailedText}"
             Visibility="{x:Bind Model.SettingsFailed, Mode=OneWay}" />
-        <Grid ColumnSpacing="12">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="150" />
-                <ColumnDefinition Width="*" />
-            </Grid.ColumnDefinitions>
+        <local:SettingColumnsPanel>
             <TextBlock FontWeight="SemiBold" Style="{StaticResource InkBodyStyle}" Text="Where" />
             <TextBlock
-                Grid.Column="1"
                 Foreground="{ThemeResource InkSecondaryTextBrush}"
                 Style="{StaticResource InkBodyStyle}"
                 Text="{x:Bind core:StatsModel.WhereText}" />
-        </Grid>
+        </local:SettingColumnsPanel>
     </StackPanel>
 </UserControl>

@@ -91,7 +91,7 @@ public sealed partial class LanguageModelRows : UserControl
             var onDevice = provider?.IsOnDevice == true;
             RenderLocal(onDevice);
             ProviderDetails.Visibility = Visible(provider is not null && !onDevice);
-            ServerBox.Visibility = Visible(provider?.CustomUrl == true);
+            ServerRow.Visibility = Visible(provider?.CustomUrl == true);
             if (ServerBox.Text != cloud.DraftBaseUrl)
             {
                 ServerBox.Text = cloud.DraftBaseUrl;

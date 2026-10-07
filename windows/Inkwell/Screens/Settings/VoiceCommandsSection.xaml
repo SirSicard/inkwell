@@ -25,97 +25,87 @@
                 AutomationProperties.HelpText="{x:Bind local:VoiceCommandsSection.StartOverHelp}"
                 Visibility="{x:Bind Model.Unreadable, Mode=OneWay}" />
         </Grid>
-        <Grid ColumnSpacing="12">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="150" />
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="*" />
-            </Grid.ColumnDefinitions>
+        <!-- Name, switch and status side by side; at the narrowest window the name above, the status
+             under the switch. -->
+        <local:SettingColumnsPanel>
             <TextBlock VerticalAlignment="Center" Style="{StaticResource InkBodyStyle}" Text="Voice commands" />
-            <ToggleSwitch
-                x:Name="CommandsSwitch"
-                Grid.Column="1"
-                MinWidth="0"
-                AutomationProperties.HelpText="{x:Bind Model.StatusLine, Mode=OneWay}"
-                AutomationProperties.Name="Voice commands"
-                IsEnabled="{x:Bind Model.Loaded, Mode=OneWay}"
-                IsOn="{x:Bind Model.Enabled, Mode=OneWay}"
-                OffContent=""
-                OnContent=""
-                Toggled="OnEnabledToggled" />
-            <TextBlock Grid.Column="2" VerticalAlignment="Center" Style="{StaticResource InkBodyStyle}" Foreground="{ThemeResource InkSecondaryTextBrush}" Text="{x:Bind Model.StatusLine, Mode=OneWay}" />
-        </Grid>
-        <Grid ColumnSpacing="12">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="150" />
-                <ColumnDefinition Width="160" />
-                <ColumnDefinition Width="Auto" />
-            </Grid.ColumnDefinitions>
+            <local:LineOrStackPanel Fill="1" FillMinimum="120">
+                <ToggleSwitch
+                    x:Name="CommandsSwitch"
+                    MinWidth="0"
+                    AutomationProperties.HelpText="{x:Bind Model.StatusLine, Mode=OneWay}"
+                    AutomationProperties.Name="Voice commands"
+                    IsEnabled="{x:Bind Model.Loaded, Mode=OneWay}"
+                    IsOn="{x:Bind Model.Enabled, Mode=OneWay}"
+                    OffContent=""
+                    OnContent=""
+                    Toggled="OnEnabledToggled" />
+                <TextBlock VerticalAlignment="Center" Style="{StaticResource InkBodyStyle}" Foreground="{ThemeResource InkSecondaryTextBrush}" Text="{x:Bind Model.StatusLine, Mode=OneWay}" TextWrapping="Wrap" />
+            </local:LineOrStackPanel>
+        </local:SettingColumnsPanel>
+        <local:SettingColumnsPanel>
             <TextBlock VerticalAlignment="Center" Style="{StaticResource InkBodyStyle}" Text="Wake word" />
-            <TextBox
-                x:Name="Wake"
-                Grid.Column="1"
-                AutomationProperties.Name="Wake word"
-                IsEnabled="{x:Bind Model.Loaded, Mode=OneWay}"
-                KeyDown="OnWakeKeyDown"
-                PlaceholderText="Wake word"
-                TextChanged="OnWakeChanged" />
-            <Button x:Name="SaveWake" Grid.Column="2" AutomationProperties.Name="Save the wake word" Click="OnSaveWake" Content="Save" IsEnabled="False" />
-        </Grid>
+            <local:LineOrStackPanel>
+                <TextBox
+                    x:Name="Wake"
+                    local:LineOrStackPanel.LineWidth="160"
+                    AutomationProperties.Name="Wake word"
+                    IsEnabled="{x:Bind Model.Loaded, Mode=OneWay}"
+                    KeyDown="OnWakeKeyDown"
+                    PlaceholderText="Wake word"
+                    TextChanged="OnWakeChanged" />
+                <Button x:Name="SaveWake" AutomationProperties.Name="Save the wake word" Click="OnSaveWake" Content="Save" IsEnabled="False" />
+            </local:LineOrStackPanel>
+        </local:SettingColumnsPanel>
         <TextBlock Style="{StaticResource InkCaptionStyle}" Text="{x:Bind local:VoiceCommandsSection.FromImportText}" Visibility="{x:Bind Model.FromImport, Mode=OneWay}" />
         <ContentControl x:Name="RowsHost" HorizontalContentAlignment="Stretch" IsTabStop="False">
             <ItemsRepeater x:Name="Rows">
                 <ItemsRepeater.ItemTemplate>
                     <DataTemplate x:DataType="local:VoiceCommandItem">
-                        <Grid
+                        <!-- Phrases | what it does | switch, Delete; narrower, the phrases above, and the
+                             switch and Delete under what it does. -->
+                        <Border
                             Padding="0,8"
                             BorderBrush="{ThemeResource InkSeparatorBrush}"
                             BorderThickness="0,0,0,1"
-                            ColumnSpacing="12"
                             Tag="{x:Bind Id}">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="220" />
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <TextBlock FontFamily="{StaticResource InkMonoFontFamily}" Opacity="{x:Bind local:SettingsFormat.Dimmed(Enabled)}" Style="{StaticResource InkBodyStyle}" Text="{x:Bind Triggers}" />
-                            <StackPanel Grid.Column="1" Spacing="2">
-                                <TextBlock MaxLines="2" Opacity="{x:Bind local:SettingsFormat.Dimmed(Enabled)}" Style="{StaticResource InkBodyStyle}" Text="{x:Bind Does}" TextTrimming="CharacterEllipsis" />
-                                <TextBlock Style="{StaticResource InkCaptionStyle}" Text="Its action comes in a later version. While on, saying it types nothing." Visibility="{x:Bind NotCarriedOut}" />
-                            </StackPanel>
-                            <ToggleSwitch
-                                x:Name="Toggle"
-                                Grid.Column="2"
-                                MinWidth="0"
-                                VerticalAlignment="Top"
-                                AutomationProperties.Name="{x:Bind Name}"
-                                IsOn="{x:Bind Enabled}"
-                                OffContent=""
-                                OnContent=""
-                                Toggled="OnToggled" />
-                            <Button x:Name="Delete" Grid.Column="3" VerticalAlignment="Top" Click="OnDelete" Content="Delete" />
-                        </Grid>
+                            <local:SettingColumnsPanel TitleColumn="220">
+                                <TextBlock FontFamily="{StaticResource InkMonoFontFamily}" Opacity="{x:Bind local:SettingsFormat.Dimmed(Enabled)}" Style="{StaticResource InkBodyStyle}" Text="{x:Bind Triggers}" TextWrapping="Wrap" />
+                                <local:LineOrStackPanel Fill="0" FillMinimum="140">
+                                    <StackPanel Spacing="2">
+                                        <TextBlock MaxLines="2" Opacity="{x:Bind local:SettingsFormat.Dimmed(Enabled)}" Style="{StaticResource InkBodyStyle}" Text="{x:Bind Does}" TextTrimming="CharacterEllipsis" />
+                                        <TextBlock Style="{StaticResource InkCaptionStyle}" Text="Its action comes in a later version. While on, saying it types nothing." Visibility="{x:Bind NotCarriedOut}" />
+                                    </StackPanel>
+                                    <StackPanel VerticalAlignment="Top" Orientation="Horizontal" Spacing="12">
+                                        <ToggleSwitch
+                                            x:Name="Toggle"
+                                            MinWidth="0"
+                                            VerticalAlignment="Top"
+                                            AutomationProperties.Name="{x:Bind Name}"
+                                            IsOn="{x:Bind Enabled}"
+                                            OffContent=""
+                                            OnContent=""
+                                            Toggled="OnToggled" />
+                                        <Button x:Name="Delete" VerticalAlignment="Top" Click="OnDelete" Content="Delete" />
+                                    </StackPanel>
+                                </local:LineOrStackPanel>
+                            </local:SettingColumnsPanel>
+                        </Border>
                     </DataTemplate>
                 </ItemsRepeater.ItemTemplate>
             </ItemsRepeater>
         </ContentControl>
         <ContentControl x:Name="AddHost" Margin="0,4,0,0" HorizontalContentAlignment="Stretch" IsTabStop="False">
-            <Grid ColumnSpacing="8">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="200" />
-                    <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
-                <TextBox x:Name="NewTriggers" AutomationProperties.Name="Phrases, comma-separated" PlaceholderText="Phrases, comma-separated" TextChanged="OnNewChanged" />
-                <ComboBox x:Name="NewAction" Grid.Column="1" AutomationProperties.Name="Does" SelectedIndex="0" SelectionChanged="OnNewActionChanged">
+            <!-- One line, or one field under another at the narrowest window. -->
+            <local:LineOrStackPanel Fill="2" FillMinimum="120" Spacing="8">
+                <TextBox x:Name="NewTriggers" local:LineOrStackPanel.LineWidth="200" AutomationProperties.Name="Phrases, comma-separated" PlaceholderText="Phrases, comma-separated" TextChanged="OnNewChanged" />
+                <ComboBox x:Name="NewAction" AutomationProperties.Name="Does" SelectedIndex="0" SelectionChanged="OnNewActionChanged">
                     <x:String>Type text</x:String>
                     <x:String>Switch style</x:String>
                 </ComboBox>
-                <TextBox x:Name="NewValue" Grid.Column="2" AutomationProperties.Name="Text to type" PlaceholderText="Text to type" TextChanged="OnNewChanged" />
-                <Button x:Name="Add" Grid.Column="3" AutomationProperties.Name="Add a voice command" Click="OnAdd" Content="Add" IsEnabled="False" />
-            </Grid>
+                <TextBox x:Name="NewValue" AutomationProperties.Name="Text to type" PlaceholderText="Text to type" TextChanged="OnNewChanged" />
+                <Button x:Name="Add" AutomationProperties.Name="Add a voice command" Click="OnAdd" Content="Add" IsEnabled="False" />
+            </local:LineOrStackPanel>
         </ContentControl>
     </StackPanel>
 </UserControl>

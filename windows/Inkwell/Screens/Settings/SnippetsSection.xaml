@@ -11,10 +11,11 @@
     xmlns:local="using:Inkwell.Screens"
     Loaded="OnLoaded">
     <StackPanel Spacing="10">
-        <StackPanel Orientation="Horizontal" Spacing="10">
+        <!-- The heading and its line; the line under it where they don't fit side by side. -->
+        <local:LineOrStackPanel Fill="1" FillMinimum="150" Spacing="10" StackSpacing="2">
             <TextBlock AutomationProperties.HeadingLevel="Level2" Style="{StaticResource InkHeadingStyle}" Text="Snippets" />
-            <TextBlock VerticalAlignment="Bottom" Margin="0,0,0,2" Style="{StaticResource InkCaptionStyle}" Text="Say a trigger, get the text" />
-        </StackPanel>
+            <TextBlock VerticalAlignment="Bottom" Margin="0,0,0,2" Style="{StaticResource InkCaptionStyle}" Text="Say a trigger, get the text" TextWrapping="Wrap" />
+        </local:LineOrStackPanel>
         <!-- The failure wraps beside Start over (a Grid: a horizontal panel would never wrap it). -->
         <Grid ColumnSpacing="10" Visibility="{x:Bind local:SettingsFormat.Shows(Model.Failure), Mode=OneWay}">
             <Grid.ColumnDefinitions>
@@ -36,74 +37,68 @@
             <ItemsRepeater x:Name="Rows">
                 <ItemsRepeater.ItemTemplate>
                     <DataTemplate x:DataType="core:SnippetDraft">
-                        <Grid
+                        <!-- Trigger | its text | switch, Edit, Delete; narrower, the trigger above, and the
+                             switch and buttons under the text. -->
+                        <Border
                             Padding="0,8"
                             BorderBrush="{ThemeResource InkSeparatorBrush}"
                             BorderThickness="0,0,0,1"
-                            ColumnSpacing="12"
                             Tag="{x:Bind Id}">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="150" />
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                                <ColumnDefinition Width="Auto" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <TextBlock
-                                FontFamily="{StaticResource InkMonoFontFamily}"
-                                FontWeight="SemiBold"
-                                Opacity="{x:Bind local:SettingsFormat.Dimmed(Enabled)}"
-                                Style="{StaticResource InkBodyStyle}"
-                                Text="{x:Bind Trigger}" />
-                            <StackPanel Grid.Column="1" Spacing="4" Opacity="{x:Bind local:SettingsFormat.Dimmed(Enabled)}">
-                                <TextBlock MaxLines="3" Style="{StaticResource InkBodyStyle}" Text="{x:Bind Expansion}" TextTrimming="CharacterEllipsis" />
-                                <Border
-                                    HorizontalAlignment="Left"
-                                    Padding="8,2"
-                                    Background="{ThemeResource InkChipBrush}"
-                                    CornerRadius="10"
-                                    Visibility="{x:Bind local:SettingsFormat.Shows(Category)}">
-                                    <TextBlock FontSize="12" Foreground="{ThemeResource InkTextBrush}" Text="{x:Bind Category}" />
-                                </Border>
-                            </StackPanel>
-                            <ToggleSwitch
-                                x:Name="Toggle"
-                                Grid.Column="2"
-                                MinWidth="0"
-                                VerticalAlignment="Top"
-                                AutomationProperties.Name="{x:Bind local:SettingsFormat.SnippetName(Trigger, Expansion, Category, Enabled)}"
-                                IsOn="{x:Bind Enabled}"
-                                OffContent=""
-                                OnContent=""
-                                Toggled="OnToggled" />
-                            <Button x:Name="Edit" Grid.Column="3" VerticalAlignment="Top" Click="OnEdit" Content="Edit" />
-                            <Button x:Name="Delete" Grid.Column="4" VerticalAlignment="Top" Click="OnDelete" Content="Delete" />
-                        </Grid>
+                            <local:SettingColumnsPanel>
+                                <TextBlock
+                                    FontFamily="{StaticResource InkMonoFontFamily}"
+                                    FontWeight="SemiBold"
+                                    Opacity="{x:Bind local:SettingsFormat.Dimmed(Enabled)}"
+                                    Style="{StaticResource InkBodyStyle}"
+                                    Text="{x:Bind Trigger}"
+                                    TextWrapping="Wrap" />
+                                <local:LineOrStackPanel Fill="0" FillMinimum="140">
+                                    <StackPanel Spacing="4" Opacity="{x:Bind local:SettingsFormat.Dimmed(Enabled)}">
+                                        <TextBlock MaxLines="3" Style="{StaticResource InkBodyStyle}" Text="{x:Bind Expansion}" TextTrimming="CharacterEllipsis" />
+                                        <Border
+                                            HorizontalAlignment="Left"
+                                            Padding="8,2"
+                                            Background="{ThemeResource InkChipBrush}"
+                                            CornerRadius="10"
+                                            Visibility="{x:Bind local:SettingsFormat.Shows(Category)}">
+                                            <TextBlock FontSize="12" Foreground="{ThemeResource InkTextBrush}" Text="{x:Bind Category}" />
+                                        </Border>
+                                    </StackPanel>
+                                    <StackPanel VerticalAlignment="Top" Orientation="Horizontal" Spacing="12">
+                                        <ToggleSwitch
+                                            x:Name="Toggle"
+                                            MinWidth="0"
+                                            VerticalAlignment="Top"
+                                            AutomationProperties.Name="{x:Bind local:SettingsFormat.SnippetName(Trigger, Expansion, Category, Enabled)}"
+                                            IsOn="{x:Bind Enabled}"
+                                            OffContent=""
+                                            OnContent=""
+                                            Toggled="OnToggled" />
+                                        <Button x:Name="Edit" VerticalAlignment="Top" Click="OnEdit" Content="Edit" />
+                                        <Button x:Name="Delete" VerticalAlignment="Top" Click="OnDelete" Content="Delete" />
+                                    </StackPanel>
+                                </local:LineOrStackPanel>
+                            </local:SettingColumnsPanel>
+                        </Border>
                     </DataTemplate>
                 </ItemsRepeater.ItemTemplate>
             </ItemsRepeater>
         </ContentControl>
         <!-- The add form. Nothing is added to a list that has not been read (the model refuses too). -->
         <ContentControl x:Name="AddHost" Margin="0,4,0,0" HorizontalContentAlignment="Stretch" IsTabStop="False">
-            <Grid ColumnSpacing="8">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="150" />
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="110" />
-                    <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
-                <TextBox x:Name="NewTrigger" AutomationProperties.Name="Trigger" PlaceholderText="Trigger" TextChanged="OnNewTriggerChanged" />
+            <!-- One line, or one field under another at the narrowest window. -->
+            <local:LineOrStackPanel Fill="1" FillMinimum="120" Spacing="8">
+                <TextBox x:Name="NewTrigger" local:LineOrStackPanel.LineWidth="150" AutomationProperties.Name="Trigger" PlaceholderText="Trigger" TextChanged="OnNewTriggerChanged" />
                 <TextBox
                     x:Name="NewExpansion"
-                    Grid.Column="1"
                     MaxHeight="120"
                     AcceptsReturn="True"
                     AutomationProperties.Name="Text it becomes"
                     PlaceholderText="Text it becomes"
                     TextWrapping="Wrap" />
-                <TextBox x:Name="NewCategory" Grid.Column="2" AutomationProperties.Name="Category" PlaceholderText="Category" />
-                <Button x:Name="Add" Grid.Column="3" VerticalAlignment="Top" AutomationProperties.Name="Add a snippet" Click="OnAdd" Content="Add" IsEnabled="False" />
-            </Grid>
+                <TextBox x:Name="NewCategory" local:LineOrStackPanel.LineWidth="110" AutomationProperties.Name="Category" PlaceholderText="Category" />
+                <Button x:Name="Add" VerticalAlignment="Top" AutomationProperties.Name="Add a snippet" Click="OnAdd" Content="Add" IsEnabled="False" />
+            </local:LineOrStackPanel>
         </ContentControl>
         <TextBlock Style="{StaticResource InkCaptionStyle}" Text="{x:Bind local:SnippetsSection.HelpText}" />
     </StackPanel>

@@ -25,13 +25,9 @@
     <StackPanel Spacing="10">
         <TextBlock AutomationProperties.HeadingLevel="Level2" Style="{StaticResource InkHeadingStyle}" Text="Dictation" />
 
-        <Grid ColumnSpacing="12">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="150" />
-                <ColumnDefinition Width="*" />
-            </Grid.ColumnDefinitions>
+        <local:SettingColumnsPanel>
             <TextBlock Style="{StaticResource RowLabelStyle}" Text="Dictation" />
-            <StackPanel Grid.Column="1" Spacing="4">
+            <StackPanel Spacing="4">
                 <ToggleSwitch
                     x:Name="DictationSwitch"
                     MinWidth="0"
@@ -41,18 +37,14 @@
                     Toggled="OnDictationToggled" />
                 <TextBlock x:Name="SwitchCaption" Style="{StaticResource InkCaptionStyle}" />
             </StackPanel>
-        </Grid>
+        </local:SettingColumnsPanel>
 
         <!-- A key's row: the key, Record and the key as a cap, wrapping between them where the card
              is narrow; how the key is used, then what its check said, under them. The cap sits in a
              row-high cell so it centres on the controls' line. -->
-        <Grid ColumnSpacing="12">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="150" />
-                <ColumnDefinition Width="*" />
-            </Grid.ColumnDefinitions>
+        <local:SettingColumnsPanel>
             <TextBlock Style="{StaticResource RowLabelStyle}" Text="Dictate" />
-            <StackPanel Grid.Column="1" Spacing="4">
+            <StackPanel Spacing="4">
                 <local:WrapPanel RowSpacing="8" Spacing="12">
                     <ComboBox x:Name="KeyBox" MinWidth="170" AutomationProperties.Name="Dictate" SelectionChanged="OnKeyChosen" />
                     <!-- Any key: the next press, checked by the core (ShortcutRecorderModel). -->
@@ -66,15 +58,11 @@
                 <TextBlock Style="{StaticResource InkCaptionStyle}" Text="hold, speak, let go" />
                 <TextBlock x:Name="KeyMessage" TextWrapping="Wrap" Style="{StaticResource InkCaptionStyle}" />
             </StackPanel>
-        </Grid>
+        </local:SettingColumnsPanel>
 
-        <Grid ColumnSpacing="12">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="150" />
-                <ColumnDefinition Width="*" />
-            </Grid.ColumnDefinitions>
+        <local:SettingColumnsPanel>
             <TextBlock Style="{StaticResource RowLabelStyle}" Text="Edit a selection" />
-            <StackPanel Grid.Column="1" Spacing="4">
+            <StackPanel Spacing="4">
                 <local:WrapPanel RowSpacing="8" Spacing="12">
                     <ComboBox x:Name="EditKeyBox" MinWidth="170" AutomationProperties.Name="Edit a selection" SelectionChanged="OnEditKeyChosen" />
                     <Button x:Name="RecordEditButton" Click="OnRecordEdit" />
@@ -89,7 +77,7 @@
                 <TextBlock Style="{StaticResource InkCaptionStyle}" Text="select text, hold, say what to change" />
                 <TextBlock x:Name="EditMessage" TextWrapping="Wrap" Style="{StaticResource InkCaptionStyle}" />
             </StackPanel>
-        </Grid>
+        </local:SettingColumnsPanel>
 
         <StackPanel Spacing="4">
             <TextBlock x:Name="StatusText" Style="{StaticResource InkCaptionStyle}" />

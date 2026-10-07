@@ -13,11 +13,8 @@
         </ItemsRepeater.Layout>
         <ItemsRepeater.ItemTemplate>
             <DataTemplate x:DataType="local:ModelRowItem">
-                <Grid ColumnSpacing="12" Tag="{x:Bind Id}">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
+                <!-- The model's lines and its button; the button under them at the narrowest. -->
+                <local:LineOrStackPanel Fill="0" FillMinimum="160" Tag="{x:Bind Id}">
                     <StackPanel VerticalAlignment="Center" Spacing="4">
                         <TextBlock Style="{StaticResource InkCaptionStyle}" Text="{x:Bind Text}" />
                         <TextBlock Style="{StaticResource InkCaptionStyle}" Text="{x:Bind From}" Visibility="{x:Bind local:SettingsFormat.Shows(From)}" />
@@ -32,7 +29,7 @@
                     </StackPanel>
                     <!-- One of these at a time: Download or Retry while it is not in, Cancel while it
                          downloads or waits, Remove once it is installed (asks first). -->
-                    <StackPanel Grid.Column="1" VerticalAlignment="Top" Spacing="6">
+                    <StackPanel HorizontalAlignment="Left" VerticalAlignment="Top" Spacing="6">
                         <Button
                             x:Name="Download"
                             AutomationProperties.Name="{x:Bind DownloadName}"
@@ -58,7 +55,7 @@
                             Content="Remove…"
                             Visibility="{x:Bind ShowsRemove}" />
                     </StackPanel>
-                </Grid>
+                </local:LineOrStackPanel>
             </DataTemplate>
         </ItemsRepeater.ItemTemplate>
     </ItemsRepeater>
