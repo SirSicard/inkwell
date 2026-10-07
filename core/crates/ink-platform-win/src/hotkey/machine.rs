@@ -131,6 +131,9 @@ pub(crate) struct HoldMachine {
     last_down_ms: u32,
     /// See [`repeat_gap_ms`].
     repeat_gap_ms: u32,
+    /// The OS saw this key go down before the hook was installed. Its repeats/up belong to
+    /// the app, and no action may start until that initial hold has ended.
+    initial_release: bool,
 }
 
 impl HoldMachine {
@@ -141,11 +144,17 @@ impl HoldMachine {
             trailing: false,
             last_down_ms: 0,
             repeat_gap_ms,
+            initial_release: false,
         }
     }
 
     pub(crate) const fn is_held(&self) -> bool {
         self.held
+    }
+
+    /// A key pressed before this hook existed must be released before it can start a hold.
+    pub(crate) fn wait_for_initial_release(&mut self, down: bool) {
+        self.initial_release = down;
     }
 
     /// The hotkey's own key: the only one whose key state the hook reads for each event.
@@ -170,6 +179,16 @@ impl HoldMachine {
 
     /// Decides one event.
     pub(crate) fn on(&mut self, input: HookInput) -> Verdict {
+        if self.initial_release {
+            match input {
+                HookInput::KeyDown { vk, .. } if vk == self.key_vk() => return Verdict::default(),
+                HookInput::KeyUp { vk, .. } if vk == self.key_vk() => {
+                    self.initial_release = false;
+                    return Verdict::default();
+                }
+                _ => {}
+            }
+        }
         match (self.binding, input) {
             (
                 Binding::Modifier(key),
@@ -403,6 +422,29 @@ mod tests {
         assert_eq!(m.on(up(vk::RMENU)), PASS);
         let mut c = machine("ctrl+shift+space");
         assert_eq!(c.on(up(vk::SPACE)), PASS);
+    }
+
+    #[test]
+    fn a_new_hook_never_starts_from_a_key_still_held_after_shortcut_capture() {
+        let mut m = machine("ctrl+shift+space");
+        m.wait_for_initial_release(true);
+        assert_eq!(
+            m.on(repeat(vk::SPACE, modifier::CTRL | modifier::SHIFT)),
+            PASS
+        );
+        assert!(!m.is_held());
+        assert_eq!(
+            m.on(up(vk::SPACE)),
+            PASS,
+            "the app saw the original down and needs its up"
+        );
+        assert_eq!(
+            m.on(down(vk::SPACE, modifier::CTRL | modifier::SHIFT)),
+            Verdict {
+                mask: true,
+                ..PRESSED
+            }
+        );
     }
 
     #[test]

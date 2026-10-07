@@ -350,6 +350,15 @@ fn run(
             return forget();
         }
     };
+    // A shortcut recorded while hooks were suspended may still be physically held on resume.
+    // Before ready (and before pumping callbacks), let that initial hold finish without an
+    // action. The OS saw its down, so its repeats and release must continue reaching the app.
+    MACHINE.with(|slot| {
+        if let Some(mut machine) = slot.get() {
+            machine.wait_for_initial_release(reads_down(machine.key_vk()));
+            slot.set(Some(machine));
+        }
+    });
     // `start` gave up waiting (it said so to its caller): the hook must not outlive that answer.
     // SAFETY: no arguments.
     if cancelled.load(Ordering::Acquire) || ready.send(Ok(unsafe { GetCurrentThreadId() })).is_err()
