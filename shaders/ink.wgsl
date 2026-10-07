@@ -187,9 +187,12 @@ fn fs_main(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
     let c2 = (vec2<f32>(0.15, -0.02) - swirl) * apart;
     // The problem state's slow pulse: about once every three seconds.
     let pulse = 0.5 + 0.5 * sin(t * 2.0);
-    let r1 = mix((0.19 + 0.05 * dictating + 0.09 * g.you * live) * mix(0.8, 1.0, live), 0.06, blot);
+    // Blotted, one drop: big enough to read in the Drop's circle (at 0.06 it was a dot there), and
+    // breathing slowly while the final pass works.
+    let breath = 1.0 + 0.06 * blot * sin(t * 1.6);
+    let r1 = mix((0.19 + 0.05 * dictating + 0.09 * g.you * live) * mix(0.8, 1.0, live), 0.13 * breath, blot);
     let r2 = mix((0.16 + 0.08 * g.them) * meeting, 0.0, blot) * (1.0 + 0.06 * problem * (pulse - 0.5));
-    let soft = mix(0.24, 0.012, blot);
+    let soft = mix(0.24, 0.025, blot);
     // At rest the idle colour leans toward the dots by idle.a, so each preset shows at rest: the
     // first shade toward yours, the second toward theirs. Live, both go on to yours from there,
     // so nothing jumps.
