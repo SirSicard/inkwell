@@ -517,6 +517,151 @@ public class ModesEditorModelTests
     }
 
     [Fact]
+    public void SavingANewCloudModelAsksEvenWhenPolishIsOffInAi()
+    {
+        var (modes, sent, _) = Model(models: [ModesJson.Apple, ModesJson.Groq(false)], switchOn: false);
+        modes.Edit("c");
+        var editor = modes.Editor!;
+        editor.PolishModel = "provider:groq";
+        Assert.Contains("Saving asks", modes.ModelNote(editor).Text, StringComparison.Ordinal);
+        modes.Save();
+        Assert.Equal(ConsentDestination.Cloud("https://api.groq.com/openai/v1", "Groq"), editor.ConsentStep);
+        Assert.Empty(sent.Commands);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ChangingModelDuringApprovalSavesNothing(bool alreadyAllowed)
+    {
+        const string Other = """{"id":"provider:openai","name":"OpenAI","to":"cloud","endpoint":"https://api.openai.com/v1","allowed":false,"blocked_local_only":false}""";
+        var (modes, sent, _) = Model(models: [ModesJson.Apple, ModesJson.Groq(false), Other]);
+        modes.Edit("c");
+        var editor = modes.Editor!;
+        editor.PolishModel = "provider:groq";
+        modes.Save();
+        var destination = editor.ConsentStep!;
+        if (alreadyAllowed)
+        {
+            modes.AllowAndSave(destination);
+        }
+        editor.PolishModel = "provider:openai";
+        if (alreadyAllowed)
+        {
+            modes.Apply(ModesJson.PolishState(true, [ModesJson.GroqConsent], "consent.allow:polish:1"));
+        }
+        else
+        {
+            modes.AllowAndSave(destination);
+            Assert.Empty(sent.Commands);
+        }
+        Assert.Empty(ModesJson.Saves(sent));
+        Assert.False(editor.Saving);
+        Assert.Null(editor.ConsentStep);
+        Assert.NotNull(editor.Error);
+        modes.Save();
+        Assert.Equal(ConsentDestination.Cloud("https://api.openai.com/v1", "OpenAI"), editor.ConsentStep);
+    }
+
+    [Fact]
+    public void AStoppedCoreReleasesAnApprovalSaveAndIgnoresItsLateAnswer()
+    {
+        var (modes, sent, _) = Model(models: [ModesJson.Apple, ModesJson.Groq(false)]);
+        modes.Edit("c");
+        var editor = modes.Editor!;
+        editor.PolishModel = "provider:groq";
+        modes.Save();
+        modes.AllowAndSave(editor.ConsentStep!);
+        Assert.True(editor.Saving);
+        modes.Apply(Ev.Of("""{"type":"core.stopped"}"""));
+        Assert.False(editor.Saving);
+        modes.Apply(ModesJson.PolishState(true, [ModesJson.GroqConsent], "consent.allow:polish:1"));
+        Assert.Empty(ModesJson.Saves(sent));
+        modes.Save();
+        Assert.NotNull(editor.ConsentStep);
+    }
+
+    [Theory]
+    [InlineData("endpoint")]
+    [InlineData("model")]
+    [InlineData("local-only")]
+    [InlineData("name")]
+    [InlineData("polish")]
+    public void ChangedApprovalInputsNeverSave(string change)
+    {
+        var (modes, sent, _) = Model(models: [ModesJson.Apple, ModesJson.Groq(false)]);
+        modes.Edit("c");
+        var editor = modes.Editor!;
+        editor.PolishModel = "provider:groq";
+        modes.Save();
+        modes.AllowAndSave(editor.ConsentStep!);
+        if (change == "name")
+        {
+            editor.PolishModelName = "another-model";
+        }
+        else if (change == "polish")
+        {
+            editor.Polish = false;
+        }
+        else
+        {
+            var choice = JsonNode.Parse(ModesJson.Groq(false))!;
+            if (change == "endpoint")
+            {
+                choice["endpoint"] = "https://elsewhere.example.com/v1";
+            }
+            else if (change == "model")
+            {
+                choice["model"] = "another-model";
+            }
+            else
+            {
+                choice["blocked_local_only"] = true;
+            }
+            modes.Apply(ModesJson.Listing([ModesJson.Mode("c", "Chat"), ModesJson.Default], [ModesJson.Apple, choice.ToJsonString()]));
+        }
+        modes.Apply(ModesJson.PolishState(true, [ModesJson.GroqConsent], "consent.allow:polish:1"));
+        Assert.Empty(ModesJson.Saves(sent));
+        Assert.False(editor.Saving);
+        Assert.NotNull(editor.Error);
+    }
+
+    [Fact]
+    public void AClosedApprovalCannotSaveAReplacementEditor()
+    {
+        var (modes, sent, _) = Model(models: [ModesJson.Apple, ModesJson.Groq(false)]);
+        modes.Edit("c");
+        modes.Editor!.PolishModel = "provider:groq";
+        modes.Save();
+        modes.AllowAndSave(modes.Editor.ConsentStep!);
+        modes.CloseEditor();
+        modes.Add();
+        var replacement = modes.Editor!;
+        replacement.Name = "Replacement";
+        modes.Apply(ModesJson.PolishState(true, [ModesJson.GroqConsent], "consent.allow:polish:1"));
+        Assert.Empty(ModesJson.Saves(sent));
+        Assert.Same(replacement, modes.Editor);
+        Assert.False(replacement.Saving);
+    }
+
+    [Fact]
+    public void AnApprovedSavePinsTheDestinationShownWhileHarmlessNameChangesRemainAllowed()
+    {
+        var (modes, sent, _) = Model(models: [ModesJson.Apple, ModesJson.Groq(false)]);
+        modes.Edit("c");
+        var editor = modes.Editor!;
+        editor.PolishModel = "provider:groq";
+        modes.Save();
+        modes.AllowAndSave(editor.ConsentStep!);
+        editor.Name = "Chats";
+        modes.Apply(ModesJson.PolishState(true, [ModesJson.GroqConsent], "consent.allow:polish:1"));
+        var fields = ModesJson.ModeOf(Assert.Single(ModesJson.Saves(sent)));
+        Assert.Equal("Chats", fields["name"]!.GetValue<string>());
+        Assert.True(fields["polish_model_confirm"]!.GetValue<bool>());
+        Assert.Equal("https://api.groq.com/openai/v1", fields["polish_model_confirm_to"]!["endpoint"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void AnOkTheCoreDidNotRecordSavesNothing()
     {
         var (modes, sent, _) = Model(models: [ModesJson.Apple, ModesJson.Groq(false)]);

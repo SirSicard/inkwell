@@ -595,7 +595,9 @@ public sealed class ModesModel : ObservableModel
     private string? pendingConfirm;
     private string? pendingStartOver;
     /// <summary>An OK on its way, and what follows it once the core has recorded it.</summary>
-    private (string Ref, ConsentDestination Destination, ModeConfirm? Confirm, bool SaveEditor)? pendingOk;
+    private sealed record ModeApproval(ModeEditor Editor, PolishModelChoice Choice, string? ModelName);
+    private ModeApproval? editorApproval;
+    private (string Ref, ConsentDestination Destination, ModeConfirm? Confirm, bool SaveEditor, ModeApproval? Approval)? pendingOk;
     private ModeEditor? editor;
 
     /// <param name="consent">Polish's consents: a mode's own OK is recorded there (one per destination).</param>
@@ -928,6 +930,7 @@ public sealed class ModesModel : ObservableModel
         {
             pendingOk = null;
         }
+        editorApproval = null;
         Editor = null;
     }
 
@@ -991,8 +994,9 @@ public sealed class ModesModel : ObservableModel
         }
         editor.Error = null;
         if (editor.Polish && (editor.PinChanged || Confirmed(editor) || !(editor.Original?.Polish ?? false))
-            && StateOf(editor) is PolishState.NeedsOk { Own: true } ok)
+            && StateOf(editor, ignoringSwitch: true) is PolishState.NeedsOk { Own: true } ok)
         {
+            editorApproval = new ModeApproval(editor, ok.Choice, editor.ModelNameToSend);
             editor.ConsentStep = ok.Choice.Destination;
             return;
         }
@@ -1002,13 +1006,19 @@ public sealed class ModesModel : ObservableModel
     /// <summary>The editor's OK step: Allow records polish's OK for that destination, then saves.</summary>
     public void AllowAndSave(ConsentDestination destination)
     {
-        if (Editor is not ModeEditor editor || editor.ConsentStep != destination || consent is null)
+        if (Editor is not ModeEditor editor || editor.Saving || editor.ConsentStep != destination || consent is null)
         {
             return;
         }
+        if (editorApproval is not ModeApproval approval || !ApprovalCurrent(approval))
+        {
+            ApprovalChanged(editor);
+            return;
+        }
         editor.ConsentStep = null;
+        editorApproval = null;
         editor.Saving = true;
-        pendingOk = (consent.AllowForMode(destination), destination, null, true);
+        pendingOk = (consent.AllowForMode(destination), destination, null, true, approval);
     }
 
     /// <summary>The editor's OK step's Cancel: nothing is recorded or saved; the editor stays.</summary>
@@ -1018,9 +1028,27 @@ public sealed class ModesModel : ObservableModel
         {
             editor.ConsentStep = null;
         }
+        editorApproval = null;
     }
 
-    private void SendSave(ModeEditor editor, bool replaceUnreadable = false)
+    // Consent is for the exact model/destination shown, not whichever picker value is there later.
+    private bool ApprovalCurrent(ModeApproval approval) =>
+        ReferenceEquals(Editor, approval.Editor) && approval.Editor.Polish
+        && approval.Editor.PolishModel == approval.Choice.Id
+        && approval.Editor.ModelNameToSend == approval.ModelName
+        && Choices.FirstOrDefault(c => c.Id == approval.Choice.Id) is PolishModelChoice current
+        && current.Destination == approval.Choice.Destination && current.Model == approval.Choice.Model
+        && !current.BlockedLocalOnly;
+
+    private void ApprovalChanged(ModeEditor editor)
+    {
+        editorApproval = null;
+        editor.ConsentStep = null;
+        editor.Saving = false;
+        editor.Error = "The model changed while approval was open, so nothing was saved. Save again to review it.";
+    }
+
+    private void SendSave(ModeEditor editor, bool replaceUnreadable = false, PolishModelChoice? approvedTo = null)
     {
         var original = editor.Original;
         var adding = original is null;
@@ -1041,7 +1069,7 @@ public sealed class ModesModel : ObservableModel
             PolishModel = setsModel ? pin : null,
             PolishModelName = setsModel ? editor.ModelNameToSend : null,
             // As the user was shown it: if it sends elsewhere by now, the core refuses it.
-            ConfirmTo = !editor.PinChanged && editor.ConfirmedTo is PolishModelChoice shown && shown.Id == pin ? shown : null,
+            ConfirmTo = approvedTo ?? (!editor.PinChanged && editor.ConfirmedTo is PolishModelChoice shown && shown.Id == pin ? shown : null),
             TakeApps = editor.TakeApps || MovingNotes(editor).Count > 0,
             ReplaceUnreadable = replaceUnreadable,
         };
@@ -1165,7 +1193,7 @@ public sealed class ModesModel : ObservableModel
         Busy = true;
         if (c.AsksOk && consent is not null)
         {
-            pendingOk = (consent.AllowForMode(c.Choice.Destination), c.Choice.Destination, c.Pin ? c : null, false);
+            pendingOk = (consent.AllowForMode(c.Choice.Destination), c.Choice.Destination, c.Pin ? c : null, false, null);
         }
         else if (c.Pin)
         {
@@ -1347,9 +1375,17 @@ public sealed class ModesModel : ObservableModel
                     if (ConsentSnapshot.From(state).Covers(pending.Destination))
                     {
                         pendingOk = null;
-                        if (pending.SaveEditor && Editor is ModeEditor open)
+                        if (pending.Approval is ModeApproval approval)
                         {
-                            SendSave(open);
+                            if (ApprovalCurrent(approval))
+                            {
+                                SendSave(approval.Editor, approvedTo: approval.Choice);
+                            }
+                            else
+                            {
+                                ApprovalChanged(approval.Editor);
+                                Changed();
+                            }
                         }
                         else if (pending.Confirm is ModeConfirm c)
                         {
@@ -1381,6 +1417,16 @@ public sealed class ModesModel : ObservableModel
                 pendingDelete = null;
                 pendingConfirm = null;
                 pendingStartOver = null;
+                if (pendingOk?.Approval is ModeApproval interrupted)
+                {
+                    interrupted.Editor.Saving = false;
+                    interrupted.Editor.Error = OkFailure;
+                }
+                if (Editor is ModeEditor openEditor)
+                {
+                    openEditor.ConsentStep = null;
+                }
+                editorApproval = null;
                 pendingOk = null;
                 Busy = false;
                 Changed();
@@ -1423,10 +1469,10 @@ public sealed class ModesModel : ObservableModel
         pendingOk = null;
         if (pending.SaveEditor)
         {
-            if (Editor is ModeEditor open)
+            if (pending.Approval is ModeApproval approval)
             {
-                open.Saving = false;
-                open.Error = OkFailure;
+                approval.Editor.Saving = false;
+                approval.Editor.Error = OkFailure;
             }
         }
         else
