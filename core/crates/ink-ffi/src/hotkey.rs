@@ -129,7 +129,6 @@ mod tests {
     use super::*;
     use ink_core::Store;
 
-    #[cfg(windows)]
     #[test]
     fn meeting_shortcut_conflicts_are_canonical_and_symmetric() {
         let store = ink_store::SqliteStore::open_in_memory().unwrap();

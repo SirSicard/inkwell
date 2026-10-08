@@ -172,8 +172,8 @@ impl MeetingPlatform {
                 ink_platform_mac::MacCapture::new(clock),
             )),
             detector: Some(Arc::new(ink_platform_mac::MacMeetingDetector::new())),
-            // The Windows shortcut settings do not change the Mac shell's existing shortcuts.
-            keys: None,
+            // Each source owns one tap; meetings must not replace either dictation tap.
+            keys: Some(Arc::new(ink_platform_mac::MacHotkeySource::new(clock))),
         })
     }
 

@@ -205,6 +205,8 @@ struct DropText: Equatable, Sendable {
     /// A note that never replaces one showing or waiting (a personal best's: the take's own note,
     /// an alert above all, comes first). It is left out then; the Records card still has it.
     var yields = false
+    /// Separate app identity for the visual recording header; spoken status keeps the full title.
+    var recordingName: String?
 
     /// What the Drop says for what is going on. A consent offer shows only while nothing is live.
     /// The consent line is honest about what recording does: both sides are kept on this Mac, and
@@ -266,7 +268,8 @@ struct DropText: Equatable, Sendable {
                 return DropText(
                     title: autoTitle(meeting.appName), detail: failure ?? detail,
                     tone: failure == nil ? .recording : .alert,
-                    actions: deletable ? [.stop, .stopAndDelete] : [.stop])
+                    actions: deletable ? [.stop, .stopAndDelete] : [.stop],
+                    recordingName: meeting.appName.map(Self.named) ?? "Meeting")
             }
             let source = meeting.appName ?? meeting.title
             let latest = meeting.finals.last?.text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -284,7 +287,7 @@ struct DropText: Equatable, Sendable {
             return DropText(
                 title: ["● REC", source].compactMap { $0 }.joined(separator: " · "),
                 detail: switched ?? latest.flatMap { $0.isEmpty ? nil : $0 } ?? waiting,
-                tone: .recording)
+                tone: .recording, recordingName: source ?? "Meeting")
         case .problem:
             let far = meeting?.sides[.far]
             let title = switch far {
@@ -340,7 +343,7 @@ struct DropText: Equatable, Sendable {
         case .dictating:
             dictating(dictation, live: live)
         case .meeting:
-            DropText(title: "● REC", detail: "Recording this meeting", tone: .recording)
+            DropText(title: "● REC", detail: "Recording this meeting", tone: .recording, recordingName: "Meeting")
         case .blotting:
             DropText(title: "Blotting", detail: "The final pass")
         case .problem:
@@ -397,6 +400,8 @@ struct OrbLayer: NSViewRepresentable {
     var dimmed: Bool
     /// Text sits over it (the main window's screens), not beside it (the first run's demo).
     var behindText = false
+    /// The saved resting strength, 0.1...1; accessibility still caps it.
+    var restStrength: CGFloat = OrbLayer.restBehindText
     /// The region it wanders in (the main window's, Glow.Orb.wander); nil keeps it at `placement`.
     var wanderBounds: OrbWander.Bounds?
     /// What it sits behind (the main window's route): a change at rest moves a wandering orb.
@@ -433,16 +438,21 @@ struct OrbLayer: NSViewRepresentable {
     }
 
     /// The orb's opacity for `state`.
-    nonisolated static func opacity(state: InkState, behindText: Bool, dimmed: Bool) -> CGFloat {
+    nonisolated static func opacity(state: InkState, behindText: Bool, dimmed: Bool, restStrength: CGFloat = restBehindText) -> CGFloat {
         let rest: CGFloat = dimmed ? 0.45 : 1
         guard behindText else { return rest }
-        return min(rest, state.isLive ? liveBehindText : restBehindText)
+        let atRest = min(1, max(0.1, restStrength))
+        // Match the shared control: preserve the default ratio below 70%, then reach 80% live.
+        let whileLive = atRest <= restBehindText
+            ? atRest * (liveBehindText / restBehindText)
+            : liveBehindText + (atRest - restBehindText) / (1 - restBehindText) * (0.8 - liveBehindText)
+        return min(rest, state.isLive ? whileLive : atRest)
     }
 
     func makeNSView(context: Context) -> InkView {
         let view = InkView()
         view.setAccessibilityElement(false)
-        view.alphaValue = Self.opacity(state: state, behindText: behindText, dimmed: dimmed)
+        view.alphaValue = Self.opacity(state: state, behindText: behindText, dimmed: dimmed, restStrength: restStrength)
         return view
     }
 
@@ -455,7 +465,7 @@ struct OrbLayer: NSViewRepresentable {
         view.wanderBounds = wanderBounds
         hold?.attach(view)
         view.contentID = contentID
-        let opacity = Self.opacity(state: state, behindText: behindText, dimmed: dimmed)
+        let opacity = Self.opacity(state: state, behindText: behindText, dimmed: dimmed, restStrength: restStrength)
         // Compared with a margin, not exactly: if the opacity ever reads back rounded (a layer
         // keeps it as a Float), every update would start the fade again.
         if abs(view.alphaValue - opacity) > 0.001 {

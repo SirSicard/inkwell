@@ -42,7 +42,7 @@ private struct ShortcutRecording: ViewModifier {
     func body(content: Content) -> some View {
         content
             .background(WindowReader(host: host))
-            .onChange(of: recorder.recording != nil, initial: true) { _, recording in
+            .onChange(of: recorder.capturing, initial: true) { _, recording in
                 if recording { install() } else { remove() }
             }
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in
@@ -62,10 +62,13 @@ private struct ShortcutRecording: ViewModifier {
 
     private func install() {
         guard monitor == nil else { return }
-        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { [recorder, host] event in
-            let input: ShortcutCapture.Input = event.type == .keyDown
-                ? .keyDown(keyCode: Int(event.keyCode), flags: event.modifierFlags.rawValue, isRepeat: event.isARepeat)
-                : .flagsChanged(keyCode: Int(event.keyCode), flags: event.modifierFlags.rawValue)
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp, .flagsChanged]) { [recorder, host] event in
+            let input: ShortcutCapture.Input
+            switch event.type {
+            case .keyDown: input = .keyDown(keyCode: Int(event.keyCode), flags: event.modifierFlags.rawValue, isRepeat: event.isARepeat)
+            case .keyUp: input = .keyUp(keyCode: Int(event.keyCode), flags: event.modifierFlags.rawValue)
+            default: input = .flagsChanged(keyCode: Int(event.keyCode), flags: event.modifierFlags.rawValue)
+            }
             let eventWindow = event.window.map(ObjectIdentifier.init)
             // A local monitor runs on the main thread, as the app's events are dispatched.
             let taken = MainActor.assumeIsolated {

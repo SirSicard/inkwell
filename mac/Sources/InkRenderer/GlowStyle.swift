@@ -16,10 +16,12 @@ public struct OrbPalette: Equatable, Sendable {
     public var ink: SIMD3<Float>
     public var dark: Bool
     public var restTint: Float
+    /// Extra resting coverage in the shader ink.w lane; leaves live and blotting unchanged.
+    public var restBoost: Float
 
     public init(
         yA: SIMD3<Float>, yB: SIMD3<Float>, tA: SIMD3<Float>, tB: SIMD3<Float>, idle: SIMD3<Float>,
-        ink: SIMD3<Float>, dark: Bool, restTint: Float = 0
+        ink: SIMD3<Float>, dark: Bool, restTint: Float = 0, restBoost: Float = 0
     ) {
         self.yA = yA
         self.yB = yB
@@ -29,6 +31,17 @@ public struct OrbPalette: Equatable, Sendable {
         self.ink = ink
         self.dark = dark
         self.restTint = restTint
+        self.restBoost = restBoost
+    }
+
+    /// Match the shared shell control: above 70%, ease into stronger tint and coverage.
+    public func withShellStrength(_ strength: Float) -> OrbPalette {
+        let k = min(1, max(0, (strength - 0.7) / 0.3))
+        let boost = k * k * (3 - 2 * k)
+        var result = self
+        result.restTint = restTint + (1 - restTint) * boost
+        result.restBoost = boost
+        return result
     }
 
     /// Greys, until the shell has read the theme (and for tests).

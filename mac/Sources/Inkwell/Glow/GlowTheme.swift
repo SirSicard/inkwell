@@ -62,6 +62,7 @@ final class GlowTheme {
         var themDark: String?
         var edgeGlow = true
         var motion = Motion.system
+        var orbStrength = 70
     }
 
     private(set) var settings = Settings()
@@ -93,7 +94,7 @@ final class GlowTheme {
     /// The keys this engine reads and writes.
     static let keys: [ShellSetting] = [
         .appearanceMode, .appearanceDotsLight, .appearanceDotsDark, .appearanceYouLight, .appearanceThemLight,
-        .appearanceYouDark, .appearanceThemDark, .appearanceEdgeGlow, .appearanceMotion,
+        .appearanceYouDark, .appearanceThemDark, .appearanceEdgeGlow, .appearanceMotion, .appearanceOrb,
     ]
 
     /// The ids of its setting commands (a command.failed carries one).
@@ -178,6 +179,9 @@ final class GlowTheme {
     /// The ink holds still: the user's "Always still" (Reduce Motion is the renderer's own check).
     var motionStill: Bool { settings.motion == .still }
 
+    /// The main window alone strengthens its resting tint; the Drop retains its look.
+    var shellPalette: OrbPalette { palette.withShellStrength(Float(settings.orbStrength) / 100) }
+
     // MARK: Changes
 
     func setMode(_ mode: Mode) {
@@ -247,6 +251,14 @@ final class GlowTheme {
         failure = nil
         settings.edgeGlow = on
         write(.appearanceEdgeGlow, on ? "on" : "off")
+    }
+
+    func setOrbStrength(_ strength: Int) {
+        let bounded = min(100, max(10, strength))
+        let value = Int((Double(bounded) / 10).rounded()) * 10
+        failure = nil
+        settings.orbStrength = value
+        write(.appearanceOrb, String(value))
     }
 
     func setMotion(_ motion: Motion) {
@@ -323,6 +335,9 @@ final class GlowTheme {
         case .appearanceYouDark: next.youDark = colour(value)
         case .appearanceThemDark: next.themDark = colour(value)
         case .appearanceEdgeGlow: next.edgeGlow = value != "off"
+        case .appearanceOrb:
+            let strength = value.flatMap(Int.init)
+            next.orbStrength = strength.map { (10...100).contains($0) && $0 % 10 == 0 ? $0 : 70 } ?? 70
         case .appearanceMotion: next.motion = value.flatMap(Motion.init(rawValue:)) ?? .system
         default: return
         }

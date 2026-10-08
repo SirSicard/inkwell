@@ -1,13 +1,12 @@
-// "Record a shortcut…" for the dictation key and the edit key (Settings > Dictation).
+// The shared dictation, voice-edit and meeting shortcut recorder.
 //
 // Everyone may use any key they like, so the quick picks are a start, not the list. While the user
 // records, the next key press is captured (a modifier alone when it comes up with nothing else
 // pressed, a function key, or modifiers and a key), named as the core names it, and sent to the
 // core's hotkey.check: the core is the one judge of what it can watch. Only a key it accepts is
 // saved, in the spelling it answers; a refusal is shown with its reason and the old key stays.
-// Escape cancels. While recording, dictation is off (dictation.disable), or the current key would
-// start a take, and the core's tap would swallow it before the recorder saw it; it comes back on
-// (dictation.enable, after the save) when recording ends, however it ends.
+// Capture waits for both dictation and meeting suspension acknowledgements. The captured press
+// must be released before an accepted key is saved and hooks resume. Escape and focus loss cancel.
 import AppKit
 import Foundation
 import InkBridge
@@ -20,6 +19,7 @@ struct ShortcutCapture {
     enum Input: Equatable {
         case keyDown(keyCode: Int, flags: UInt, isRepeat: Bool)
         case flagsChanged(keyCode: Int, flags: UInt)
+        case keyUp(keyCode: Int, flags: UInt)
     }
 
     enum Outcome: Equatable {
@@ -72,6 +72,8 @@ struct ShortcutCapture {
 
     mutating func feed(_ input: Input) -> Outcome {
         switch input {
+        case .keyUp:
+            return .listening
         case .keyDown(_, _, true):
             return .listening
         case .keyDown(let code, let flags, false):
@@ -127,12 +129,14 @@ final class ShortcutRecorderModel {
     enum Target: Equatable, Sendable {
         case dictation
         case edit
+        case meeting
 
         /// For VoiceOver: "the dictation key".
         var spoken: String {
             switch self {
             case .dictation: "the dictation key"
             case .edit: "the edit key"
+            case .meeting: "the meeting key"
             }
         }
     }
@@ -145,6 +149,9 @@ final class ShortcutRecorderModel {
 
     /// The key being recorded, if any.
     private(set) var recording: Target?
+    private(set) var waiting: Target?
+    var busy: Bool { recording != nil || waiting != nil || checking != nil }
+    var capturing: Bool { recording != nil || (checking != nil && (!heldKeys.isEmpty || heldModifiers != 0)) }
     /// A captured key the core is judging.
     private(set) var checking: (target: Target, token: String)?
     /// The latest message per key.
@@ -167,24 +174,33 @@ final class ShortcutRecorderModel {
 
     @ObservationIgnored private var capture = ShortcutCapture()
     @ObservationIgnored private var nextRef = 0
+    @ObservationIgnored private var suspensionRef: String?
+    @ObservationIgnored private var dictationRef: String?
+    @ObservationIgnored private var heldKeys: Set<Int> = []
+    @ObservationIgnored private var heldModifiers: UInt = 0
+    @ObservationIgnored private var checkedWhileHeld: InkEvent?
+    @ObservationIgnored private let meeting: MeetingShortcutModel
     @ObservationIgnored private var ref: String?
     @ObservationIgnored private var timeout: Task<Void, Never>?
     @ObservationIgnored private let send: SendCommand
     @ObservationIgnored private let dictation: DictationModel
 
     static let refPrefix = "hotkey:"
+    private static let namedModifiers: UInt = ShortcutCapture.Flag.control | ShortcutCapture.Flag.option | ShortcutCapture.Flag.shift | ShortcutCapture.Flag.command
+    private static let allModifiers: UInt = namedModifiers | ShortcutCapture.Flag.function
 
-    init(send: @escaping SendCommand, dictation: DictationModel, saveEditKey: @escaping @MainActor (String) -> Void) {
+    init(send: @escaping SendCommand, dictation: DictationModel, meeting: MeetingShortcutModel, saveEditKey: @escaping @MainActor (String) -> Void) {
         self.send = send
         self.dictation = dictation
         self.saveEditKey = saveEditKey
+        self.meeting = meeting
     }
 
     func message(for target: Target) -> Message? { messages[target] }
 
     /// Starts recording `target`'s key, or (pressed again, while recording or checking) stops.
     func toggle(_ target: Target) {
-        if recording == target || checking?.target == target {
+        if recording == target || checking?.target == target || waiting == target {
             cancel()
             announce("Recording cancelled. The key is unchanged.")
         } else {
@@ -193,27 +209,73 @@ final class ShortcutRecorderModel {
     }
 
     func start(_ target: Target) {
-        dictation.suspendForRecording()
-        recording = target
-        endCheck()
+        cancel()
+        waiting = target
+        dictationRef = dictation.suspendForRecording()
+        nextRef += 1
+        let ref = "\(Self.refPrefix)pause:\(nextRef)"
+        suspensionRef = ref
         capture = ShortcutCapture()
         messages[target] = nil
+        send(.meetingsShortcutSuspend(suspended: true, ref: ref))
+        let wait = checkTimeout
+        timeout = Task { [weak self] in
+            try? await Task.sleep(for: wait)
+            guard !Task.isCancelled, let self, self.waiting != nil else { return }
+            self.cancel()
+            self.show("Couldn't pause the shortcuts. The key is unchanged.", for: target)
+        }
+    }
+
+    private func beginCaptureIfPaused() {
+        guard let target = waiting, suspensionRef == nil, dictationRef == nil else { return }
+        timeout?.cancel()
+        timeout = nil
+        waiting = nil
+        recording = target
         announce("Recording a shortcut for \(target.spoken). Press the keys. Escape on its own cancels.")
+    }
+
+    private func resume() {
+        heldKeys = []
+        heldModifiers = 0
+        checkedWhileHeld = nil
+        dictation.resumeAfterRecording()
+        send(.meetingsShortcutSuspend(suspended: false, ref: nil))
     }
 
     /// Escape, the button pressed again, the window gone or the app in the background: nothing
     /// changes, and dictation comes back.
     func cancel() {
-        guard recording != nil || checking != nil else { return }
+        guard busy else { return }
         recording = nil
+        waiting = nil
+        suspensionRef = nil
+        dictationRef = nil
         endCheck()
-        dictation.resumeAfterRecording()
+        resume()
     }
 
     /// One key event in the recorder's window. Returns whether the recorder took it (the event
     /// then goes no further: Escape does not close the window, a letter types nothing).
     func feed(_ input: ShortcutCapture.Input) -> Bool {
-        guard let target = recording else { return false }
+        guard capturing else { return false }
+        switch input {
+        case .keyDown(let code, let flags, _):
+            heldKeys.insert(code)
+            heldModifiers = flags & (KeyNotation.byKeyCode[code]?.setsFn == true ? Self.namedModifiers : Self.allModifiers)
+        case .keyUp(let code, let flags):
+            heldKeys.remove(code)
+            heldModifiers = flags & (KeyNotation.byKeyCode[code]?.setsFn == true ? Self.namedModifiers : Self.allModifiers)
+        case .flagsChanged(_, let flags): heldModifiers = flags & Self.allModifiers
+        }
+        guard let target = recording else {
+            if heldKeys.isEmpty && heldModifiers == 0, let answer = checkedWhileHeld {
+                checkedWhileHeld = nil
+                apply(answer)
+            }
+            return true
+        }
         switch capture.feed(input) {
         case .listening:
             break
@@ -223,7 +285,7 @@ final class ShortcutRecorderModel {
         case .unknownKey:
             recording = nil
             show("Inkwell doesn\u{2019}t know that key (keypad and media keys, for one). Try another.", for: target)
-            dictation.resumeAfterRecording()
+            resume()
         case .captured(let token):
             recording = nil
             checking = (target, token)
@@ -244,25 +306,45 @@ final class ShortcutRecorderModel {
 
     func apply(_ event: InkEvent) {
         switch event {
+        case .dictationOff(let off) where dictationRef != nil && off.ref == dictationRef:
+            dictationRef = nil
+            beginCaptureIfPaused()
+        case .meetingsShortcutState(let state) where suspensionRef != nil && state.ref == suspensionRef && state.suspended:
+            suspensionRef = nil
+            beginCaptureIfPaused()
+        case .commandFailed(let failed) where failed.id != nil && (failed.id == dictationRef || failed.id == suspensionRef):
+            let target = waiting
+            cancel()
+            if let target { show("Couldn't pause the shortcuts. The key is unchanged.", for: target) }
         case .hotkeyChecked(let checked) where checked.ref != nil && checked.ref == ref:
             guard let (target, token) = checking else { return }
+            if !heldKeys.isEmpty || heldModifiers != 0 {
+                checkedWhileHeld = event
+                return
+            }
             endCheck()
             if checked.ok, let canonical = checked.canonical {
                 save(canonical, for: target, shown: describe(canonical))
             } else {
                 show("Can\u{2019}t use \(describe(token).cap): \(checked.reason ?? "this Mac can\u{2019}t watch it").", for: target)
             }
-            dictation.resumeAfterRecording()
+            resume()
         case .commandFailed(let failed) where failed.id != nil && failed.id == ref:
             if let (target, _) = checking {
                 endCheck()
                 show("Couldn\u{2019}t check that shortcut. The key before still works.", for: target)
             }
-            dictation.resumeAfterRecording()
+            resume()
         case .coreStopped:
             // Nothing will answer the check now; the restarted core turns dictation on from its
             // switch (DictationModel forgets the pause too).
             recording = nil
+            waiting = nil
+            suspensionRef = nil
+            dictationRef = nil
+            heldKeys = []
+            heldModifiers = 0
+            checkedWhileHeld = nil
             endCheck()
         default:
             break
@@ -278,7 +360,7 @@ final class ShortcutRecorderModel {
         guard self.ref == ref, let (target, _) = checking else { return }
         endCheck()
         show("Couldn\u{2019}t check that shortcut in time. The key before still works.", for: target)
-        dictation.resumeAfterRecording()
+        resume()
     }
 
     /// Forgets the check in flight, and its "Checking…" line.
@@ -300,7 +382,17 @@ final class ShortcutRecorderModel {
     /// The two keys are never one: the core would refuse the edit key, and a key that dictates and
     /// edits at once does neither well.
     private func save(_ canonical: String, for target: Target, shown key: DictationKey) {
+        if target != .meeting, canonical == meeting.key, meeting.key != "off" {
+            show("\(key.cap) is the meeting key. Pick another, or change the meeting key first.", for: target)
+            return
+        }
         switch target {
+        case .meeting:
+            if canonical == dictation.key || canonical == dictation.editKey {
+                show("\(key.cap) is the dictation or edit key. Pick another.", for: target)
+                return
+            }
+            meeting.setKey(canonical)
         case .dictation:
             if canonical == dictation.editKey {
                 show("\(key.cap) is the edit key. Pick another, or change the edit key first.", for: target)
@@ -315,7 +407,7 @@ final class ShortcutRecorderModel {
             saveEditKey(canonical)
         }
         // The edit key may still wait on the consent step, so it is "chosen", not set.
-        let saved = target == .dictation ? "Dictation key set to \(key.name)." : "Edit key chosen: \(key.name)."
+        let saved = target == .dictation ? "Dictation key chosen: \(key.name)." : target == .edit ? "Edit key chosen: \(key.name)." : "Meeting key chosen: \(key.name)."
         if let clash = KeyNotation.clash(canonical, cap: key.cap) {
             messages[target] = Message(text: clash, isProblem: true)
             announce("\(saved) \(clash)")

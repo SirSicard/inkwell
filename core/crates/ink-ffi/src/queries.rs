@@ -493,7 +493,9 @@ fn parse_known(name: &str, allowed: &[&str], v: &Value) -> Result<Query, String>
         "setting.set" => {
             let key = shell_setting(name, &text("key")?)?;
             let mut value = text("value")?;
-            if crate::hotkey::is_key_setting(&key) && value != "off" {
+            if crate::hotkey::is_key_setting(&key)
+                && (value != "off" || key == crate::voice::KEY_SETTING)
+            {
                 // A key is judged by the platform's own parser and stored in its one spelling;
                 // the refusal says why, in its words.
                 value = crate::hotkey::stored_value(&value)

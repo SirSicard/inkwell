@@ -77,6 +77,25 @@ final class GlowThemeTests: XCTestCase {
         XCTAssertEqual(theme.appearance?.name, .darkAqua, "what an app-modal alert is given")
     }
 
+    func testOrbStrengthReadsWritesAndKeepsTheOldDefaultLook() {
+        var sent: [CoreCommand] = []
+        let theme = GlowTheme(send: { sent.append($0) }, applyAppearance: { _ in })
+        XCTAssertEqual(theme.settings.orbStrength, 70)
+        XCTAssertEqual(theme.shellPalette.restBoost, 0)
+        theme.setOrbStrength(94)
+        XCTAssertEqual(theme.settings.orbStrength, 90)
+        XCTAssertEqual(fields(sent.last!)["key"] as? String, "appearance.orb")
+        XCTAssertEqual(fields(sent.last!)["value"] as? String, "90")
+        theme.apply(event(#"{"type":"setting.value","key":"appearance.orb","value":"90"}"#))
+        XCTAssertGreaterThan(theme.shellPalette.restBoost, 0)
+        theme.apply(event(#"{"type":"setting.value","key":"appearance.orb","value":"99"}"#))
+        XCTAssertEqual(theme.settings.orbStrength, 70, "invalid persisted values use the shared default")
+        XCTAssertEqual(OrbLayer.opacity(state: .idle, behindText: true, dimmed: true, restStrength: 1), 0.45)
+        XCTAssertEqual(OrbLayer.opacity(state: .meeting, behindText: true, dimmed: false, restStrength: 1), 0.8)
+        XCTAssertEqual(OrbLayer.opacity(state: .meeting, behindText: true, dimmed: false), 0.3)
+        XCTAssertEqual(OrbLayer.opacity(state: .meeting, behindText: true, dimmed: true, restStrength: 1), 0.45)
+    }
+
     func testPickingAPresetDropsThatModesOwnColours() {
         var sent: [CoreCommand] = []
         let theme = GlowTheme(send: { sent.append($0) }, applyAppearance: { _ in })
@@ -427,9 +446,14 @@ final class OrbBehindTextTests: XCTestCase {
             return steepest
         }
         for dark in [false, true] {
-            XCTAssertLessThan(try steepestEdge(blotDepth: OrbLayer.blotDepth(behindText: true), dark: dark), 64, "dark: \(dark)")
-            XCTAssertGreaterThanOrEqual(try steepestEdge(blotDepth: OrbLayer.blotDepth(behindText: false), dark: dark), 128,
-                                        "the full blot's drop is hard-edged: the check sees it")
+            let background = try steepestEdge(blotDepth: OrbLayer.blotDepth(behindText: true), dark: dark)
+            let full = try steepestEdge(blotDepth: OrbLayer.blotDepth(behindText: false), dark: dark)
+            XCTAssertLessThan(background, 64, "dark: \(dark)")
+            // The shared Drop design enlarged the blot and doubled its softness (0.012→0.025).
+            // Keep the original background limit; the full blot is still a visibly sharper control.
+            XCTAssertGreaterThan(full, 64, "the full blot still exceeds the background edge limit")
+            XCTAssertGreaterThan(full, background * 2, "the measurement distinguishes full and softened blots")
+            print("blot edge dark=\(dark): background=\(background), full=\(full)")
         }
     }
 }

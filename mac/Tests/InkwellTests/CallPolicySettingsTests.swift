@@ -148,6 +148,40 @@ final class CallPolicySettingsTests: XCTestCase {
         XCTAssertFalse(saved)
     }
 
+    func testRemovalWaitsForPersistedReplyAndReconfirmsChangedDefault() throws {
+        let sent = Sent()
+        let calls = CallPolicyModel(send: sent.send, apps: NoApps())
+        calls.apply(callsEvent(list))
+        calls.askRemove(zoom)
+        let shown = try XCTUnwrap(calls.removing)
+        calls.apply(callsEvent(list, default: "always"))
+        calls.confirmRemove(shown)
+        XCTAssertTrue(sent.commands.isEmpty)
+        let current = try XCTUnwrap(calls.removing)
+        XCTAssertEqual(current.defaultPolicy, .always)
+        calls.confirmRemove(current)
+        XCTAssertEqual(sent.commands.last, .meetingsCallsRemove(app: zoom, expectedDefault: .always, ref: "calls:1"))
+        XCTAssertEqual(calls.rows.count, 3)
+        calls.apply(callsEvent("", default: "always", ref: "calls:1"))
+        XCTAssertTrue(calls.rows.isEmpty)
+    }
+
+    func testRemovalRefusesUnreadableStoreAndDoesNotHideFailedRow() throws {
+        let sent = Sent()
+        let calls = CallPolicyModel(send: sent.send, apps: NoApps())
+        calls.apply(callsEvent(list))
+        calls.askRemove(zoom)
+        calls.confirmRemove(try XCTUnwrap(calls.removing))
+        calls.apply(event(#"{"type":"command.failed","command":"meetings.calls.remove","id":"calls:1","message":"database is locked"}"#))
+        XCTAssertEqual(calls.rows.count, 3)
+        XCTAssertNotNil(calls.failure)
+        calls.apply(callsEvent(list, message: "unreadable"))
+        let count = sent.commands.count
+        calls.askRemove(zoom)
+        XCTAssertNil(calls.removing)
+        XCTAssertEqual(sent.commands.count, count)
+    }
+
     func testTheLastCallCaption() {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "UTC")!

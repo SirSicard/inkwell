@@ -187,21 +187,24 @@ mod tests {
         }
     }
 
-    #[cfg(windows)]
     #[test]
     fn meeting_shortcut_binds_without_dictation_and_suspends_before_ack() {
         let store = ink_store::SqliteStore::open_in_memory().unwrap();
+        store.set_setting(KEY_SETTING, "ctrl+shift+r").unwrap();
         let source = Arc::new(Keys::default());
         let mut keys = MeetingKeys::new(Some(source.clone()));
         keys.bind(&store, Arc::new(|_| {}));
         assert!(keys.state(None)["active"].as_bool().unwrap());
-        assert_eq!(source.held.lock().unwrap().as_ref().unwrap().0, DEFAULT_KEY);
+        assert_eq!(
+            source.held.lock().unwrap().as_ref().unwrap().0,
+            "ctrl+shift+r"
+        );
         let old = keys.generation();
         keys.suspend(true);
         assert!(source.held.lock().unwrap().is_none());
         assert!(!keys.accepts(old));
         assert_eq!(keys.state(Some("capture"))["ref"], "capture");
-        assert_eq!(keys.state(None)["key"], DEFAULT_KEY);
+        assert_eq!(keys.state(None)["key"], "ctrl+shift+r");
         assert_eq!(keys.state(None)["suspended"], true);
         keys.suspend(false);
         keys.bind(&store, Arc::new(|_| {}));
@@ -216,10 +219,10 @@ mod tests {
         );
     }
 
-    #[cfg(windows)]
     #[test]
     fn meeting_shortcut_stored_collision_and_off_leave_no_hook() {
         let store = ink_store::SqliteStore::open_in_memory().unwrap();
+        store.set_setting(KEY_SETTING, "ctrl+shift+r").unwrap();
         store
             .set_setting(crate::voice::KEY_SETTING, "Ctrl+Shift+R")
             .unwrap();
@@ -236,11 +239,11 @@ mod tests {
         assert!(source.held.lock().unwrap().is_none());
     }
 
-    #[cfg(windows)]
     #[test]
     fn meeting_shortcut_held_repeats_and_lost_hooks_never_repeat_the_action() {
         use std::sync::atomic::AtomicUsize;
         let store = ink_store::SqliteStore::open_in_memory().unwrap();
+        store.set_setting(KEY_SETTING, "ctrl+shift+r").unwrap();
         let source = Arc::new(Keys::default());
         let mut keys = MeetingKeys::new(Some(source.clone()));
         let presses = Arc::new(AtomicUsize::new(0));

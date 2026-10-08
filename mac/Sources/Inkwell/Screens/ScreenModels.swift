@@ -235,6 +235,7 @@ final class ScreenModels {
     let voiceCommands: VoiceCommandsModel
     let importNote: ImportNoteModel
     /// "Record a shortcut…" for the dictation key and the edit key.
+    let meetingShortcut: MeetingShortcutModel
     let shortcuts: ShortcutRecorderModel
     /// Inkwell 0.2's data: the first run's step and a row in Settings > General.
     let import02: Import02Model
@@ -293,7 +294,8 @@ final class ScreenModels {
         import02 = Import02Model(send: send, log: log)
         // A recorded edit key is chosen as a picked one is: consent first when voice edit is not on.
         // Weak: the recorder is the screens' own, and must not keep them alive.
-        shortcuts = ShortcutRecorderModel(send: send, dictation: dictation, saveEditKey: { _ in })
+        meetingShortcut = MeetingShortcutModel(send: send)
+        shortcuts = ShortcutRecorderModel(send: send, dictation: dictation, meeting: meetingShortcut, saveEditKey: { _ in })
         shortcuts.saveEditKey = { [weak self] token in self?.chooseEditKey(token) }
         onboarding.offersImport = { [import02] in import02.offered }
     }
@@ -334,6 +336,7 @@ final class ScreenModels {
                 modes.load()
             }
             dictation.apply(event)
+            meetingShortcut.apply(event)
             shortcuts.apply(event)
             editConsent.apply(event)
             meetingsConsent.apply(event)
@@ -360,6 +363,7 @@ final class ScreenModels {
         // Reads the switch, then (unless it is off) the core holds the keys; without
         // Accessibility it answers dictation.off, and coming back to the app tries again.
         dictation.load()
+        meetingShortcut.load()
         editConsent.load()
         meetingsConsent.load()
     }
@@ -462,7 +466,7 @@ final class ScreenModels {
         case "permissions.check", "models.list", "modes.list", "modes.save", "modes.delete", "commitment.set_done",
              "commitment.not_yet", "note.add", "note.update", "note.delete",
              "meeting.start", "meeting.stop", "meeting.dismiss", "meeting.discard", "meeting.ask",
-             "meetings.calls.list", "meetings.calls.set":
+             "meetings.calls.list", "meetings.calls.set", "meetings.calls.remove":
             true
         case "model.update":
             // The download's row says it failed, and why (the first run and Settings > Models).
@@ -476,13 +480,13 @@ final class ScreenModels {
             stats.handles(failed)
         case "setting.get":
             stats.handles(failed) || failed.id == OnboardingModel.settingID || failed.id == PolishModel.settingID
-                || MeetingModel.settingIDs.contains(failed.id ?? "") || dictation.handles(failed)
+                || MeetingModel.settingIDs.contains(failed.id ?? "") || dictation.handles(failed) || meetingShortcut.handles(failed)
                 || GlowTheme.settingIDs.contains(failed.id ?? "") || CloudModel.handles(failed)
                 || failed.id == CallPolicyModel.defaultSettingID
         case "setting.set":
             // Onboarding's is not shown (the first run shows again next launch), so it is logged.
             stats.handles(failed) || failed.id == PolishModel.settingID || MeetingModel.settingIDs.contains(failed.id ?? "")
-                || failed.id == Self.meetingsAISettingID || dictation.handles(failed) || sound.handles(failed)
+                || failed.id == Self.meetingsAISettingID || dictation.handles(failed) || meetingShortcut.handles(failed) || sound.handles(failed)
                 || GlowTheme.settingIDs.contains(failed.id ?? "") || CloudModel.handles(failed)
                 || failed.id == CallPolicyModel.defaultSettingID
         case "dictation.enable", "dictation.disable":
@@ -490,6 +494,8 @@ final class ScreenModels {
         case "audio.devices", "audio.test", "audio.test_stop":
             // Said in Settings > Sound.
             sound.handles(failed)
+        case "meetings.shortcut.suspend", "meetings.shortcut.state":
+            true
         case "hotkey.check":
             // Said under the key's row.
             shortcuts.handles(failed)

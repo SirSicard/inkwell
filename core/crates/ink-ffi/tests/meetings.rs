@@ -2702,11 +2702,11 @@ fn shortcut_state(r: &Rig, id: &str, suspended: bool) -> Value {
         .expect("shortcut acknowledgement")
 }
 
-#[cfg(windows)]
 #[test]
 fn global_meeting_shortcut_toggles_once_and_capture_suspension_invalidates_queued_keys() {
     use ink_core::HotkeyEvent::{Pressed, Released};
     let store = Arc::new(ink_store::SqliteStore::open_in_memory().unwrap());
+    store.set_setting("meetings.key", "ctrl+shift+r").unwrap();
     let keys = Arc::new(FakeShortcut::default());
     let r = rig_with_keys("shortcut-toggle", 30.0, clock(), store, Some(keys.clone()));
     let ready = r.events.wait_type("meetings.shortcut.state", WAIT);
@@ -2754,7 +2754,6 @@ fn global_meeting_shortcut_toggles_once_and_capture_suspension_invalidates_queue
     assert!(keys.binding().is_none());
 }
 
-#[cfg(windows)]
 #[test]
 fn global_meeting_shortcut_failed_save_and_unreadable_conflict_checks_preserve_settings() {
     let inner = Arc::new(ink_store::SqliteStore::open_in_memory().unwrap());

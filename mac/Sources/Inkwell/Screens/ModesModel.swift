@@ -514,8 +514,22 @@ final class ModesModel {
     /// An OK on its way, and what follows it once the core has recorded it.
     @ObservationIgnored private var pendingOK: (ref: String, destination: ConsentModel.Destination, then: AfterOK)?
 
+    private struct SaveApproval {
+        let editor: ModeEditor
+        let choice: ModelChoice
+        let modelName: String?
+
+        @MainActor func matches(_ current: ModeEditor?, choices: [ModelChoice]) -> Bool {
+            guard current === editor, editor.polish,
+                  editor.polishModel == choice.id, editor.modelNameToSend == modelName,
+                  let now = choices.first(where: { $0.id == choice.id }) else { return false }
+            return now.destination == choice.destination && now.model == choice.model && !now.blockedLocalOnly
+        }
+    }
+    @ObservationIgnored private var saveApproval: SaveApproval?
+
     private enum AfterOK {
-        case saveEditor
+        case saveEditor(SaveApproval)
         case confirm(Confirming)
         case nothing
     }
@@ -767,10 +781,12 @@ final class ModesModel {
     /// if the core refuses it, the section says so (the editor is gone). An OK still on its way is
     /// recorded, but saves nothing.
     func closeEditor() {
-        editor = nil
-        if case .saveEditor = pendingOK?.then {
+        if case .saveEditor(let approval) = pendingOK?.then {
+            approval.editor.saving = false
             pendingOK = nil
         }
+        saveApproval = nil
+        editor = nil
     }
 
     func addApp(_ identity: String, to editor: ModeEditor) {
@@ -798,7 +814,8 @@ final class ModesModel {
         guard let editor, !editor.saving else { return }
         editor.error = nil
         if editor.polish, editor.pinChanged || confirmed(editor) || !(editor.original?.polish ?? false),
-           case .needsOK(let choice, _, own: true) = polishState(editor) {
+           case .needsOK(let choice, _, own: true) = polishState(editor, ignoringSwitch: true) {
+            saveApproval = SaveApproval(editor: editor, choice: choice, modelName: editor.modelNameToSend)
             editor.consentStep = choice.destination
             return
         }
@@ -810,16 +827,24 @@ final class ModesModel {
     func allowAndSave(_ destination: ConsentModel.Destination) {
         guard let editor, editor.consentStep == destination, let consent else { return }
         editor.consentStep = nil
+        guard let approval = saveApproval, approval.choice.destination == destination,
+              approval.matches(editor, choices: choices) else {
+            saveApproval = nil
+            editor.error = Self.saveFailure(.destinationChanged, editor: editor)
+            return
+        }
+        saveApproval = nil
         editor.saving = true
-        pendingOK = (consent.allow(forMode: destination), destination, .saveEditor)
+        pendingOK = (consent.allow(forMode: destination), destination, .saveEditor(approval))
     }
 
     /// The editor's OK step's Cancel: nothing is recorded or saved; the editor stays.
     func cancelConsentStep() {
+        saveApproval = nil
         editor?.consentStep = nil
     }
 
-    private func sendSave(_ editor: ModeEditor, replaceUnreadable: Bool = false) {
+    private func sendSave(_ editor: ModeEditor, replaceUnreadable: Bool = false, approvedTo: ModelChoice? = nil) {
         let original = editor.original
         var save = ModeSave(id: editor.modeID)
         // A new mode names every field; a change only what it changes.
@@ -837,7 +862,9 @@ final class ModesModel {
             save.polishModel = .some(editor.polishModel)
             save.polishModelName = .some(editor.modelNameToSend)
         }
-        if !editor.pinChanged, let shown = editor.confirmedTo, shown.id == editor.polishModel {
+        if let approvedTo {
+            save.confirmTo = approvedTo
+        } else if !editor.pinChanged, let shown = editor.confirmedTo, shown.id == editor.polishModel {
             // As the user was shown it: if it sends elsewhere by now, the core refuses it.
             save.confirmTo = shown
         }
@@ -1053,8 +1080,14 @@ final class ModesModel {
                 if ConsentModel.Snapshot(state).covers(pending.destination) {
                     pendingOK = nil
                     switch pending.then {
-                    case .saveEditor:
-                        if let editor { sendSave(editor) }
+                    case .saveEditor(let approval):
+                        guard approval.matches(editor, choices: choices) else {
+                            approval.editor.saving = false
+                            approval.editor.error = Self.saveFailure(.destinationChanged, editor: approval.editor)
+                            break
+                        }
+                        // Send the destination the user approved, even when replacing the pin.
+                        sendSave(approval.editor, approvedTo: approval.choice)
                     case .confirm(let c):
                         sendConfirm(c)
                     case .nothing:
@@ -1081,7 +1114,10 @@ final class ModesModel {
             pendingDelete = nil
             pendingConfirm = nil
             pendingStartOver = nil
+            if case .saveEditor(let approval) = pendingOK?.then { approval.editor.saving = false }
             pendingOK = nil
+            saveApproval = nil
+            editor?.consentStep = nil
             busy = false
         case .dictationWarningEvent(let warning) where warning.kind == .polishModelMissing:
             // A take found a mode's model gone or moved: show which.
@@ -1107,9 +1143,9 @@ final class ModesModel {
         guard let pending = pendingOK else { return }
         pendingOK = nil
         switch pending.then {
-        case .saveEditor:
-            editor?.saving = false
-            editor?.error = Self.okFailure
+        case .saveEditor(let approval):
+            approval.editor.saving = false
+            approval.editor.error = Self.okFailure
         case .confirm, .nothing:
             busy = false
             problem = Self.okFailureRow

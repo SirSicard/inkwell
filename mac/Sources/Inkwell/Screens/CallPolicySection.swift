@@ -30,6 +30,17 @@ struct CallPolicyRows: View {
         } message: { _ in
             Text(CallPolicyModel.startOverDetail)
         }
+        .confirmationDialog(
+            "Remove remembered app?",
+            isPresented: Binding(get: { calls.removing != nil }, set: { if !$0 { calls.cancelRemove() } }),
+            presenting: calls.removing
+        ) { shown in
+            Button("Remove", role: .destructive) { calls.confirmRemove(shown) }
+            Button("Cancel", role: .cancel) { calls.cancelRemove() }
+        } message: { shown in
+            Text(CallPolicyModel.removeDetail(shown))
+        }
+
     }
 
     private var defaultRow: some View {
@@ -47,10 +58,11 @@ struct CallPolicyRows: View {
                     }
                     .labelsHidden()
                     .disabled(calls.defaultPolicy == nil)
-                    // Made again after a cancelled Always, so it shows the default it kept.
-                    .id(calls.alwaysPromptEpoch)
                     .accessibilityHint(CallPolicyModel.defaultCaption)
                 }
+                // Reset the entire adaptive picker after cancellation, preserving the previous
+                // choice without duplicating the same explicit ID in ViewThatFits alternatives.
+                .id(calls.alwaysPromptEpoch)
                 Text(CallPolicyModel.defaultCaption)
                     .font(Typography.caption)
                     .foregroundStyle(Theme.secondaryText)
@@ -151,6 +163,8 @@ private struct CallAppRow: View {
                 .labelsHidden()
                 .pickerStyle(.menu)
                 .fixedSize()
+                Button("Remove…") { calls.askRemove(row.id) }
+                    .disabled(calls.unreadable != nil)
                 if let seen = CallPolicyModel.seenCaption(row.seen) {
                     Text(seen)
                         .font(Typography.caption)

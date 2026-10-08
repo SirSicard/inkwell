@@ -235,6 +235,9 @@ final class DropContentView: NSView {
     let inkView = InkView(frame: NSRect(x: 0, y: 0, width: DropLayout.orbSize, height: DropLayout.orbSize))
     private let title = NSTextField(labelWithString: "")
     private let detail = NSTextField(labelWithString: "")
+    private let recordingHeader = NSView()
+    private let recordingApp = NSTextField(labelWithString: "")
+    private let recordingBadge = NSTextField(labelWithString: "")
     /// The buttons, in rows: as many to a row as fit beside the orb.
     private let buttons = NSStackView()
     private let orbHolder = NSView()
@@ -256,7 +259,7 @@ final class DropContentView: NSView {
         size: 17) ?? NSFont.systemFont(ofSize: 17)
 
     init() {
-        lines = NSStackView(views: [title, detail, buttons])
+        lines = NSStackView(views: [title, recordingHeader, detail, buttons])
         super.init(frame: NSRect(origin: .zero, size: DropLayout.size))
         wantsLayer = true
         guard let layer else { return }
@@ -277,6 +280,34 @@ final class DropContentView: NSView {
         orbHolder.autoresizingMask = [.minYMargin, .maxYMargin]
         addSubview(orbHolder)
 
+        recordingHeader.isHidden = true
+        recordingApp.font = .systemFont(ofSize: 19, weight: .semibold)
+        recordingApp.alignment = .center
+        recordingApp.lineBreakMode = .byTruncatingMiddle
+        recordingApp.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        recordingBadge.font = .systemFont(ofSize: 10, weight: .bold)
+        recordingBadge.alignment = .center
+        recordingBadge.wantsLayer = true
+        recordingBadge.layer?.cornerRadius = 8
+        recordingBadge.layer?.masksToBounds = true
+        let badge = NSMutableAttributedString(string: "● ", attributes: [.foregroundColor: NSColor(srgbRed: 1, green: 0.45, blue: 0.36, alpha: 1)])
+        badge.append(NSAttributedString(string: "REC", attributes: [.foregroundColor: NSColor.white]))
+        recordingBadge.attributedStringValue = badge
+        for field in [recordingApp, recordingBadge] {
+            recordingHeader.addSubview(field)
+            field.translatesAutoresizingMaskIntoConstraints = false
+        }
+        NSLayoutConstraint.activate([
+            recordingHeader.widthAnchor.constraint(equalToConstant: DropLayout.linesWidth),
+            recordingHeader.heightAnchor.constraint(equalToConstant: 25),
+            recordingBadge.trailingAnchor.constraint(equalTo: recordingHeader.trailingAnchor),
+            recordingBadge.centerYAnchor.constraint(equalTo: recordingHeader.centerYAnchor),
+            recordingBadge.widthAnchor.constraint(equalToConstant: 52),
+            recordingBadge.heightAnchor.constraint(equalToConstant: 20),
+            recordingApp.leadingAnchor.constraint(equalTo: recordingHeader.leadingAnchor),
+            recordingApp.trailingAnchor.constraint(equalTo: recordingBadge.leadingAnchor, constant: -8),
+            recordingApp.centerYAnchor.constraint(equalTo: recordingHeader.centerYAnchor),
+        ])
         title.font = .systemFont(ofSize: 12, weight: .semibold)
         detail.font = Self.lineFont
         // Wrapped by word, the last line cut: a tail-truncating field draws one line only, which
@@ -325,10 +356,25 @@ final class DropContentView: NSView {
     /// The layer's colours are CGColors, fixed when set: re-read in the appearance shown.
     private func applyColours() {
         effectiveAppearance.performAsCurrentDrawingAppearance {
-            layer?.backgroundColor = Self.fill.cgColor
+            let colour = inkView.palette.yA
+            let wash = NSColor(srgbRed: CGFloat(colour.x), green: CGFloat(colour.y), blue: CGFloat(colour.z), alpha: 1)
+            // Recording alone takes a soft wash from the active orb palette; offers keep their surface.
+            let fill = text.tone == .recording ? Self.fill.blended(withFraction: 0.1, of: wash) ?? Self.fill : Self.fill
+            layer?.backgroundColor = fill.cgColor
+            // A palette surface remains behind the badge in Light and Dark, including Metal fallback.
+            recordingBadge.layer?.backgroundColor = Glow.night.background.nsColor.cgColor
+            orbHolder.layer?.backgroundColor = NSColor(
+                srgbRed: CGFloat(colour.x), green: CGFloat(colour.y), blue: CGFloat(colour.z), alpha: 0.18).cgColor
             layer?.borderColor = (text.tone == .alert ? Self.alert : Self.rule).cgColor
         }
+        recordingApp.textColor = Self.textColor
         title.textColor = text.tone == .plain ? Self.secondary : Self.alert
+        if let primary = shownButtons.first {
+            primary.attributedTitle = NSAttributedString(string: primary.title, attributes: [
+                .foregroundColor: Theme.dynamic { $0.buttonLabel.nsColor },
+                .font: primary.font ?? NSFont.systemFont(ofSize: NSFont.systemFontSize),
+            ])
+        }
         if text.liveWords {
             detail.attributedStringValue = Self.liveWords(text.detail)
         } else {
@@ -379,7 +425,8 @@ final class DropContentView: NSView {
                 if index == 0 {
                     button.keyEquivalent = ""
                     button.bezelColor = Self.textColor
-                    button.contentTintColor = Theme.dynamic { $0.buttonLabel.nsColor }
+                    // AppKit does not consistently apply contentTintColor to a push button title.
+                    // Its attributed title is resolved with the palette below.
                 }
                 let width = min(button.fittingSize.width, DropLayout.linesWidth)
                 button.widthAnchor.constraint(lessThanOrEqualToConstant: DropLayout.linesWidth).isActive = true
@@ -399,6 +446,10 @@ final class DropContentView: NSView {
         }
         self.text = text
         title.stringValue = text.title
+        let recording = text.tone == .recording && text.recordingName != nil
+        recordingHeader.isHidden = !recording
+        title.isHidden = recording && text.actions.isEmpty
+        recordingApp.stringValue = text.recordingName ?? ""
         if text.liveWords {
             // The newest words matter: one line, the head cut, the last ones wet (the canvas).
             detail.maximumNumberOfLines = 1

@@ -215,14 +215,24 @@ struct VoiceCommandAddForm: View {
 
     var body: some View {
         LineOrStack(minWidth: Self.lineWidth) {
-            TextField("Phrases, comma-separated", text: $triggers).frame(width: 200)
-            Picker("Does", selection: $action) {
-                Text("Type text").tag(CommandAction.insertText)
-                Text("Switch style").tag(CommandAction.changeStyle)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Phrases, comma-separated").font(Typography.caption).foregroundStyle(Theme.secondaryText)
+                TextField("Phrases, comma-separated", text: $triggers)
+            }.frame(width: 200)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Does").font(Typography.caption).foregroundStyle(Theme.secondaryText)
+                Picker("Does", selection: $action) {
+                    Text("Type text").tag(CommandAction.insertText)
+                    Text("Switch style").tag(CommandAction.changeStyle)
+                }
+                .labelsHidden()
+                .fixedSize()
             }
-            .labelsHidden()
-            .fixedSize()
-            TextField(action == .insertText ? "Text to type" : "Style or mode name", text: $value)
+            VStack(alignment: .leading, spacing: 4) {
+                let label = action == .insertText ? "Text to type" : "Style or mode name"
+                Text(label).font(Typography.caption).foregroundStyle(Theme.secondaryText)
+                TextField(label, text: $value)
+            }
             Button("Add") {
                 commands.add(triggers: triggers, action: action, value: value)
                 triggers = ""
@@ -246,9 +256,17 @@ private struct CommandRow: View {
 
     var body: some View {
         SettingColumns(titleWidth: 220) {
-            Text(verbatim: row.triggers.joined(separator: " \u{00B7} "))
-                .font(.system(.body, design: .monospaced))
-                .foregroundStyle(row.enabled ? Theme.text : Theme.secondaryText)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(verbatim: row.triggers.first ?? "")
+                    .font(Typography.body)
+                    .foregroundStyle(row.enabled ? Theme.text : Theme.secondaryText)
+                if row.triggers.count > 1 {
+                    Text(verbatim: row.triggers.dropFirst().joined(separator: " · "))
+                        .font(Typography.caption)
+                        .foregroundStyle(Theme.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
         } controls: {
             HStack(alignment: .firstTextBaseline, spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {

@@ -381,7 +381,7 @@ public struct InkSimulation: Sendable {
         u.tA = SIMD4(palette.tA, 0)
         u.tB = SIMD4(palette.tB, 0)
         u.idle = SIMD4(palette.idle, min(1, max(0, palette.restTint)))
-        u.ink = SIMD4(palette.ink, 0)
+        u.ink = SIMD4(palette.ink, min(1, max(0, palette.restBoost)))
         return u
     }
 }

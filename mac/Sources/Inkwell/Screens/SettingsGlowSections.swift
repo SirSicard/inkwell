@@ -267,6 +267,22 @@ struct AppearanceSection: View {
                     .font(Typography.caption)
                     .foregroundStyle(Theme.secondaryText)
             }
+            SettingRow(title: "Orb strength") {
+                HStack {
+                    Slider(value: Binding(
+                        get: { Double(theme.settings.orbStrength) },
+                        set: { theme.setOrbStrength(Int($0)) }), in: 10...100, step: 10)
+                        .accessibilityLabel("Orb strength")
+                    Text("\(theme.settings.orbStrength) %")
+                        .font(Typography.caption)
+                        .monospacedDigit()
+                        .frame(width: 48, alignment: .trailing)
+                }
+                Text("How strongly the orb shows behind the window's text. It steps back while recording.")
+                    .font(Typography.caption)
+                    .foregroundStyle(Theme.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             SettingRow(title: "The ink moves") {
                 SegmentsOrMenu {
                     Picker("The ink moves", selection: Binding(get: { theme.settings.motion }, set: { theme.setMotion($0) })) {

@@ -520,21 +520,32 @@ fn the_edit_key_is_held_on_its_own_and_never_the_dictation_key() {
         rig.edit.hotkey_binding().map(|b| b.0).as_deref(),
         Some("right_command")
     );
-    // The dictation key itself as the edit key: refused, and said so.
+    // The conflicting write is refused before it can replace the saved key or either hook.
     rig.command(&format!(
-        r#"{{"cmd":"setting.set","key":"dictation.edit_key","value":"{DEFAULT_KEY}"}}"#
+        r#"{{"cmd":"setting.set","key":"dictation.edit_key","value":"{DEFAULT_KEY}","id":"same-edit-key"}}"#
     ));
-    let same = rig
+    let failed = rig
         .events
         .wait_for(WAIT, |v| {
-            v["type"] == "dictation.ready" && v.get("edit_key_error").is_some()
+            v["type"] == "command.failed" && v["id"] == "same-edit-key"
         })
-        .expect("refused");
-    assert!(same.get("edit_key").is_none());
-    assert!(rig.edit.hotkey_binding().is_none());
-    // Off: let go of.
+        .expect("conflicting write refused");
+    assert!(failed["message"].as_str().unwrap().contains("dictation"));
+    assert_eq!(
+        rig.setting("dictation.edit_key").as_deref(),
+        Some("right_command")
+    );
+    assert_eq!(
+        rig.edit.hotkey_binding().map(|b| b.0).as_deref(),
+        Some("right_command")
+    );
+    assert_eq!(
+        rig.platform.hotkey_binding().map(|b| b.0).as_deref(),
+        Some(DEFAULT_KEY)
+    );
+    // Off remains a valid distinct edit-key choice and releases its hook.
     rig.command(r#"{"cmd":"setting.set","key":"dictation.edit_key","value":"off"}"#);
-    assert!(rig.events.wait_count("dictation.ready", 4, WAIT));
+    assert!(rig.events.wait_count("dictation.ready", 3, WAIT));
     assert!(rig.edit.hotkey_binding().is_none());
 }
 
@@ -598,15 +609,30 @@ fn the_edit_key_may_be_a_chord_but_never_the_dictation_key_respelt() {
         rig.edit.hotkey_binding().map(|b| b.0).as_deref(),
         Some("option+cmd+e")
     );
-    rig.command(r#"{"cmd":"setting.set","key":"dictation.edit_key","value":"shift+ctrl+space"}"#);
-    let same = rig
+    rig.command(r#"{"cmd":"setting.set","key":"dictation.edit_key","value":"shift+ctrl+space","id":"respelt-edit-key"}"#);
+    let failed = rig
         .events
         .wait_for(WAIT, |v| {
-            v["type"] == "dictation.ready" && v.get("edit_key_error").is_some()
+            v["type"] == "command.failed" && v["id"] == "respelt-edit-key"
         })
-        .expect("refused as the dictation key");
-    assert!(same.get("edit_key").is_none(), "{same}");
-    assert!(rig.edit.hotkey_binding().is_none());
+        .expect("canonical conflict refused before storage");
+    assert!(failed["message"].as_str().unwrap().contains("dictation"));
+    assert_eq!(
+        rig.setting("dictation.edit_key").as_deref(),
+        Some("option+cmd+e")
+    );
+    assert_eq!(
+        rig.edit.hotkey_binding().map(|b| b.0).as_deref(),
+        Some("option+cmd+e")
+    );
+    // A distinct shortcut can still be saved and rebound after the rejected write.
+    rig.command(r#"{"cmd":"setting.set","key":"dictation.edit_key","value":"f13"}"#);
+    rig.events
+        .wait_for(WAIT, |v| {
+            v["type"] == "dictation.ready" && v["edit_key"] == "f13"
+        })
+        .expect("distinct key rebound");
+    assert_eq!(rig.setting("dictation.edit_key").as_deref(), Some("f13"));
 }
 
 /// consent.allow turns voice edit on with a chord, stored in its one spelling.
@@ -650,7 +676,7 @@ fn a_stored_key_reaches_the_platform_as_it_is() {
     );
 }
 
-/// Taking the edit key as the dictation key lets go of the edit key first: one key, one tap.
+/// Taking the edit key for dictation requires explicitly turning edit off first: one key, one tap.
 #[test]
 fn the_edit_keys_key_taken_for_dictation_is_let_go_of_as_the_edit_key() {
     let rig = VoiceRig::new("swap-keys");
@@ -659,15 +685,43 @@ fn the_edit_keys_key_taken_for_dictation_is_let_go_of_as_the_edit_key() {
     rig.events
         .wait_for(WAIT, |v| v["edit_key"] == "right_command")
         .expect("edit key bound");
+    rig.command(
+        r#"{"cmd":"setting.set","key":"dictation.key","value":"right_command","id":"swap-clash"}"#,
+    );
+    rig.events
+        .wait_for(WAIT, |v| {
+            v["type"] == "command.failed" && v["id"] == "swap-clash"
+        })
+        .expect("conflicting dictation write refused");
+    assert_eq!(rig.setting("dictation.key"), None);
+    assert_eq!(
+        rig.setting("dictation.edit_key").as_deref(),
+        Some("right_command")
+    );
+    assert_eq!(
+        rig.edit.hotkey_binding().map(|b| b.0).as_deref(),
+        Some("right_command")
+    );
+    assert_eq!(
+        rig.platform.hotkey_binding().map(|b| b.0).as_deref(),
+        Some(DEFAULT_KEY)
+    );
+    // An explicit Off frees the edit key before transferring it to dictation.
+    rig.command(r#"{"cmd":"setting.set","key":"dictation.edit_key","value":"off"}"#);
+    rig.events
+        .wait_for(WAIT, |v| {
+            v["type"] == "dictation.ready" && v.get("edit_key").is_none()
+        })
+        .expect("edit disabled");
     rig.command(r#"{"cmd":"setting.set","key":"dictation.key","value":"right_command"}"#);
     let ready = rig
         .events
         .wait_for(WAIT, |v| {
             v["type"] == "dictation.ready" && v["key"] == "right_command"
         })
-        .expect("rebound");
+        .expect("distinct dictation key rebound");
     assert!(ready.get("edit_key").is_none(), "{ready}");
-    assert!(ready.get("edit_key_error").is_some(), "{ready}");
+    assert!(ready.get("edit_key_error").is_none(), "{ready}");
     assert!(rig.edit.hotkey_binding().is_none());
     assert_eq!(
         rig.platform.hotkey_binding().map(|b| b.0).as_deref(),

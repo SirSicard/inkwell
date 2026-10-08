@@ -177,12 +177,15 @@ final class DictationModel {
     /// A shortcut is being recorded: the keys are let go of, or the current key would start a take
     /// and the core's tap would swallow it before the recorder saw it. Nothing turns them on again
     /// until the recording ends (enable() waits), whatever the switch says meanwhile.
-    func suspendForRecording() {
-        guard !suspendedForRecording else { return }
+    @discardableResult
+    func suspendForRecording() -> String? {
+        guard !suspendedForRecording else { return nil }
         suspendedForRecording = true
-        if wantsOn == true {
-            disable()
-        }
+        // Always obtain an acknowledgement, including while the switch is unread or off.
+        nextRef += 1
+        let ref = "\(Self.refPrefix)\(nextRef)"
+        send(.dictationDisable(ref: ref))
+        return ref
     }
 
     /// The recording ended (saved, refused or cancelled): dictation comes back, on the key just

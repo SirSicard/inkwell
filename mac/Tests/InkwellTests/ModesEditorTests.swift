@@ -392,6 +392,9 @@ final class ModesEditorModelTests: XCTestCase {
             .listUnreadable: "Your modes can't be read, so this wasn't saved. Start over replaces them with the default.",
             .meetingRecording: "Couldn't save the mode. Try again.",
             .deleteWindowOver: "Couldn't save the mode. Try again.",
+            .notEnoughSpace: "Couldn't save the mode. Try again.",
+            .modelInUse: "Couldn't save the mode. Try again.",
+            .notDownloading: "Couldn't save the mode. Try again.",
             nil: "Couldn't save the mode. Try again.",
         ]
         for code in FailureCode.allCases + [nil] {
@@ -488,12 +491,70 @@ final class ModesEditorModelTests: XCTestCase {
         let fields = try XCTUnwrap(sent.saves.last?["mode"] as? [String: Any])
         XCTAssertEqual(fields["polish_model"] as? String, "provider:groq")
         XCTAssertTrue(fields["polish_model_name"] is NSNull, "the model chosen in AI")
+        XCTAssertEqual(fields["polish_model_confirm_to"] as? [String: String], ["to": "cloud", "endpoint": "https://api.groq.com/openai/v1"], "save carries the exact approved destination")
 
         // A model name at the provider is saved with it; a blank one is the AI setting's.
         editor.polishModelName = " llama-3.3-70b "
         XCTAssertEqual(editor.modelNameToSend, "llama-3.3-70b")
         editor.polishModel = "engine:apple-foundation-models"
         XCTAssertNil(editor.modelNameToSend, "only a provider's")
+    }
+
+    func testSaveAsksWithGlobalPolishOffAndRejectsChangedPinBeforeAllow() throws {
+        let (modes, sent, _) = model(models: [apple, groq(allowed: false)], switchOn: false)
+        modes.edit("c")
+        let editor = try XCTUnwrap(modes.editor)
+        editor.polishModel = "provider:groq"
+        modes.save()
+        let destination = try XCTUnwrap(editor.consentStep)
+        editor.polishModelName = "different-model"
+        modes.allowAndSave(destination)
+        XCTAssertTrue(sent.commands.isEmpty)
+        XCTAssertFalse(editor.saving)
+        XCTAssertNotNil(editor.error)
+    }
+
+    func testConsentReplyCannotSaveChangedPinAndCoreStopUnlocksPendingEditor() throws {
+        let (modes, sent, _) = model(models: [apple, groq(allowed: false)])
+        modes.edit("c")
+        let editor = try XCTUnwrap(modes.editor)
+        editor.polishModel = "provider:groq"
+        modes.save()
+        modes.allowAndSave(try XCTUnwrap(editor.consentStep))
+        editor.polishModelName = "different-model"
+        modes.apply(polishState(on: true, consents: [groqConsent], ref: "consent.allow:polish:1"))
+        XCTAssertTrue(sent.saves.isEmpty)
+        XCTAssertFalse(editor.saving)
+        editor.polishModelName = ""
+        modes.save()
+        modes.allowAndSave(try XCTUnwrap(editor.consentStep))
+        modes.apply(event(#"{"type":"core.stopped"}"#))
+        XCTAssertFalse(editor.saving)
+        modes.apply(polishState(on: true, consents: [groqConsent], ref: "consent.allow:polish:2"))
+        XCTAssertTrue(sent.saves.isEmpty)
+    }
+
+    func testApprovalRejectsProviderModelAndDestinationChangesAndClosedEditor() throws {
+        for change in ["model", "destination", "editor"] {
+            let (modes, sent, _) = model(models: [apple, groq(allowed: false)])
+            modes.edit("c")
+            let editor = try XCTUnwrap(modes.editor)
+            editor.polishModel = "provider:groq"
+            modes.save()
+            modes.allowAndSave(try XCTUnwrap(editor.consentStep))
+            if change == "editor" {
+                modes.closeEditor()
+                modes.edit("c")
+            } else {
+                let current = change == "model"
+                    ? groq(allowed: false).replacingOccurrences(of: "llama-3.1-8b-instant", with: "different-model")
+                    : groq(allowed: false).replacingOccurrences(of: "https://api.groq.com/openai/v1", with: "https://elsewhere.example.com/v1")
+                modes.apply(listing([mode("c", "Chat"), defaultMode], models: [apple, current]))
+            }
+            modes.apply(polishState(on: true, consents: [groqConsent], ref: "consent.allow:polish:1"))
+            XCTAssertTrue(sent.saves.isEmpty, change)
+            XCTAssertFalse(editor.saving, change)
+        }
     }
 
     /// The OK the core did not record (the model moved while the user read, or the store refused):

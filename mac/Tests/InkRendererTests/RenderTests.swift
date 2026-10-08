@@ -121,6 +121,26 @@ final class RenderTests: XCTestCase {
         XCTAssertEqual(sim.uniforms(palette: tinted, placement: .centred, motion: false).idle.w, 0)
     }
 
+    func testRestBoostUsesTheExistingUniformLaneAndLeavesLiveInkUnchanged() throws {
+        var boosted = palette.withShellStrength(1)
+        let sim = InkSimulation(random: .seeded(1))
+        XCTAssertEqual(MemoryLayout<InkUniforms>.stride, 160)
+        XCTAssertEqual(sim.uniforms(palette: boosted, placement: .centred, motion: false).ink.w, 1)
+        boosted.restBoost = -1
+        XCTAssertEqual(sim.uniforms(palette: boosted, placement: .centred, motion: false).ink.w, 0)
+        boosted.restBoost = 2
+        XCTAssertEqual(sim.uniforms(palette: boosted, placement: .centred, motion: false).ink.w, 1)
+        let stronger = try frame(palette.withShellStrength(1)) { _ in }
+        XCTAssertGreaterThan(coverage(stronger), coverage(try frame(palette) { _ in }))
+        for state in [InkState.dictating, .meeting, .blotting, .problem] {
+            let original = try InkSnapshot.render(state, t: 12, width: 120, height: 120, palette: palette,
+                                                  motion: false, pipeline: pipeline)
+            let boosted = try InkSnapshot.render(state, t: 12, width: 120, height: 120,
+                                                 palette: palette.withShellStrength(1), motion: false, pipeline: pipeline)
+            XCTAssertEqual(original.rgba, boosted.rgba, "settled live and blotting ignore rest boost")
+        }
+    }
+
     /// A still frame stops the shader's time: the same picture whatever the simulation's clock.
     func testAStillFrameIgnoresTheTime() throws {
         let a = try InkSnapshot.render(.dictating, t: 3, width: 120, height: 120, palette: palette, voice: .silent,

@@ -156,8 +156,8 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *   Meetings run on their own thread (starting one never waits behind a model download), and
  *   questions about one on another. A failure is "command.failed" with the "id".
  *   {"cmd":"meetings.shortcut.suspend","suspended":true,"id":"<ref>"}
- *       Windows' global meeting shortcut is independent of dictation: setting meetings.key
- *       defaults to ctrl+shift+r; off disables it. A fresh press starts a manual recording,
+ *       The global meeting shortcut is independent of dictation: setting meetings.key
+ *       defaults to ctrl+shift+r on Windows and off on Mac; off disables it. A fresh press starts a manual recording,
  *       or stops capture; repeats and presses while stopping/finalizing do neither.
  *       A chord held when its hook is resumed must be released before a fresh press can act.
  *       meetings.shortcut.state gives key, active, suspended, an optional error, and ref.

@@ -52,12 +52,15 @@ enum CoreCommand: Equatable, Sendable {
     /// the calendar has the call.
     case meetingStart(app: String?, title: String?)
     case meetingStop
+    case meetingsShortcutSuspend(suspended: Bool, ref: String?)
+    case meetingsShortcutState(ref: String?)
     case meetingDismiss(app: String)
     /// "Stop and delete", in a meeting's first minute (until its `delete_until_unix_ms`): the
     /// recording ends and is deleted as if never made (`meeting.stopped`, `meeting.discarded`).
     case meetingDiscard
     /// The call policies: `meetings.calls` with `ref`, or a `command.failed` with it as the id.
     case meetingsCallsList(ref: String)
+    case meetingsCallsRemove(app: String, expectedDefault: CallPolicy, ref: String)
     /// One app's call policy, by the identity detection reports: always, ask, never, or default
     /// (follow the default again). The core refuses it over a stored list it cannot read unless
     /// `replaceUnreadable` (the user chose to start the list over).
@@ -187,9 +190,17 @@ enum CoreCommand: Equatable, Sendable {
                 .merging(app.map { ["app": $0] } ?? [:]) { a, _ in a }
                 .merging(title.map { ["title": $0] } ?? [:]) { a, _ in a }
         case .meetingStop: ["cmd": "meeting.stop", "id": "meeting.stop"]
+        case .meetingsShortcutSuspend(let suspended, let ref):
+            ["cmd": "meetings.shortcut.suspend", "suspended": suspended]
+                .merging(ref.map { ["id": $0] } ?? [:]) { a, _ in a }
+        case .meetingsShortcutState(let ref):
+            ["cmd": "meetings.shortcut.state"]
+                .merging(ref.map { ["id": $0] } ?? [:]) { a, _ in a }
         case .meetingDismiss(let app): ["cmd": "meeting.dismiss", "app": app, "id": "meeting.dismiss"]
         case .meetingDiscard: ["cmd": "meeting.discard", "id": "meeting.discard"]
         case .meetingsCallsList(let ref): ["cmd": "meetings.calls.list", "id": ref]
+        case .meetingsCallsRemove(let app, let expectedDefault, let ref):
+            ["cmd": "meetings.calls.remove", "app": app, "expected_default": expectedDefault.rawValue, "id": ref]
         case .meetingsCallsSet(let app, let policy, let replace, let ref):
             ["cmd": "meetings.calls.set", "app": app, "policy": policy, "id": ref]
                 .merging(replace ? ["replace_unreadable": true] : [:]) { a, _ in a }
@@ -273,10 +284,13 @@ enum CoreCommand: Equatable, Sendable {
         case .recordDelete: "record.delete"
         case .meetingStart: "meeting.start"
         case .meetingStop: "meeting.stop"
+        case .meetingsShortcutSuspend: "meetings.shortcut.suspend"
+        case .meetingsShortcutState: "meetings.shortcut.state"
         case .meetingDismiss: "meeting.dismiss"
         case .meetingDiscard: "meeting.discard"
         case .meetingsCallsList: "meetings.calls.list"
         case .meetingsCallsSet: "meetings.calls.set"
+        case .meetingsCallsRemove: "meetings.calls.remove"
         case .meetingAsk: "meeting.ask"
         case .meetingsRecover: "meetings.recover"
         case .commitmentNotYet: "commitment.not_yet"
@@ -343,6 +357,7 @@ enum ShellSetting: String, Sendable {
     /// "on" or "off": the switch for a meeting's summary and Ask. Only "off" is set this way: they
     /// turn on through the consent step (`consentAllow`).
     case meetingsLLM = "meetings.llm"
+    case meetingsKey = "meetings.key"
     /// The microphone for dictation, meetings and the test: "auto" (the default) or a device's
     /// id from `audio.devices`, which must be connected when it is set (Settings > Sound).
     case audioInput = "audio.input"
@@ -374,6 +389,7 @@ enum ShellSetting: String, Sendable {
     case appearanceEdgeGlow = "appearance.edge_glow"
     /// "system" (the default: Reduce Motion decides) or "still".
     case appearanceMotion = "appearance.motion"
+    case appearanceOrb = "appearance.orb"
     /// The typing speed the Stats screen measures time saved against: a whole number of words a
     /// minute, 10 to 200 (40 unless set).
     case statsTypingWpm = "stats.typing_wpm"

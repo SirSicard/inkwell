@@ -83,7 +83,7 @@ struct SettingsScreen: View {
                         SnippetsSection(snippets: screens.snippets).settingsCard(.snippets)
                         VoiceCommandsSection(commands: screens.voiceCommands).settingsCard(.voiceCommands)
                         AISection(polish: screens.polish, screens: screens, cloud: screens.cloud).settingsCard(.ai)
-                        MeetingsSection(permissions: screens.permissions, meetings: screens.meetings, calls: screens.calls)
+                        MeetingsSection(permissions: screens.permissions, meetings: screens.meetings, calls: screens.calls, shortcut: screens.meetingShortcut, recorder: screens.shortcuts)
                             .settingsCard(.meetings)
                         StatsSettingsSection(stats: screens.stats).settingsCard(.stats)
                         ModelsSection(catalogue: screens.catalogue).settingsCard(.models)
@@ -419,7 +419,6 @@ private struct DictationSection: View {
     /// Each row's picker and key cap, as wide as they are: both rows give them the wider width, so
     /// the two Record a shortcut buttons start in one column whatever the keys are.
     @State private var dictateKeysWidth: CGFloat = 0
-    @State private var editKeysWidth: CGFloat = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -432,7 +431,7 @@ private struct DictationSection: View {
                         .toggleStyle(.switch)
                         .labelsHidden()
                         // Turned on mid-recording, the core would hold the keys the recorder listens for.
-                        .disabled(shortcuts.recording != nil)
+                        .disabled(shortcuts.busy)
                     Text(dictation.isOn ? "The keys below are Inkwell's" : "Off: the keys do what they did before")
                         .foregroundStyle(Theme.secondaryText)
                 }
@@ -455,7 +454,7 @@ private struct DictationSection: View {
                         }
                         .labelsHidden()
                         .fixedSize()
-                        .disabled(shortcuts.recording != nil)
+                        .disabled(shortcuts.busy)
                         Key(text: DictationModel.cap(dictation.key))
                             .accessibilityLabel(DictationModel.key(dictation.key)?.name ?? dictation.key)
                     }
@@ -468,39 +467,6 @@ private struct DictationSection: View {
                 KeyHint(text: "hold, speak, let go")
                 ShortcutMessage(recorder: shortcuts, target: .dictation)
             }
-            SettingRow(title: "Edit a selection") {
-                KeyControls {
-                    HStack(alignment: .firstTextBaseline, spacing: 12) {
-                        Picker("Edit a selection", selection: Binding(
-                            get: { dictation.editKey ?? "off" },
-                            set: { screens.chooseEditKey($0 == "off" ? nil : $0) }
-                        )) {
-                            Text("Off").tag("off")
-                            ForEach(DictationModel.keys.filter { $0.token != dictation.key }) { key in
-                                Text(key.name).tag(key.token)
-                            }
-                            if let edit = dictation.editKey, !DictationModel.keys.contains(where: { $0.token == edit }),
-                               let recorded = DictationModel.key(edit) {
-                                Text(recorded.cap).accessibilityLabel(recorded.name).tag(edit)
-                            }
-                        }
-                        .labelsHidden()
-                        .fixedSize()
-                        .disabled(shortcuts.recording != nil)
-                        if let edit = dictation.editKey, dictation.editKeyProblem == nil {
-                            Key(text: DictationModel.cap(edit))
-                                .accessibilityLabel(DictationModel.key(edit)?.name ?? edit)
-                        }
-                    }
-                    .fixedSize()
-                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { editKeysWidth = $0 }
-                    .frame(minWidth: keysColumn, alignment: .leading)
-                } record: {
-                    RecordShortcutButton(recorder: shortcuts, target: .edit, what: "the edit key")
-                }
-                KeyHint(text: "select text, hold, say what to change")
-                ShortcutMessage(recorder: shortcuts, target: .edit)
-            }
             VStack(alignment: .leading, spacing: 4) {
                 Text(dictation.keyFailure ?? dictation.status)
                     .foregroundStyle(dictation.isProblem ? Theme.alert : Theme.secondaryText)
@@ -509,13 +475,6 @@ private struct DictationSection: View {
                 } else if dictation.canRetry {
                     Button(dictation.retryTitle) { dictation.retry() }
                 }
-                if let problem = dictation.editKeyProblem {
-                    Text(problem == DictationModel.editKeyLostText ? problem : "The edit key isn't held: \(problem)")
-                        .foregroundStyle(Theme.alert)
-                }
-                if let problem = screens.editConsent.problem {
-                    Text(problem).foregroundStyle(Theme.alert)
-                }
                 if let problem = dictation.settingsProblem {
                     Text("Dictation \(problem), so it uses the defaults for them.").foregroundStyle(Theme.alert)
                 }
@@ -523,17 +482,12 @@ private struct DictationSection: View {
             .font(Typography.caption)
             .fixedSize(horizontal: false, vertical: true)
             ImportKeyNoteView(model: screens.importNote, currentKey: DictationModel.key(dictation.key)?.name ?? dictation.key)
-            Text("Editing sends the selection and what you say to a language model, and replaces the selection with the answer, so choosing its key asks you first where that is. Edits are not saved in the Library.")
-                .font(Typography.caption)
-                .foregroundStyle(Theme.secondaryText)
-                .fixedSize(horizontal: false, vertical: true)
         }
-        .consentStep(screens.editConsent, host: .settings)
         .shortcutRecording(shortcuts)
     }
 
     private var shortcuts: ShortcutRecorderModel { screens.shortcuts }
-    private var keysColumn: CGFloat { max(dictateKeysWidth, editKeysWidth) }
+    private var keysColumn: CGFloat { dictateKeysWidth }
 }
 
 /// A key row's controls: the picker and its cap, then Record a shortcut…, on one line where the
@@ -589,7 +543,7 @@ struct RecordShortcutButton: View {
     static let recordingTitle = "Press the keys\u{2026} (Esc cancels)"
 
     private var isRecording: Bool { recorder.recording == target }
-    private var isChecking: Bool { recorder.checking?.target == target }
+    private var isChecking: Bool { recorder.checking?.target == target || recorder.waiting == target }
 
     var body: some View {
         // Pressed while recording or checking, it cancels: a check the core never answers is
@@ -672,6 +626,44 @@ private struct AISection: View {
                 .font(Typography.caption)
                 .foregroundStyle(Theme.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
+            SettingRow(title: "Voice edit") {
+                KeyControls {
+                    HStack(alignment: .firstTextBaseline, spacing: 12) {
+                        Picker("Edit a selection", selection: Binding(
+                            get: { screens.dictation.editKey ?? "off" },
+                            set: { screens.chooseEditKey($0 == "off" ? nil : $0) }
+                        )) {
+                            Text("Off").tag("off")
+                            ForEach(DictationModel.keys.filter { $0.token != screens.dictation.key }) { key in
+                                Text(key.name).tag(key.token)
+                            }
+                            if let edit = screens.dictation.editKey, !DictationModel.keys.contains(where: { $0.token == edit }),
+                               let recorded = DictationModel.key(edit) {
+                                Text(recorded.cap).accessibilityLabel(recorded.name).tag(edit)
+                            }
+                        }
+                        .labelsHidden()
+                        .fixedSize()
+                        .disabled(screens.shortcuts.busy)
+                        if let edit = screens.dictation.editKey, screens.dictation.editKeyProblem == nil {
+                            Key(text: DictationModel.cap(edit))
+                                .accessibilityLabel(DictationModel.key(edit)?.name ?? edit)
+                        }
+                    }
+                    .fixedSize()
+                } record: {
+                    RecordShortcutButton(recorder: screens.shortcuts, target: .edit, what: "the edit key")
+                }
+                KeyHint(text: "select text, hold, say what to change")
+                ShortcutMessage(recorder: screens.shortcuts, target: .edit)
+            }
+            Text("Editing sends the selection and what you say to a language model, and replaces the selection with the answer, so choosing its key asks you first where that is. Edits are not saved in the Library.")
+                .font(Typography.caption)
+                .foregroundStyle(Theme.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+            if let problem = screens.dictation.editKeyProblem ?? screens.editConsent.problem {
+                Text(problem).font(Typography.caption).foregroundStyle(Theme.alert)
+            }
             // One OK per destination: a mode may polish on a model of its own (Settings > Modes).
             PolishConsentsRow(polish: polish)
                 .padding(.top, 4)
@@ -704,6 +696,8 @@ private struct AISection: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         .polishConsent(polish, host: .settings)
+        .consentStep(screens.editConsent, host: .settings)
+        .shortcutRecording(screens.shortcuts)
     }
 }
 
@@ -761,10 +755,27 @@ private struct MeetingsSection: View {
     let permissions: PermissionsModel
     let meetings: MeetingModel
     let calls: CallPolicyModel
+    let shortcut: MeetingShortcutModel
+    let recorder: ShortcutRecorderModel
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             SectionTitle(text: "Meetings")
+            SettingRow(title: "Start / stop shortcut") {
+                KeyControls {
+                    Picker("Start / stop shortcut", selection: Binding(get: { shortcut.key }, set: { shortcut.setKey($0) })) {
+                        Text("Off").tag("off")
+                        if shortcut.key != "off" { Text(DictationModel.cap(shortcut.key)).tag(shortcut.key) }
+                    }
+                    .labelsHidden()
+                    .disabled(recorder.busy)
+                } record: {
+                    RecordShortcutButton(recorder: recorder, target: .meeting, what: "the meeting key")
+                }
+                KeyHint(text: "Press once to start or stop recording. Off leaves the keys free.")
+                ShortcutMessage(recorder: recorder, target: .meeting)
+                if let problem = shortcut.problem { Text(problem).font(Typography.caption).foregroundStyle(Theme.alert) }
+            }
             CallPolicyRows(calls: calls)
             if meetings.settingsFailed {
                 Text("Couldn't read or save a meeting setting. It may not be what it shows.")
@@ -784,6 +795,7 @@ private struct MeetingsSection: View {
                     .foregroundStyle(Theme.alert)
             }
         }
+        .shortcutRecording(recorder)
     }
 
     private func toggle(
@@ -841,11 +853,6 @@ private struct ModelsSection: View {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(line.engineText)
                             .foregroundStyle(line.engine == nil ? Theme.secondaryText : Theme.text)
-                        if let accuracy = line.accuracy {
-                            Text(accuracy)
-                                .font(Typography.caption)
-                                .foregroundStyle(Theme.secondaryText)
-                        }
                     }
                 }
                 .padding(.vertical, 6)
@@ -865,9 +872,22 @@ private struct ModelsSection: View {
             }
             // Where the accuracy comes from, only when a row shows one.
             if CatalogueModel.jobs.contains(where: { catalogue.line($0).accuracy != nil }) {
-                Text("Accuracy is measured on public test sets: AMI meetings and FLEURS English.")
-                    .font(Typography.caption)
-                    .foregroundStyle(Theme.secondaryText)
+                DisclosureGroup("Accuracy details") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(CatalogueModel.jobs, id: \.self) { job in
+                            let line = catalogue.line(job)
+                            if let accuracy = line.accuracy {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(CatalogueModel.title(job)).font(Typography.body)
+                                    Text(accuracy).font(Typography.caption).foregroundStyle(Theme.secondaryText)
+                                }
+                            }
+                        }
+                        Text("Accuracy is measured on public test sets: AMI meetings and FLEURS English.")
+                            .font(Typography.caption)
+                            .foregroundStyle(Theme.secondaryText)
+                    }.padding(.top, 6)
+                }
             }
         }
     }
@@ -884,9 +904,9 @@ struct ModelDownloadRow: View {
         let name = CatalogueModel.name(model.id)
         let state = catalogue.download(of: model)
         VStack(alignment: .leading, spacing: 3) {
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
+            LineOrStack(minWidth: 440) {
                 Text(name).font(.system(.body, weight: .semibold))
-                Spacer(minLength: 8)
+                    .fixedSize(horizontal: false, vertical: true)
                 trailing(state, name: name)
             }
             Text(facts)
@@ -921,7 +941,13 @@ struct ModelDownloadRow: View {
     private func trailing(_ state: CatalogueModel.Download, name: String) -> some View {
         switch state {
         case .installed:
-            Text("On this Mac").font(Typography.caption).foregroundStyle(Theme.secondaryText)
+            Text("Installed")
+                .font(Typography.caption)
+                .foregroundStyle(Theme.text)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(Theme.card, in: Capsule())
+                .accessibilityLabel("Installed on this Mac")
         case .notInstalled:
             Button("Download") { catalogue.download([model.id]) }
                 .accessibilityLabel("Download \(name), \(facts)")

@@ -91,6 +91,50 @@ final class CallPolicyModel {
         let choice: CallChoice
     }
 
+    struct Removal: Equatable {
+        let app: String
+        let name: String
+        let defaultPolicy: CallPolicy
+    }
+    private(set) var removing: Removal?
+
+    func askRemove(_ app: String) {
+        guard unreadable == nil, let policy = defaultPolicy else {
+            failure = "Couldn't remove the app: the call policies could not be read. Nothing was removed."
+            return
+        }
+        guard !inFlight.values.contains(where: { $0.app == app }), let row = rows.first(where: { $0.id == app }) else { return }
+        removing = Removal(app: app, name: row.name, defaultPolicy: policy)
+    }
+
+    func cancelRemove() { removing = nil }
+
+    func confirmRemove(_ shown: Removal) {
+        // SwiftUI dismisses the dialog binding before invoking its selected action.
+        guard unreadable == nil, let policy = defaultPolicy else {
+            removing = nil
+            failure = "Couldn't remove the app: the call policies could not be read. Nothing was removed."
+            return
+        }
+        guard policy == shown.defaultPolicy else {
+            askRemove(shown.app)
+            return
+        }
+        guard apps.contains(where: { $0.app == shown.app }), !inFlight.values.contains(where: { $0.app == shown.app }) else { return }
+        removing = nil
+        failure = nil
+        let ref = ref()
+        inFlight[ref] = InFlight(app: shown.app, choice: .default, origin: .settings, saved: nil)
+        send(.meetingsCallsRemove(app: shown.app, expectedDefault: policy, ref: ref))
+    }
+
+    static func removeDetail(_ shown: Removal) -> String {
+        "Remove \(shown.name) and its saved recording rule from this list? Past recordings stay in the library. The app can reappear when another call is detected. "
+        + (shown.defaultPolicy == .always
+            ? "Calls in this app will follow Always and record without asking. Tell the people on the call. Choose Never instead to prevent recording."
+            : "Calls in this app will follow \(shown.defaultPolicy.title). Choose Never instead to prevent recording.")
+    }
+
     @ObservationIgnored private let send: SendCommand
     @ObservationIgnored private let directory: any AppDirectory
     @ObservationIgnored private var nextRef = 0
@@ -340,9 +384,10 @@ final class CallPolicyModel {
             pending = [:]
             startOverRef = nil
             startingOver = nil
+            removing = nil
         case .settingValue(let value) where value.key == ShellSetting.meetingsCallsDefault.rawValue:
             defaultPolicy = value.value.flatMap(CallPolicy.init(rawValue:)) ?? .ask
-        case .commandFailed(let failed) where failed.command == "meetings.calls.set":
+        case .commandFailed(let failed) where failed.command == "meetings.calls.set" || failed.command == "meetings.calls.remove":
             let done = failed.id.flatMap { inFlight.removeValue(forKey: $0) }
             if let done, pending[done.app] == done.choice { pending[done.app] = nil }
             if failed.id != nil, failed.id == startOverRef { startOverRef = nil }
