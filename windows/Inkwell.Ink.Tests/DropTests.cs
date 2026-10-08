@@ -2,6 +2,7 @@
 // becoming the foreground or active window, drawing while live and nothing while hidden. Whether
 // keystrokes really stay in another app needs a person at the desktop (windows/S3.4-CHECKLIST.md).
 using Inkwell.Ink;
+using Inkwell.Core.Glow;
 using TerraFX.Interop.Windows;
 using Xunit;
 using static TerraFX.Interop.Windows.Windows;
@@ -16,6 +17,41 @@ public sealed class DropTests
     private const string NoCompositor = "(0x887A0022)";
 
     private static readonly InkState[] LiveStates = [InkState.Dictating, InkState.Meeting, InkState.Blotting, InkState.Problem];
+
+    [Fact]
+    public void OnlyTheOrdinaryRecordingBannerUsesThePaletteAndLargeType()
+    {
+        var recording = new DropText("● REC", "Zoom", DropTone.Recording);
+        Assert.True(DropRecording.IsBanner(recording));
+        Assert.False(DropRecording.IsBanner(recording with { Buttons = new DropButtons("Stop", "Stop and delete") }));
+        Assert.False(DropRecording.IsBanner(recording with { Title = "● REC · Zoom", Detail = "The far end is silent" }));
+        Assert.False(DropRecording.IsBanner(recording with { Tone = DropTone.Alert }));
+        Assert.False(DropRecording.IsBanner(recording with { LiveWords = true }));
+    }
+
+    [Fact]
+    public void RecordingFillTracksBothVoicesAndKeepsWhiteTextReadable()
+    {
+        var palette = GlowLook.Default with { YouA = (1, 0, 0), ThemA = (0, 1, 1) };
+        var fill = DropRecording.Colours(palette);
+        Assert.True(fill.A.R > 0 && fill.A.G == 0 && fill.A.B == 0);
+        Assert.True(fill.B.R == 0 && fill.B.G > 0 && fill.B.B > 0);
+        Assert.True(fill.Middle.R < fill.A.R && fill.Middle.G < fill.B.G);
+        Assert.NotEqual(fill, DropRecording.Colours(palette with { YouA = (0, 0, 1) }));
+        static (float, float, float) C(GlowRgb c) => ((float)c.R, (float)c.G, (float)c.B);
+        static double Linear(float c) => c <= 0.04045 ? c / 12.92 : Math.Pow((c + 0.055) / 1.055, 2.4);
+        foreach (var dark in new[] { false, true })
+        foreach (var preset in GlowScheme.Presets)
+        {
+            var resolved = GlowScheme.Resolve(dark, preset.Id);
+            var colours = DropRecording.Colours(palette with { YouA = C(resolved.You), ThemA = C(resolved.Them) });
+            foreach (var colour in new[] { colours.A, colours.Middle, colours.B })
+            {
+                var luminance = 0.2126 * Linear(colour.R) + 0.7152 * Linear(colour.G) + 0.0722 * Linear(colour.B);
+                Assert.True(1.05 / (luminance + 0.05) >= 4.5, $"{preset.Id}, dark={dark}");
+            }
+        }
+    }
 
     [Fact]
     public void TheDropNeverActivates()

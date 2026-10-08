@@ -24,6 +24,7 @@ internal sealed unsafe class DropFallback : IDisposable
     private HWND hwnd;
     private DropText text = new("", "");
     private DropLook look = DropLook.Default;
+    private GlowLook orbLook = GlowLook.Default;
     private double scale = 1;
     /// <summary>The button a press went down on, until it comes up.</summary>
     private int? pressed;
@@ -112,6 +113,13 @@ internal sealed unsafe class DropFallback : IDisposable
         }
     }
 
+    public void SetOrbLook(GlowLook value)
+    {
+        if (orbLook == value) return;
+        orbLook = value;
+        if (IsShown) InvalidateRect(hwnd, null, true);
+    }
+
     public void Hide()
     {
         if (IsShown)
@@ -138,9 +146,24 @@ internal sealed unsafe class DropFallback : IDisposable
         var paper = CreateSolidBrush(Colour(look.Background));
         _ = FillRect(dc, &client, paper);
         DeleteObject((HGDIOBJ)paper.Value);
+        var recording = DropRecording.IsBanner(text);
+        if (recording)
+        {
+            // GDI's stand-in keeps the very same palette and veil as the GPU gradient.
+            var colours = DropRecording.Colours(orbLook);
+            for (var x = 0; x < client.right; x += 4)
+            {
+                var k = (float)x / Math.Max(1, client.right);
+                var colour = k < 0.5f ? Rgb.Mix(colours.A, colours.Middle, k * 2) : Rgb.Mix(colours.Middle, colours.B, (k - 0.5f) * 2);
+                var strip = new RECT { left = x, top = 0, right = Math.Min(x + 4, client.right), bottom = client.bottom };
+                var brush = CreateSolidBrush(Colour(colour));
+                _ = FillRect(dc, &strip, brush);
+                DeleteObject((HGDIOBJ)brush.Value);
+            }
+        }
 
         // A still dot where the orb would be.
-        var ink = CreateSolidBrush(Colour(look.Secondary));
+        var ink = CreateSolidBrush(Colour(recording ? orbLook.YouA : look.Secondary));
         var noPen = GetStockObject(NullPen);
         var oldPen = SelectObject(dc, noPen);
         var oldBrush = SelectObject(dc, (HGDIOBJ)ink.Value);
@@ -163,16 +186,40 @@ internal sealed unsafe class DropFallback : IDisposable
         // The two lines.
         _ = SetBkMode(dc, TRANSPARENT);
         var titleFont = Font(S(DropLayout.TitleSize), FW.FW_MEDIUM);
-        var detailFont = Font(S(DropLayout.DetailSize), FW.FW_NORMAL);
+        var detailFont = Font(S(recording ? DropLayout.RecordingDetailSize : DropLayout.DetailSize), recording ? FW.FW_SEMIBOLD : FW.FW_NORMAL);
         var (titleRect, detailRect, detailFormat) = Lines(text.Buttons is not null, client, scale, text.DetailLines);
-        var oldFont = SelectObject(dc, (HGDIOBJ)titleFont.Value);
-        SetTextColor(dc, Colour(text.Tone == DropTone.Plain ? look.Secondary : look.Alert));
-        fixed (char* t = text.Title)
+        if (recording)
         {
-            _ = DrawTextW(dc, t, text.Title.Length, &titleRect, DT.DT_LEFT | DT.DT_BOTTOM | DT.DT_SINGLELINE | DT.DT_END_ELLIPSIS | DT.DT_NOPREFIX);
+            titleRect = new RECT { left = client.right - S(DropLayout.TextRight + DropLayout.RecordingBadgeWidth), top = 0, right = client.right - S(DropLayout.TextRight), bottom = client.bottom };
+            detailRect = new RECT { left = S(DropLayout.TextLeft), top = 0, right = titleRect.left, bottom = client.bottom };
+            var badgeFill = CreateSolidBrush(Colour(Rgb.Of(0x14181C)));
+            var priorBrush = SelectObject(dc, (HGDIOBJ)badgeFill.Value);
+            var priorPen = SelectObject(dc, GetStockObject(NullPen));
+            RoundRect(dc, titleRect.left, S(DropLayout.Height / 2 - 14), titleRect.right, S(DropLayout.Height / 2 + 14), S(28), S(28));
+            var dotFill = CreateSolidBrush(Colour(Rgb.Of(0xFF9B7A)));
+            SelectObject(dc, (HGDIOBJ)dotFill.Value);
+            var dotX = titleRect.left + S(13);
+            var dotY = S(DropLayout.Height / 2);
+            Ellipse(dc, dotX - S(3), dotY - S(3), dotX + S(3), dotY + S(3));
+            SelectObject(dc, priorBrush);
+            SelectObject(dc, priorPen);
+            DeleteObject((HGDIOBJ)dotFill.Value);
+            DeleteObject((HGDIOBJ)badgeFill.Value);
+            titleRect.left += S(16);
+        }
+        var oldFont = SelectObject(dc, (HGDIOBJ)titleFont.Value);
+        SetTextColor(dc, Colour(recording ? Rgb.Of(0xFFFFFF) : text.Tone == DropTone.Plain ? look.Secondary : look.Alert));
+        var titleWords = recording ? "REC" : text.Title;
+        fixed (char* t = titleWords)
+        {
+            _ = DrawTextW(dc, t, titleWords.Length, &titleRect, (uint)((recording ? DT.DT_CENTER | DT.DT_VCENTER : DT.DT_LEFT | DT.DT_BOTTOM) | DT.DT_SINGLELINE | DT.DT_END_ELLIPSIS | DT.DT_NOPREFIX));
         }
         SelectObject(dc, (HGDIOBJ)detailFont.Value);
-        SetTextColor(dc, Colour(look.Text));
+        SetTextColor(dc, Colour(recording ? Rgb.Of(0xFFFFFF) : look.Text));
+        if (recording)
+        {
+            detailFormat = (uint)(DT.DT_CENTER | DT.DT_VCENTER | DT.DT_SINGLELINE | DT.DT_END_ELLIPSIS | DT.DT_NOPREFIX);
+        }
         fixed (char* d = text.Detail)
         {
             _ = DrawTextW(dc, d, text.Detail.Length, &detailRect, detailFormat);

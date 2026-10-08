@@ -74,3 +74,17 @@ public static class Rgb
     public static (float R, float G, float B) Mix((float R, float G, float B) a, (float R, float G, float B) b, float k) =>
         (a.R + (b.R - a.R) * k, a.G + (b.G - a.G) * k, a.B + (b.B - a.B) * k);
 }
+
+/// <summary>Shared GPU and plain recording banner styling. Offers and warnings keep their own layout.</summary>
+internal static class DropRecording
+{
+    public static bool IsBanner(DropText text) =>
+        text.Tone == DropTone.Recording && text.Title == "● REC" && text.Buttons is null && !text.LiveWords;
+
+    public static ((float R, float G, float B) A, (float R, float G, float B) Middle, (float R, float G, float B) B) Colours(GlowLook orb)
+    {
+        var a = Rgb.Mix((0, 0, 0), orb.YouA, 0.46f);
+        var b = Rgb.Mix((0, 0, 0), orb.ThemA, 0.46f);
+        return (a, Rgb.Mix((0, 0, 0), Rgb.Mix(a, b, 0.5f), 0.48f), b);
+    }
+}

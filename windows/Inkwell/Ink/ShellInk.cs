@@ -152,7 +152,7 @@ internal sealed class ShellInk : IDisposable
     private void ApplyLook(DropWindow window)
     {
         window.Look = pillLook;
-        window.Surface.Look = orbLook;
+        window.OrbLook = orbLook;
         window.Surface.AlwaysStill = alwaysStill;
     }
 

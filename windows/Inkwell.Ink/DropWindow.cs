@@ -56,6 +56,8 @@ internal static class DropLayout
     public const double LineSpacing = 2;
     public const float TitleSize = 12;
     public const float DetailSize = 17;
+    public const float RecordingDetailSize = 26;
+    public const double RecordingBadgeWidth = 76;
     public const string Face = "Segoe UI Variable Text";
     /// <summary>The line's face: the display serif.</summary>
     public const string DetailFace = "Sitka Text";
@@ -135,6 +137,7 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
     private IDWriteTextFormat* titleFormat;
     private IDWriteTextFormat* detailFormat;
     private IDWriteTextFormat* buttonFormat;
+    private IDWriteTextFormat* recordingFormat;
     private IDWriteTextLayout* titleLayout;
     private IDWriteTextLayout* detailLayout;
     /// <summary>The live words' wet ones in <see cref="detailLayout"/> (empty unless the text is live words).</summary>
@@ -198,6 +201,19 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
     }
 
     private DropLook look = DropLook.Default;
+
+    /// <summary>The same palette as the orb, including the recording pill's plain fallback.</summary>
+    public GlowLook OrbLook
+    {
+        get => Surface.Look;
+        set
+        {
+            Surface.Look = value;
+            fallback?.SetOrbLook(value);
+        }
+    }
+
+    private bool RecordingBanner => DropRecording.IsBanner(text);
 
     /// <summary>
     /// Creates the (hidden) window on this thread, which must run a message loop: the app's UI
@@ -481,6 +497,7 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
         }
         RECT bounds;
         GetWindowRect(hwnd, &bounds);
+        fallback!.SetOrbLook(Surface.Look);
         fallback!.Show(bounds, text, dpiScale);
     }
 
@@ -507,6 +524,7 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
         Com.Release(ref titleFormat);
         Com.Release(ref detailFormat);
         Com.Release(ref buttonFormat);
+        Com.Release(ref recordingFormat);
         Com.Release(ref inkBitmap);
         inkTexture?.Dispose();
         inkTexture = null;
@@ -562,15 +580,22 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
         {
             titleFormat = Format(pipeline, DropLayout.Face, DropLayout.TitleSize, DWRITE_FONT_WEIGHT.DWRITE_FONT_WEIGHT_SEMI_BOLD, wrap: false);
             detailFormat = Format(pipeline, DropLayout.DetailFace, DropLayout.DetailSize, DWRITE_FONT_WEIGHT.DWRITE_FONT_WEIGHT_NORMAL, wrap: true);
+            recordingFormat = Format(pipeline, DropLayout.Face, DropLayout.RecordingDetailSize, DWRITE_FONT_WEIGHT.DWRITE_FONT_WEIGHT_SEMI_BOLD, wrap: false);
             buttonFormat = Format(pipeline, DropLayout.Face, DropLayout.ButtonTextSize, DWRITE_FONT_WEIGHT.DWRITE_FONT_WEIGHT_SEMI_BOLD, wrap: false);
         }
         if (titleLayout is null)
         {
             var width = (float)(DropLayout.Size(text).W - DropLayout.TextLeft - DropLayout.TextRight);
-            titleLayout = Layout(pipeline, text.Title, titleFormat, width, 100);
+            titleLayout = Layout(pipeline, RecordingBanner ? "REC" : text.Title, titleFormat, RecordingBanner ? (float)DropLayout.RecordingBadgeWidth - 16 : width, 100);
+            if (RecordingBanner)
+            {
+                titleLayout->SetTextAlignment(DWRITE_TEXT_ALIGNMENT.DWRITE_TEXT_ALIGNMENT_CENTER);
+            }
+            var currentDetailFormat = RecordingBanner ? recordingFormat : detailFormat;
+            if (RecordingBanner) width -= (float)DropLayout.RecordingBadgeWidth;
             DWRITE_LINE_METRICS line;
             uint count;
-            using (var one = new DisposableLayout(Layout(pipeline, "Ag", detailFormat, width, 100)))
+            using (var one = new DisposableLayout(Layout(pipeline, "Ag", currentDetailFormat, width, 100)))
             {
                 InkRendererException.Check(one.Layout->GetLineMetrics(&line, 1, &count), "measure the Drop's text");
             }
@@ -589,8 +614,12 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
             {
                 // Two lines at most (three where the offer says why an Always app is asked), the
                 // tail cut with an ellipsis.
-                var lines = text.Buttons is null ? 2 : Math.Max(2, text.DetailLines);
-                detailLayout = Layout(pipeline, text.Detail, detailFormat, width, line.height * lines + 0.5f);
+                var lines = RecordingBanner ? 1 : text.Buttons is null ? 2 : Math.Max(2, text.DetailLines);
+                detailLayout = Layout(pipeline, text.Detail, currentDetailFormat, width, line.height * lines + 0.5f);
+                if (RecordingBanner)
+                {
+                    detailLayout->SetTextAlignment(DWRITE_TEXT_ALIGNMENT.DWRITE_TEXT_ALIGNMENT_CENTER);
+                }
                 wetWords = default;
             }
         }
@@ -673,6 +702,8 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
         ID2D1SolidColorBrush* fill = null, border = null, title = null, detail = null, wet = null, button = null, label = null;
         ID2D1RoundedRectangleGeometry* panel = null;
         ID2D1EllipseGeometry* circle = null;
+        ID2D1GradientStopCollection* stops = null;
+        ID2D1LinearGradientBrush* glow = null;
         HRESULT hr;
         try
         {
@@ -688,6 +719,25 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
             InkRendererException.Check(pipeline.D2DFactory->CreateRoundedRectangleGeometry(&bounds, &panel), "shape the Drop");
             fill = Brush(d2d, look.Background, 1);
             d2d->FillGeometry((ID2D1Geometry*)panel, (ID2D1Brush*)fill, null);
+            if (RecordingBanner)
+            {
+                // The selected orb's two voices run across the pill. A dark veil makes white
+                // lettering readable even for the brightest palette, in either app mode.
+                var colours = DropRecording.Colours(Surface.Look);
+                D2D1_GRADIENT_STOP* gradient = stackalloc D2D1_GRADIENT_STOP[3];
+                gradient[0] = new() { position = 0, color = Colour(colours.A) };
+                gradient[1] = new() { position = 0.5f, color = Colour(colours.Middle) };
+                gradient[2] = new() { position = 1, color = Colour(colours.B) };
+                InkRendererException.Check(d2d->CreateGradientStopCollection(gradient, 3,
+                    D2D1_GAMMA.D2D1_GAMMA_2_2, D2D1_EXTEND_MODE.D2D1_EXTEND_MODE_CLAMP, &stops), "shade the recording pill");
+                var props = new D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES
+                {
+                    startPoint = new D2D_POINT_2F(0, 0),
+                    endPoint = new D2D_POINT_2F((float)panelW, (float)panelH),
+                };
+                InkRendererException.Check(d2d->CreateLinearGradientBrush(&props, null, stops, &glow), "colour the recording pill");
+                d2d->FillGeometry((ID2D1Geometry*)panel, (ID2D1Brush*)glow, null);
+            }
 
             // The orb in its circle, which keeps its size, centred on the pill's first height
             // (the offer's pill grows below it).
@@ -731,8 +781,8 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
             d2d->DrawRoundedRectangle(&inset, (ID2D1Brush*)border, width, null);
 
             // The two lines, stacked and centred on the pill's height; text never takes a dot colour.
-            title = Brush(d2d, text.Tone == DropTone.Plain ? look.Secondary : look.Alert, 1);
-            detail = Brush(d2d, look.Text, 1);
+            title = Brush(d2d, RecordingBanner ? Rgb.Of(0xFFFFFF) : text.Tone == DropTone.Plain ? look.Secondary : look.Alert, 1);
+            detail = Brush(d2d, RecordingBanner ? Rgb.Of(0xFFFFFF) : look.Text, 1);
             if (wetWords.length > 0)
             {
                 // The newest live words in the secondary colour (a brush lives on the device, so it
@@ -747,10 +797,31 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
             // Above the buttons when there are some, else centred on the pill.
             var linesHeight = text.Buttons is null ? panelH : DropLayout.Button(0, text.DetailLines).Top - 4;
             var top = (linesHeight - total) / 2;
-            d2d->DrawTextLayout(new D2D_POINT_2F((float)DropLayout.TextLeft, (float)top), titleLayout, (ID2D1Brush*)title,
-                D2D1_DRAW_TEXT_OPTIONS.D2D1_DRAW_TEXT_OPTIONS_NONE);
-            d2d->DrawTextLayout(new D2D_POINT_2F((float)DropLayout.TextLeft, (float)(top + tm.height + DropLayout.LineSpacing)),
-                detailLayout, (ID2D1Brush*)detail, D2D1_DRAW_TEXT_OPTIONS.D2D1_DRAW_TEXT_OPTIONS_NONE);
+            if (RecordingBanner)
+            {
+                var badgeLeft = panelW - DropLayout.TextRight - DropLayout.RecordingBadgeWidth;
+                var badge = new D2D1_ROUNDED_RECT
+                {
+                    rect = new D2D_RECT_F { left = (float)badgeLeft, top = (float)panelH / 2 - 14, right = (float)(panelW - DropLayout.TextRight), bottom = (float)panelH / 2 + 14 },
+                    radiusX = 14, radiusY = 14,
+                };
+                button = Brush(d2d, (0, 0, 0), 0.55f);
+                label = Brush(d2d, Rgb.Of(0xFF9B7A), 1);
+                d2d->FillRoundedRectangle(&badge, (ID2D1Brush*)button);
+                var dot = new D2D1_ELLIPSE { point = new D2D_POINT_2F((float)badgeLeft + 13, (float)panelH / 2), radiusX = 3, radiusY = 3 };
+                d2d->FillEllipse(&dot, (ID2D1Brush*)label);
+                d2d->DrawTextLayout(new D2D_POINT_2F((float)badgeLeft + 16, (float)((panelH - tm.height) / 2)),
+                    titleLayout, (ID2D1Brush*)title, D2D1_DRAW_TEXT_OPTIONS.D2D1_DRAW_TEXT_OPTIONS_NONE);
+                d2d->DrawTextLayout(new D2D_POINT_2F((float)DropLayout.TextLeft, (float)((panelH - dm.height) / 2)),
+                    detailLayout, (ID2D1Brush*)detail, D2D1_DRAW_TEXT_OPTIONS.D2D1_DRAW_TEXT_OPTIONS_NONE);
+            }
+            else
+            {
+                d2d->DrawTextLayout(new D2D_POINT_2F((float)DropLayout.TextLeft, (float)top), titleLayout, (ID2D1Brush*)title,
+                    D2D1_DRAW_TEXT_OPTIONS.D2D1_DRAW_TEXT_OPTIONS_NONE);
+                d2d->DrawTextLayout(new D2D_POINT_2F((float)DropLayout.TextLeft, (float)(top + tm.height + DropLayout.LineSpacing)),
+                    detailLayout, (ID2D1Brush*)detail, D2D1_DRAW_TEXT_OPTIONS.D2D1_DRAW_TEXT_OPTIONS_NONE);
+            }
 
             if (text.Buttons is { } buttons)
             {
@@ -796,6 +867,8 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
                 // The layout keeps no brush past the frame that drew it.
                 detailLayout->SetDrawingEffect(null, wetWords);
             }
+            Com.Release(ref glow);
+            Com.Release(ref stops);
             Com.Release(ref wet);
             Com.Release(ref label);
             Com.Release(ref button);
@@ -816,6 +889,8 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
         }
         return true;
     }
+
+    private static DXGI_RGBA Colour((float R, float G, float B) c) => new() { r = c.R, g = c.G, b = c.B, a = 1 };
 
     private static ID2D1SolidColorBrush* Brush(ID2D1DeviceContext* d2d, (float R, float G, float B) c, float alpha)
     {
