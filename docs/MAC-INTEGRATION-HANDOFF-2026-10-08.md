@@ -6,7 +6,7 @@ Live scratch-app inspection requires temporarily quitting the already running RC
 
 ## Integrated source
 
-- Integration branch: `codex/mac-windows-integration`; prepared for local fast-forward into `integ/mac-1.0`.
+- Integration branch: `integ/mac-1.0`, advanced by local fast-forward from `codex/mac-windows-integration`. Both worktrees were clean after integration.
 - Verified base: `0ea5bd252c48c7796ae82647101b07e1fefc1b10`.
 - Imported bundle tip: `df38fc42a84d7053480965375aaf1be39b988bc3`.
 - Imported tree: `c563abf1358902dfdaf4b062404a1066a0502203`.
