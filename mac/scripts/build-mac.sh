@@ -64,6 +64,7 @@ mac="$(cd "$(dirname "$0")/.." && pwd)"
 . "$mac/scripts/lib/redact-signing.sh"
 # check_bundle_linkage: what the bundle's code loads, and from where.
 . "$mac/scripts/lib/bundle-check.sh"
+. "$mac/scripts/lib/swiftpm-rpath.sh"
 # check_entitlements: the signed entitlements, against the allow-list.
 . "$mac/scripts/lib/entitlements-check.sh"
 config=release
@@ -159,8 +160,8 @@ done <"$link_file"
 # Only the versions pinned in the committed Package.resolved: a build that re-resolved could ship
 # a dependency the licence audit never saw. A stale or missing Package.resolved fails here.
 # The rpath: the frameworks and libraries the app loads (Sparkle, the engines') go in
-# Contents/Frameworks, and SwiftPM's own rpath is only @loader_path, which is Contents/MacOS in the
-# bundle.
+# Contents/Frameworks. SwiftPM also adds a build-local PackageFrameworks path on newer Xcode;
+# the copied executable removes exactly that path before the unchanged linkage check.
 swift build --package-path "$mac" -c "$config" --product Inkwell --only-use-versions-from-resolved-file \
   -Xlinker -rpath -Xlinker @executable_path/../Frameworks ${link_args[@]+"${link_args[@]}"}
 bin="$(swift build --package-path "$mac" -c "$config" --show-bin-path --only-use-versions-from-resolved-file)"
@@ -179,6 +180,8 @@ fi
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$bin/Inkwell" "$app/Contents/MacOS/Inkwell"
+remove_swiftpm_framework_rpath "$app/Contents/MacOS/Inkwell" "$mac" "$bin" \
+  || fail "could not remove SwiftPM's build-local framework search path"
 cp "$mac/Info.plist" "$app/Contents/Info.plist"
 plutil -replace CFBundleShortVersionString -string "${INK_VERSION:-1.0.0}" "$app/Contents/Info.plist"
 plutil -replace CFBundleVersion -string "${INK_BUILD_NUMBER:-1}" "$app/Contents/Info.plist"
