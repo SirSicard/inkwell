@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Settings > Dictation (the canvas's Voice section, renamed; the Mac's VoiceSection): dictation on
-     or off, the dictation key, the voice-edit key, what dictation says about itself and its
+     or off, the dictation key, what dictation says about itself and its
      failures, and the note about Inkwell 0.2's key. -->
 <UserControl
     x:Class="Inkwell.Screens.VoiceSection"
@@ -62,40 +62,16 @@
             </local:SettingColumnsPanel>
         </Border>
 
-        <Border Style="{StaticResource InkSettingRowStyle}">
-            <local:SettingColumnsPanel>
-                <TextBlock Style="{StaticResource RowLabelStyle}" Text="Edit a selection" />
-                <StackPanel Spacing="4">
-                    <local:WrapPanel RowSpacing="8" Spacing="12">
-                        <ComboBox x:Name="EditKeyBox" MinWidth="170" AutomationProperties.Name="Edit a selection" SelectionChanged="OnEditKeyChosen" />
-                        <Button x:Name="RecordEditButton" Click="OnRecordEdit" />
-                        <!-- The wrapper is what collapses: WrapPanel counts a 0 x 32 slot, which would leave
-                             a gap or an empty line when the edit key is off. -->
-                        <Grid x:Name="EditKeyCapHost" Height="32">
-                            <Border AutomationProperties.AccessibilityView="Raw" Style="{StaticResource KeyCapStyle}">
-                                <TextBlock x:Name="EditKeyCap" FontFamily="{StaticResource InkMonoFontFamily}" FontSize="12" Foreground="{ThemeResource InkTextBrush}" />
-                            </Border>
-                        </Grid>
-                    </local:WrapPanel>
-                    <TextBlock Style="{StaticResource InkCaptionStyle}" Text="select text, hold, say what to change" />
-                    <TextBlock x:Name="EditMessage" TextWrapping="Wrap" Style="{StaticResource InkCaptionStyle}" />
-                </StackPanel>
-            </local:SettingColumnsPanel>
-        </Border>
+        <TextBlock Style="{StaticResource InkCaptionStyle}" Text="Voice editing has its own shortcut in AI > Voice edit." />
 
         <StackPanel Spacing="4">
             <TextBlock x:Name="StatusText" Style="{StaticResource InkCaptionStyle}" />
             <Button x:Name="RetryButton" Click="OnRetry" />
-            <TextBlock x:Name="EditKeyProblemText" Style="{StaticResource InkAlertTextStyle}" />
-            <TextBlock x:Name="EditConsentProblemText" Style="{StaticResource InkAlertTextStyle}" />
             <TextBlock x:Name="SettingsProblemText" Style="{StaticResource InkAlertTextStyle}" />
         </StackPanel>
 
         <!-- The note about Inkwell 0.2's dictation key (another part's view), if the screen passes one. -->
         <ContentPresenter x:Name="ImportNoteHost" />
 
-        <TextBlock
-            Style="{StaticResource InkCaptionStyle}"
-            Text="Editing sends the selection and what you say to a language model, and replaces the selection with the answer, so choosing its key asks you first where that is. Edits are not saved in the Library." />
     </StackPanel>
 </UserControl>

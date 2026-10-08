@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<UserControl
+    x:Class="Inkwell.Screens.EditShortcutView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:Inkwell.Screens">
+    <UserControl.Resources>
+        <Style x:Key="KeyCapStyle" TargetType="Border">
+            <Setter Property="Padding" Value="8,2" />
+            <Setter Property="BorderThickness" Value="1,1,1,2" />
+            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="Background" Value="{ThemeResource InkCardBrush}" />
+            <Setter Property="BorderBrush" Value="{ThemeResource InkBorderBrush}" />
+        </Style>
+    </UserControl.Resources>
+    <StackPanel Spacing="4">
+        <TextBlock Margin="0,8,0,0" Style="{StaticResource InkBodyStyle}" Text="Voice edit shortcut" />
+        <local:WrapPanel RowSpacing="8" Spacing="12">
+            <ComboBox x:Name="EditKeyBox" MinWidth="170" AutomationProperties.Name="Voice edit shortcut" SelectionChanged="OnEditKeyChosen" />
+            <Button x:Name="RecordEditButton" Click="OnRecordEdit" />
+            <!-- The wrapper is what collapses: WrapPanel counts a 0 x 32 slot, which would leave
+                 a gap or an empty line when the edit key is off. -->
+            <Grid x:Name="EditKeyCapHost" Height="32">
+                <Border AutomationProperties.AccessibilityView="Raw" Style="{StaticResource KeyCapStyle}">
+                    <TextBlock x:Name="EditKeyCap" FontFamily="{StaticResource InkMonoFontFamily}" FontSize="12" Foreground="{ThemeResource InkTextBrush}" />
+                </Border>
+            </Grid>
+        </local:WrapPanel>
+        <TextBlock Style="{StaticResource InkCaptionStyle}" Text="Select text in an editable field, hold this shortcut, say what to change, then release. Edits are not saved in the Library." />
+        <TextBlock x:Name="KeysPausedText" Style="{StaticResource InkCaptionStyle}" />
+        <TextBlock x:Name="EditMessage" TextWrapping="Wrap" Style="{StaticResource InkCaptionStyle}" />
+        <TextBlock x:Name="EditKeyProblemText" Style="{StaticResource InkAlertTextStyle}" />
+        <TextBlock x:Name="EditConsentProblemText" Style="{StaticResource InkAlertTextStyle}" />
+    </StackPanel>
+</UserControl>

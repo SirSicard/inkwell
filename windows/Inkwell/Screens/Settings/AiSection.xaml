@@ -91,7 +91,8 @@
                         OnContent=""
                         Toggled="OnEditToggled" />
                     <TextBlock x:Name="EditStatus" AutomationProperties.AccessibilityView="Raw" Style="{StaticResource InkCaptionStyle}" />
-                    <TextBlock Margin="0,4,0,0" Style="{StaticResource InkCaptionStyle}" Text="Voice edit sends the text you select and what you say to a language model, and replaces the selection with the answer, so it stays off until you turn it on and agree to where that is. Its key is in Dictation." />
+                    <ContentPresenter x:Name="EditShortcutHost" />
+                    <TextBlock Margin="0,4,0,0" Style="{StaticResource InkCaptionStyle}" Text="Voice edit sends the text you select and what you say to a language model, and replaces the selection with the answer, so it stays off until you turn it on and agree to where that is. Choose its shortcut here." />
                 </StackPanel>
             </local:SettingColumnsPanel>
         </Border>

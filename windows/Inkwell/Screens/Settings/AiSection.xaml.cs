@@ -1,7 +1,7 @@
 // Settings > AI. Each switch shows what the model says (on only with the core's consent and a
 // working model), so switching one on reads back off while its consent step is up, and on once the
 // core has recorded the consent. The section owns the Settings screen's ConsentDialog, for all
-// three features (Dictation's edit-key picker asks through it too): WinUI shows one dialog at a time.
+// three features (the voice-edit key picker asks through it too): WinUI shows one dialog at a time.
 //
 // Above them, the language model (LanguageModelRows, over CloudModel: this PC's own model with its
 // download, Use and Try it (LocalLlmModel, whose Use asks polish's one tap through this section's
@@ -19,17 +19,21 @@ public sealed partial class AiSection : UserControl
     private readonly AiSettings ai;
     private readonly PolishModel polish;
     private readonly CloudModel cloud;
+    private readonly ShortcutRecorderModel recorder;
     private bool rendering;
 
     /// <param name="local">This PC's own model (the picker's "On this PC"); null: own-key providers only.</param>
-    public AiSection(AiSettings ai, CloudModel cloud, LocalLlmModel? local = null, ScreenLog? log = null)
+    public AiSection(AiSettings ai, CloudModel cloud, ShortcutRecorderModel recorder, LocalLlmModel? local = null, ScreenLog? log = null, MeetingShortcutModel? meeting = null)
     {
         ArgumentNullException.ThrowIfNull(ai);
         ArgumentNullException.ThrowIfNull(cloud);
+        ArgumentNullException.ThrowIfNull(recorder);
         this.ai = ai;
         this.cloud = cloud;
+        this.recorder = recorder;
         polish = ai.Polish;
         InitializeComponent();
+        EditShortcutHost.Content = new EditShortcutView(ai, recorder, meeting);
         LanguageModelHost.Content = new LanguageModelRows(cloud, local: local);
         GroqGuideExpander.Header = GroqKeyGuide.Title;
         GroqGuideExpander.Content = new GroqKeyGuideView(GroqKeyGuidePlace.Settings);
@@ -38,6 +42,7 @@ public sealed partial class AiSection : UserControl
         {
             ai.PropertyChanged += OnChanged;
             cloud.PropertyChanged += OnChanged;
+            recorder.PropertyChanged += OnChanged;
             // Read again whenever Settings appears, as the Mac's does: a read that failed is
             // retried here (its line says so), and a switch changed elsewhere is current.
             cloud.Load();
@@ -51,6 +56,7 @@ public sealed partial class AiSection : UserControl
         {
             ai.PropertyChanged -= OnChanged;
             cloud.PropertyChanged -= OnChanged;
+            recorder.PropertyChanged -= OnChanged;
         };
         Render();
     }
@@ -71,7 +77,7 @@ public sealed partial class AiSection : UserControl
         try
         {
             Show(PolishSwitch, PolishStatus, polish.IsOn, polish.CanToggle, polish.Status, polish.IsProblem);
-            Show(EditSwitch, EditStatus, ai.EditOn, ai.CanToggleEdit, ai.EditStatus, ai.EditIsProblem);
+            Show(EditSwitch, EditStatus, ai.EditOn, ai.CanToggleEdit && !recorder.Busy, ai.EditStatus, ai.EditIsProblem);
             Show(MeetingsSwitch, MeetingsStatus, ai.MeetingsAIOn, ai.CanToggleMeetingsAI, ai.MeetingsAIStatus, ai.MeetingsAIIsProblem);
             RenderCloud();
             RenderConsents();
