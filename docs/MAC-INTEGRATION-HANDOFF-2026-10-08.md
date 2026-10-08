@@ -2,7 +2,7 @@
 
 ## Waiting on the owner
 
-Live scratch-app inspection requires temporarily quitting the already running RC. The request is pending in chat; no authorization was inferred. Its global instance lock refused the scratch launch before the core or library opened. The existing app was left running. Native recording/insertion, live shortcut capture/cancel/conflicts and actual persisted scratch-settings UI remain unverified.
+The owner authorized quitting the running RC and the two pinned source downloads. Available live scratch checks and the macOS26-targeted rebuild are complete; the existing RC was restarted. Remaining environment checks: runtime on an actual macOS26 machine, speech/transcription/insertion with real models, physical global shortcut and window-focus-loss behavior, and the live recording pill. No models were downloaded or owner model/library data used. UI automation routes key events to the app and cannot prove the hardware event tap. Minimum-width live dragging was unavailable through the UI server; existing720pt layout checks remain passing.
 
 ## Integrated source
 
@@ -27,14 +27,15 @@ Live scratch-app inspection requires temporarily quitting the already running RC
 
 ## Verification actually run
 
-Checks used installed caches/dependencies and synthetic or temporary data. No model/tool/dataset downloads, owner library/settings/credentials/recordings/transcripts, real-model benchmarks, release installation or publishing.
+Checks used installed caches, temporary data and the two subsequently authorized pinned dependency source downloads. No model/tool/dataset downloads, owner library/credentials/recordings/transcripts used for testing, real-model benchmarks, release installation or publishing. An initial app-name lookup automatically returned the legacy dashboard; its contents were not used or copied. Subsequent UI checks bound the exact scratch executable.
 
 - Rust workspace gate: **1908 passed,20 ignored**,123 test executables covered. The initial run found one key-validation regression; resumed remaining binaries found three outdated conflict expectations. Each was corrected and its exact repro passed; completed unchanged binaries were not repeated. Workspace doc checks exit0.
 - Rust fmt and all-targets workspace clippy: exit0. Engine-enabled llama/Silero/NeMo adapters: clippy exit0; **201 passed,38 ignored** in that configuration. Engine-enabled privacy logger regression: **1/1**.
 - Swift gate: **724 passed,13 skipped**,737 final production test cases covered across the interrupted run, remaining cases and focused corrections. Initial Settings identity crash fixed and its layout repro/card checks passed3/3. Old blot positive-control threshold reconciled with intended shader radius/softness: background edge20/full93 in both themes, strict background limit retained. Exact mode/recorder regressions49/49. Four failures in the original Rust attempt and the interrupted Swift failure are preserved in raw evidence, not described as initial green runs.
 - Swift skips: four AMI/live real-model cases; three Foundation Models opt-in cases; four optional icon/Drop/Stats export cases; GPU timing opt-in; onscreen frame-rate case (window not on screen). No TSan run: changed Swift models remain MainActor-isolated; targeted lifecycle/acknowledgement regressions ran. Swiftlint/swift-format are unavailable and were not installed.
 - Mac script gate:17 existing scripts/509 assertions passed; new real-Mach-O rpath regression8 assertions passed. Rust licence/bans/sources and Swift pins/checkouts/binaries licence audits pass; Rust notices current.
-- Canonical native debug and release engine builds succeed. Release signature/deep strict verification succeeds;55 Mach-O files checked, hardened runtime/audio-input/calendar entitlements, designated requirement matches existing RC. Debug-only replay/cloud hooks absent from release as checked by bundler.
+- Canonical native debug and release engine builds succeed. The subsequent macOS26 engine release build passes strict linkage with no newer-macOS allowance:95 Mach-O files,89 loose engine libraries and one framework; every file targets26.0 or older. Signature/deep strict verification, hardened runtime/audio-input/calendar entitlements and designated requirement matching the existing RC pass. Debug-only replay/cloud hooks absent from release as checked by bundler.
+- macOS26 dependency rebuild: the canonical script verified both authorized archive hashes;96 Abseil/SentencePiece and89 NeMo prefix dylibs independently checked for arm64/minimum26.0, signatures and manifest hashes. NeMo/ggml local pinned sources copied to scratch; existing prefixes/source unchanged. Rebuilt-library regressions:7 passed,10 ignored, plus the explicit installed-library ggml isolation case1/1. Full unchanged suites were not repeated.
 - Specialist Swift/Rust/security briefs applied once to risky changes; findings resolved and checked. No unresolved critical/high review findings.
 
 Raw checks remain locally under `integration-evidence/` (excluded from git). Input Windows evidence remains in the extracted scratch handoff.
@@ -43,14 +44,15 @@ Raw checks remain locally under `integration-evidence/` (excluded from git). Inp
 
 - Whole Settings offscreen Light/Dark at720/1040: `integration-evidence/settings-renders/`. Card bounds and window width assertions pass.
 - Pill native Metal composition/fallback, manual/automatic/offer/long app names in both modes, plus narrow Appearance/Models/Voice crops: scratch `renders/` accompanying the RC manifest. Recording status, warning text/actions and corrected button contrast inspected.
-- Offscreen AppKit images exclude some blur/Metal layers; native orb images were composited with the actual installed Metal shader. These are synthetic view renders, not screenshots of persisted live scratch settings. Lazy preset realization, actual installed badge/expanded accuracy/alias rows and live capture still need live viewport verification. Existing layout constraint warnings occurred while bounds assertions passed.
-- The local dependencies contain42 Mach-O files built for macOS27, newer than declared26. The canonical documented local-build allowance was used; this RC is **local macOS27 only**, not a validated macOS26/public release. No privacy, linkage or signing refusal was bypassed.
+- Offscreen AppKit images exclude some blur/Metal layers; native orb images were composited with the actual installed Metal shader. Additional live scratch Light/Dark Appearance screenshots and Dark voice-command hierarchy are in the chat tool record. Presets realized correctly; orb80 and the recorded meeting shortcut persisted after restart. Escape restored enabled shortcut controls; recording a conflicting dictation chord preserved both keys and showed the canonical refusal. Voice-edit consent cancellation left edit Off and resumed the controls. Remembered-app removal showed inheritance/rediscovery/past-recording wording and removed the row after acknowledgement. Microphone test detected32 percent, stopped, and reported “Inkwell heard you.” A short meeting start/stop returned idle with an explicit no-audio warning; this is not a successful transcription check. Installed badge/expanded accuracy still need installed-model live verification. No retained scratch audio or transcript was opened/exported. Existing layout constraint warnings occurred while bounds assertions passed.
+- The original RC remains preserved with its macOS27-only dependency limitation. The new RC removes that binary-minimum limitation through pinned-source rebuilds and passes strict26.0 linkage. It starts on the current macOS27 host; runtime on macOS26 itself is still untested. No privacy, linkage or signing refusal was bypassed.
 
 ## Local RC artifact
 
-- Archive: `Inkwell_1.0.0_mac-integration-local-RC.zip` (scratch output only, not installed).
-- SHA256: `e0475e09b62467a4e9862f1cd2cece3dc3832ab5010717ec9d1a7104150334ea`.
-- Source/identity/options recorded in adjacent `RC-MANIFEST.json`; no signing identity recorded.
+- New archive: `Inkwell_1.0.0_mac-integration-macOS26-local-RC.zip` (scratch output only, not installed); ZIP integrity passes.
+- SHA256: `a9bc93c78926ffe80b3e05d3a0beb706e1cdc0ca61464e900719cffa53f7545b`.
+- Source commit `6d755bf499c5a51ee296a31112e7ea572d011e34`; source/options in adjacent `RC-MANIFEST-macOS26.json`; no signing identity recorded. Documentation-only follow-up does not change the product.
+- Earlier macOS27-only archive and its `RC-MANIFEST.json` retained separately.
 - Signed with stable local identity, no timestamp/notarization/DMG/public release.
 
 ## Windows identity and deferred scope
