@@ -107,7 +107,7 @@ enum NeedsYou {
 
         // One-off notices the core sent: what went wrong in a meeting or with the dictation key.
         for notice in notices.reversed() {
-            guard let (title, detail) = describe(notice.kind) else { continue }
+            guard let (title, detail) = describe(notice.kind, channel: notice.channel) else { continue }
             items.append(.init(
                 id: "notice-\(notice.id)", title: title, detail: detail, actionTitle: "Dismiss",
                 action: .dismiss(notice.id)))
@@ -117,14 +117,22 @@ enum NeedsYou {
 
     /// The notices that need the user, in words; nil for the rest (the screens that own them show
     /// them: Settings, Live).
-    static func describe(_ kind: CoreStore.Notice.Kind) -> (String, String)? {
+    static func describe(_ kind: CoreStore.Notice.Kind, channel: Channel? = nil) -> (String, String)? {
         switch kind {
         case .meetingWarning(.capturedOnlyZeros):
             ("A meeting recorded only silence on one side", "One side of the last meeting arrived as digital silence: its permission was probably off.")
         case .meetingWarning(.bluetoothMicOnlyZeros):
             ("Your headset's microphone sent only silence", "Bluetooth headset mics can go silent in calls. Inkwell records the built-in mic instead when it can.")
         case .meetingWarning(.nothingCaptured):
-            ("The last meeting recorded nothing", "No audio reached Inkwell from either side.")
+            // An idle far-end tap may write no chunks while the mic records normally.
+            switch channel {
+            case .mic:
+                ("Your side of the last meeting recorded nothing", "No audio reached Inkwell from your microphone. The other side's recording is separate.")
+            case .far:
+                ("The other side of the last meeting recorded nothing", "No audio reached Inkwell from the other side. Your microphone's recording is separate.")
+            case nil:
+                ("One side of the last meeting recorded nothing", "No audio reached Inkwell from one side. The warning did not identify which side.")
+            }
         case .meetingWarning(.notCrashProtected):
             ("This meeting isn't protected against a crash", "If Inkwell quits unexpectedly, it won't finish this meeting at the next launch. The recording is still being saved.")
         case .meetingWarning(.farEndQuietWhileYouSpeak):

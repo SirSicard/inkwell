@@ -126,6 +126,24 @@ final class NeedsYouTests: XCTestCase {
         store.dismissNotice(id)
         XCTAssertEqual(items(store: store).count, 1)
     }
+
+    func testNoAudioWarningNamesOnlyTheSideThatCapturedNothing() throws {
+        for (channel, title, detail) in [
+            ("far", "The other side of the last meeting recorded nothing", "No audio reached Inkwell from the other side. Your microphone's recording is separate."),
+            ("mic", "Your side of the last meeting recorded nothing", "No audio reached Inkwell from your microphone. The other side's recording is separate."),
+        ] {
+            let store = CoreStore()
+            store.apply([event(#"{"type":"meeting.warning","record":"r1","kind":"nothing_captured","channel":"\#(channel)","phase":"final"}"#)])
+            let item = try XCTUnwrap(items(store: store).first)
+            XCTAssertEqual(item.title, title)
+            XCTAssertEqual(item.detail, detail)
+        }
+        let store = CoreStore()
+        store.apply([event(#"{"type":"meeting.warning","record":"r1","kind":"nothing_captured","phase":"final"}"#)])
+        let item = try XCTUnwrap(items(store: store).first)
+        XCTAssertEqual(item.title, "One side of the last meeting recorded nothing")
+        XCTAssertEqual(item.detail, "No audio reached Inkwell from one side. The warning did not identify which side.")
+    }
 }
 
 /// The calendar's permission, as the test sets it (PermissionsModel's CalendarAccess).

@@ -223,6 +223,8 @@ public final class CoreStore {
         /// Increases by one per notice.
         public let id: Int
         public let kind: Kind
+        /// The side a meeting warning names; absence never means both sides.
+        public let channel: Channel?
         /// The core's own message, when it sent one. Core messages never quote the user's words.
         public let detail: String?
     }
@@ -285,8 +287,8 @@ public final class CoreStore {
         notices.removeAll { $0.id == id }
     }
 
-    private func notice(_ kind: Notice.Kind, _ detail: String? = nil) {
-        notices.append(Notice(id: nextNoticeID, kind: kind, detail: detail))
+    private func notice(_ kind: Notice.Kind, _ detail: String? = nil, channel: Channel? = nil) {
+        notices.append(Notice(id: nextNoticeID, kind: kind, channel: channel, detail: detail))
         nextNoticeID += 1
         if notices.count > Self.noticeLimit {
             notices.removeFirst(notices.count - Self.noticeLimit)
@@ -464,7 +466,7 @@ public final class CoreStore {
         case .meetingSummarized(let done):
             updateMeeting(done.record) { $0.summarized = true }
         case .meetingWarningEvent(let warning):
-            notice(.meetingWarning(warning.kind), warning.message)
+            notice(.meetingWarning(warning.kind), warning.message, channel: warning.channel)
         case .meetingFinished(let finished):
             lastRecord = finished.record
             endMeeting(finished.record)
