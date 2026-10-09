@@ -4,6 +4,17 @@ All notable changes to Inkwell will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Changed
+
+- **A left-hand modifier on its own can be the dictation key**: left Ctrl, Alt, Shift or Win, or left Option, Command, Control or Shift on the Mac. So its shortcuts keep working, dictation starts only once it has been held alone for a moment (300 ms); pressed with another key, or for a click, it does what it always did.
+- **Editing shortcuts every app shares can't be the dictation, edit or meeting key**: Ctrl (on the Mac, Command) with C, V, X, Z, Y, A, S, F, P, W, T, N or Q, and on the Mac Command-Tab and Command-Space. Held as a hotkey they stopped working everywhere else. A key already set to one is turned down, with the reason, and asks for another.
+
+### Fixed
+
+- **Windows: after a key was refused while recording a shortcut, every later key seemed refused too.** The recording had stopped at the refusal and left its line on screen. Now it listens for the next key until one is saved or Escape is pressed.
+
 ## [1.0.0] - 2026-10-09
 
 Inkwell 1.0 is a new app: native on the Mac (macOS 26 or later, Apple silicon) and on Windows (Windows 11 24H2 or later, x64), over one Rust core, and it takes meeting notes as well as dictation. The 0.2 app's updater cannot install it, so download it from the release; the first run offers to import your 0.2 history, dictionary, snippets, voice commands, modes and settings. Intel Macs and Linux get no 1.0: Inkwell 0.2 is their last version, kept on the `legacy/0.2` branch, where its own fixes are recorded.

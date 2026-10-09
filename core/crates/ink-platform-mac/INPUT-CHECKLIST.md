@@ -79,7 +79,10 @@ Run with each of these and hold and release once in TextEdit:
 - `--hotkey ctrl+shift+space`: **must not** type a space into the document (the chord is swallowed)
 - `--hotkey f13`, if the keyboard has one
 
-And one that must be refused: `--hotkey left_option` prints `FAIL hotkey ... not supported here`.
+- `--hotkey left_option`: held alone, `Pressed` comes about 300 ms after the press (stamped at
+  the press); ⌥ with a letter, or ⌥-click, gives nothing, and the character or click goes through
+
+And one that must be refused: `--hotkey cmd+v` prints `FAIL hotkey ... not supported here`.
 
 ## E. Secure Input
 

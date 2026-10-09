@@ -419,9 +419,12 @@ reads it). The core does nothing with the appearance settings itself. A setting 
 `dictation.off`) and then lives in the core ([`voice.rs`](../core/crates/ink-ffi/src/voice.rs)):
 
 - **Keys.** The core holds the dictation key and, when one is set, the voice-edit key (two event
-  taps under Accessibility). Either may be any key the platform can watch: a right-hand modifier
-  (or Fn on the Mac) held on its own, a function key, or modifiers and one key; a chord's hold ends
-  when any part of it is let go of. The platform's parser is the one judge
+  taps under Accessibility). Either may be any key the platform can watch: a modifier (or Fn on
+  the Mac) held on its own, a function key, or modifiers and one key; a chord's hold ends when any
+  part of it is let go of. A left-hand modifier's events are never swallowed, so its shortcuts keep
+  working: its hold starts only once it has been held alone for 300 ms (stamped at its press), and
+  not at all if a key, another modifier or a click came first. The editing shortcuts every app
+  shares (Ctrl or Cmd with C, V, X...) are refused. The platform's parser is the one judge
   ([`hotkey.rs`](../core/crates/ink-ffi/src/hotkey.rs)): `hotkey.check` asks it about a shortcut
   the user recorded and answers with its one spelling or why not, and the settings store a key on
   the same rule. The shell only stores the choice (`dictation.key`, `dictation.edit_key`); a
