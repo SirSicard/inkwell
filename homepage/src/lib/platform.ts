@@ -1,68 +1,57 @@
 /*
-  Progressive enhancement for the primary download button. The server-rendered <a> points at the
-  latest release page and reads "Download Inkwell", which is right for everyone without JS, for
-  phones and for anything undetected. With a desktop OS detected, this points it at that OS's file
-  (the choices are written into data-choices by the server, from the release's real asset list),
-  says which file it is, and marks that OS in the platform lists.
+  Progressive enhancement for the download blocks. The server renders both buttons, equal, each
+  linking to its platform's file. With a desktop OS detected, this leads with that OS's button
+  (data-os on the block), opens that OS's install steps, and, for a machine 1.0 does not run on
+  (an Intel Mac, Linux, Windows on ARM), shows the note that says which version fits.
 */
 
-export type OS = 'macOS' | 'Windows' | 'Linux';
-type Choice = { href: string; note: string };
+export type OS = 'mac' | 'windows' | 'linux';
 
 type UAData = {
   platform?: string;
   mobile?: boolean;
-  getHighEntropyValues?: (hints: string[]) => Promise<{ architecture?: string }>;
+  getHighEntropyValues?: (hints: string[]) => Promise<{ architecture?: string; bitness?: string }>;
 };
 
 export function detectOS(): OS | null {
   if (typeof navigator === 'undefined') return null;
   const uaData = (navigator as Navigator & { userAgentData?: UAData }).userAgentData;
-  if (uaData?.mobile) return null; // a phone cannot install a desktop app: keep the neutral link
+  if (uaData?.mobile) return null; // a phone cannot install a desktop app
   const hint = `${uaData?.platform ?? ''} ${navigator.userAgent}`.toLowerCase();
   if (/android|iphone|ipad|ipod|cros/.test(hint)) return null;
-  if (hint.includes('mac')) return navigator.maxTouchPoints > 1 ? null : 'macOS'; // iPadOS reports "Macintosh"
-  if (hint.includes('win')) return 'Windows';
-  if (hint.includes('linux') || hint.includes('x11')) return 'Linux';
+  if (hint.includes('mac')) return navigator.maxTouchPoints > 1 ? null : 'mac'; // iPadOS reports "Macintosh"
+  if (hint.includes('win')) return 'windows';
+  if (hint.includes('linux') || hint.includes('x11')) return 'linux';
   return null;
 }
 
-const isChoice = (c: unknown): c is Choice =>
-  !!c && typeof (c as Choice).href === 'string' && /^https:\/\/github\.com\//.test((c as Choice).href) && typeof (c as Choice).note === 'string';
-
-// Chromium on an Intel Mac reports "x86". Safari and Firefox expose no architecture, and every Mac
-// browser says "Intel Mac OS X" in its user agent, so anything but a clear "x86" keeps Apple Silicon.
-async function isIntelMac(): Promise<boolean> {
+// Chromium reports the CPU: "x86" on an Intel Mac, "arm" on Windows on ARM. Safari and Firefox
+// expose none, so anything but a clear answer keeps the default (Apple silicon, x64).
+async function architecture(): Promise<string | undefined> {
   const uaData = (navigator as Navigator & { userAgentData?: UAData }).userAgentData;
-  if (!uaData?.getHighEntropyValues) return false;
+  if (!uaData?.getHighEntropyValues) return undefined;
   try {
-    return (await uaData.getHighEntropyValues(['architecture'])).architecture === 'x86';
+    return (await uaData.getHighEntropyValues(['architecture'])).architecture;
   } catch {
-    return false;
+    return undefined;
   }
 }
 
-function applyChoice(root: ParentNode, key: string, os: OS) {
-  root.querySelectorAll<HTMLAnchorElement>('a[data-choices]').forEach((a) => {
-    let choice: unknown;
-    try {
-      choice = (JSON.parse(a.dataset.choices ?? '{}') as Record<string, unknown>)[key];
-    } catch {
-      return; // the release page link stays
-    }
-    if (!isChoice(choice)) return;
-    a.href = choice.href;
-    const label = a.querySelector<HTMLElement>('[data-download-label]');
-    if (label) label.textContent = `Download for ${os}`;
-    const note = document.getElementById(a.dataset.noteId ?? '');
-    if (note) note.textContent = choice.note;
-  });
+function showNote(root: ParentNode, note: string) {
+  root.querySelectorAll<HTMLElement>(`[data-note="${note}"]`).forEach((el) => (el.hidden = false));
 }
 
 export function enhanceDownloads(root: ParentNode = document) {
   const os = detectOS();
   if (!os) return;
-  applyChoice(root, os, os);
-  root.querySelectorAll<HTMLElement>(`[data-platform="${os}"]`).forEach((el) => el.setAttribute('data-detected', ''));
-  if (os === 'macOS') void isIntelMac().then((intel) => intel && applyChoice(root, 'macOSIntel', os));
+  if (os === 'linux') {
+    showNote(root, 'linux');
+    return;
+  }
+  root.querySelectorAll<HTMLElement>('[data-downloads]').forEach((el) => (el.dataset.os = os));
+  root.querySelectorAll<HTMLDetailsElement>(`details[data-platform="${os}"]`).forEach((d) => (d.open = true));
+  void architecture().then((arch) => {
+    if (os === 'mac' && arch === 'x86') showNote(root, 'intel-mac');
+    if (os === 'windows' && arch === 'arm') showNote(root, 'windows-arm');
+  });
 }

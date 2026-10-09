@@ -1,7 +1,6 @@
 ---
-// The SignPath Foundation programme requires this policy on the project homepage, in this wording
-// (the README carries the same text). Keep the status line true: remove it once a signed Windows
-// release ships.
+// The SignPath Foundation programme requires this policy on the project homepage, in this wording:
+// the README's "Code signing policy" (1.0), word for word. Keep the status line true.
 import {
   MAINTAINER_GITHUB_URL,
   MAINTAINER_HANDLE,
@@ -10,28 +9,30 @@ import {
 } from '../lib/constants';
 ---
 
-<section class="signing wrap" id="code-signing" aria-labelledby="code-signing-title">
-  <h2 id="code-signing-title">Code signing policy</h2>
-  <div class="signing-body">
-    <p>
-      Free code signing provided by <a href={SIGNPATH_URL}>SignPath.io</a>, certificate by
-      <a href={SIGNPATH_FOUNDATION_URL}>SignPath Foundation</a>.
-    </p>
-    <ul>
-      <li>Committers and reviewers: <a href={MAINTAINER_GITHUB_URL}>{MAINTAINER_HANDLE}</a></li>
-      <li>Approvers: <a href={MAINTAINER_GITHUB_URL}>{MAINTAINER_HANDLE}</a></li>
-    </ul>
-    <p>
-      Only artifacts built by this repository’s GitHub Actions workflows from this repository’s own source are
-      signed. Each release signing request is approved by hand.
-    </p>
-    <p>
-      Privacy policy: see <a href="#privacy">Privacy</a>. This program does not send your audio anywhere. It
-      contacts networked systems only to check for updates, to download the speech and voice-detection models
-      it runs on, and, when you use AI polish or voice editing with your own API key, to send text to the
-      provider you selected.
-    </p>
-    {/* Verbatim from the README; not tied to APP_VERSION, so a version bump cannot make it claim more than it knows. */}
-    <p>Status: Windows builds up to v0.2.9 are not signed yet.</p>
+<section class="section" id="code-signing" aria-labelledby="code-signing-title">
+  <div class="wrap signing">
+    <h2 id="code-signing-title" class="sub">Code signing policy</h2>
+    <div class="signing-body">
+      <p>
+        Free code signing provided by <a href={SIGNPATH_URL}>SignPath.io</a>, certificate by
+        <a href={SIGNPATH_FOUNDATION_URL}>SignPath Foundation</a>.
+      </p>
+      <ul>
+        <li>Committers and reviewers: <a href={MAINTAINER_GITHUB_URL}>{MAINTAINER_HANDLE}</a></li>
+        <li>Approvers: <a href={MAINTAINER_GITHUB_URL}>{MAINTAINER_HANDLE}</a></li>
+      </ul>
+      <p>
+        Only artifacts built by this repository’s GitHub Actions workflows from this repository’s own source are
+        signed. Each release signing request is approved by hand.
+      </p>
+      <p>
+        <b>Privacy policy:</b> see <a href="#privacy">Privacy</a>. This program does not send your audio anywhere. It
+        contacts networked systems only to check for updates, to download the speech, voice-detection and language
+        models it runs on, and, when you set up a language-model provider with your own API key, to send text to that
+        provider.
+      </p>
+      {/* Verbatim from the README; not tied to APP_VERSION, so a version bump cannot make it claim more than it knows. */}
+      <p>Status: Windows builds, 1.0 included, are not signed yet. The Mac app is signed with a Developer ID and notarized by Apple.</p>
+    </div>
   </div>
 </section>

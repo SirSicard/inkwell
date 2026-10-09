@@ -1,0 +1,33 @@
+---
+// One screenshot from src/data/shots.ts, in the page's theme: both themes' files are in the HTML,
+// lazy, and CSS shows one, so the hidden one is never fetched. In the dark band, `dark` forces the
+// dark file whatever the page's theme.
+import { SHOTS } from '../data/shots';
+
+interface Props {
+  shot: keyof typeof SHOTS;
+  /** Hidden below tablet width, to keep the phone page short. */
+  optional?: boolean;
+  bare?: boolean;
+  caption?: string;
+  /** CSS width the image is shown at, for `sizes`. */
+  sizes?: string;
+}
+const { shot, optional = false, bare = false, caption, sizes } = Astro.props;
+const s = SHOTS[shot];
+const src = (theme: 'light' | 'dark') =>
+  s.themes === 'both' ? `/shots/${s.file}-${theme}.webp` : s.themes === 'dark' ? `/shots/${s.file}-dark.webp` : `/shots/${s.file}.webp`;
+const attrs = { width: s.width, height: s.height, alt: s.alt, loading: 'lazy' as const, decoding: 'async' as const, sizes };
+---
+
+<figure class:list={['shot', { 'is-optional': optional, 'is-bare': bare }]} data-shot={s.id}>
+  {s.themes === 'both' ? (
+    <>
+      <img class="for-light" src={src('light')} {...attrs} />
+      <img class="for-dark" src={src('dark')} {...attrs} />
+    </>
+  ) : (
+    <img src={src(s.themes)} {...attrs} />
+  )}
+  {caption && <figcaption>{caption}</figcaption>}
+</figure>

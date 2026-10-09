@@ -1,78 +1,89 @@
 ---
-// The five models, measured. The ink stays the voice (it only appears in the hero); the figures here
-// carry plain meters on a shared zero baseline per column, so the rows compare at a glance.
-import { MODELS, SECONDS_SCALE_MAX, SHERPA_ONNX_URL, WER_SCALE_MAX } from '../lib/constants';
-
-const pct = (v: number, max: number) => `${((v / max) * 100).toFixed(1)}%`;
+// Modes, the language models and the speech models: the README's "Modes", "Language models
+// (optional)", "A free Groq key" and "Models", and docs/MODEL-WEIGHTS.md. A plain list, no
+// accuracy figures: 1.0 publishes none.
+import Shot from './Shot.astro';
+import { GROQ_KEYS_URL, GROQ_RATE_LIMITS_URL, MODEL_WEIGHTS_URL, MODELS } from '../lib/constants';
 ---
 
-<section class="models wrap" id="models" aria-labelledby="models-title">
-  <div class="section-head">
-    <h2 id="models-title">Five models, measured rather than quoted.</h2>
-    <p class="section-intro">
-      All five run on your CPU through <a href={SHERPA_ONNX_URL}>sherpa-onnx</a>. None ships inside the
-      installer: each downloads from Hugging Face the first time you pick it, and after that it needs no
-      internet. Parakeet V3 is the default.
+<section class="section" id="models" aria-labelledby="models-title">
+  <div class="wrap">
+    <div class="section-head">
+      <h2 id="models-title">Modes, and the models underneath.</h2>
+      <p>
+        A mode bundles a style, filler removal and polish (its own instructions, and optionally its own language
+        model), and switches on by the app you are typing in. Edited in Settings > Modes.
+      </p>
+    </div>
+
+    <div class="split">
+      <div>
+        <h3 id="language-models" class="sub">Language models, optional</h3>
+        <p class="muted sub-lede">
+          Transcripts never need one. Polish, voice editing, summaries, commitments and Ask do. Three ways to get one:
+        </p>
+      </div>
+      <Shot shot="p2" optional sizes="(min-width: 60rem) 34rem, 100vw" />
+    </div>
+
+    <div class="options">
+      <div>
+        <h3>Apple’s on-device model</h3>
+        <p class="where">Mac</p>
+        <p>With Apple Intelligence on, Apple’s Foundation Models: no download, no key, and your words stay on the Mac.</p>
+      </div>
+      <div>
+        <h3>Qwen3-4B on this PC</h3>
+        <p class="where">Windows</p>
+        <p>
+          Qwen3-4B-Instruct-2507, 2.5 GB, downloaded when you ask. It runs in Inkwell on the GPU or the CPU, so Local
+          only stays on and no key is needed.
+        </p>
+      </div>
+      <div>
+        <h3>Your own key</h3>
+        <p class="where">Both</p>
+        <p>
+          OpenAI, Groq, Anthropic, OpenRouter or any OpenAI-compatible server, used before the on-device model.
+          Agreeing to send to one off this machine turns Local only off, and each feature asks before it sends.
+        </p>
+      </div>
+    </div>
+
+    <details class="more">
+      <summary>A free Groq key</summary>
+      <div class="more-body">
+        <p>
+          Groq’s Free plan costs $0 and has rate limits, listed on its <a href={GROQ_RATE_LIMITS_URL}>Rate Limits page</a>.
+          The app’s guide (Settings > AI, “How to get a free Groq key”) has the same steps:
+        </p>
+        <ol>
+          <li>Open Groq’s API Keys page: <a href={GROQ_KEYS_URL}>console.groq.com/keys</a>.</li>
+          <li>Log in, or make a Groq account.</li>
+          <li>Press <b>Create API Key</b> and give the key a name, such as Inkwell.</li>
+          <li>Copy the key. In Inkwell’s Settings > AI, choose Groq, paste it and press <b>Save key</b>, then <b>Use Groq</b>.</li>
+        </ol>
+      </div>
+    </details>
+
+    <details class="more wide-open models-more">
+      <summary>What runs on your machine <span class="hint">Five models, each downloaded when first needed</span></summary>
+      <div class="more-body">
+    <ul class="model-list">
+      {MODELS.map((m) => (
+        <li>
+          <span class="name">{m.name}</span>
+          <span class="size">{m.size}</span>
+          <span class="job">{m.job}</span>
+          <span class="lic">{m.licence}</span>
+        </li>
+      ))}
+    </ul>
+    <p class="footnote">
+      Downloaded when first needed, from a pinned revision with a checked hash. Chosen by measuring word error rate on
+      AMI meetings and FLEURS English: 1.0 targets English. <a href={MODEL_WEIGHTS_URL}>Credits and policy</a>.
     </p>
+      </div>
+    </details>
   </div>
-
-  <table class="model-table" role="table">
-    <caption class="sr-only">
-      The five speech recognition models in Inkwell, sorted by measured word error rate, lowest first.
-    </caption>
-    <thead role="rowgroup">
-      <tr role="row">
-        <th scope="col" role="columnheader">Model</th>
-        <th scope="col" role="columnheader">Word error rate<span class="th-note">lower is better</span></th>
-        <th scope="col" role="columnheader">Time for 57&nbsp;s of audio</th>
-        <th scope="col" role="columnheader">Download</th>
-        <th scope="col" role="columnheader">Languages</th>
-        <th scope="col" role="columnheader">Pick it when</th>
-      </tr>
-    </thead>
-    <tbody role="rowgroup">
-      {
-        MODELS.map((m) => (
-          <tr role="row">
-            <th scope="row" role="rowheader" class="c-name">
-              <span class="model-name">{m.name}</span>
-              <span class="model-maker">{m.maker}</span>
-            </th>
-            <td role="cell" class="c-wer">
-              <span class="figure">
-                {m.wer.toFixed(1)}%<span class="m-only"> word error rate</span>
-              </span>
-              <span class="meter" aria-hidden="true">
-                <span style={`--v: ${pct(m.wer, WER_SCALE_MAX)}`} />
-              </span>
-            </td>
-            <td role="cell" class="c-time">
-              <span class="figure">
-                {m.seconds.toFixed(1)}&nbsp;s<span class="m-only"> for 57&nbsp;s of audio</span>
-              </span>
-              <span class="meter" aria-hidden="true">
-                <span style={`--v: ${pct(m.seconds, SECONDS_SCALE_MAX)}`} />
-              </span>
-            </td>
-            <td role="cell" class="c-size num">
-              {m.mb}&nbsp;MB<span class="m-only"> download</span>
-            </td>
-            <td role="cell" class="c-langs">
-              <span class="m-only">Languages: </span>
-              {m.languages}
-            </td>
-            <td role="cell" class="c-when">{m.when}</td>
-          </tr>
-        ))
-      }
-    </tbody>
-  </table>
-  <p class="scale-note" aria-hidden="true">Meters run from zero to {WER_SCALE_MAX}% and to {SECONDS_SCALE_MAX}&nbsp;s.</p>
-
-  <p class="footnote">
-    Word error rates are measured on eight recordings of one voice, scored against what was actually said,
-    with the tool in the repository. Eight clips is directional, not a benchmark, and your voice is not that
-    voice: measure your own with Save Debug Audio and the same tool. The times are for those same 57&nbsp;seconds of audio, on a Mac’s
-    CPU. The list is short on purpose. It was thirteen models, most of which lost on every axis at once.
-  </p>
 </section>

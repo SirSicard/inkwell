@@ -5,15 +5,15 @@ import {
   AUTHOR_URL,
   BUILD_FROM_SOURCE_URL,
   CONTRIBUTING_URL,
+  CREDITS,
   GITHUB_URL,
   HANDY_URL,
   ISSUES_URL,
+  LEGACY_BRANCH_URL,
   LICENSE_URL,
   RELEASES_URL,
   SECURITY_URL,
-  SHERPA_ONNX_URL,
-  SILERO_VAD_URL,
-  TAURI_URL,
+  THIRD_PARTY_URL,
 } from '../lib/constants';
 
 interface Props {
@@ -28,16 +28,16 @@ const { base = '' } = Astro.props;
       <h2 id="colophon-title" class="sr-only">Colophon</h2>
       <p>
         <span translate="no">Inkwell</span> {APP_VERSION} is free and MIT licensed, built by
-        <a href={AUTHOR_URL}>{AUTHOR_NAME}</a>. Originally based on <a href={HANDY_URL}>Handy</a> by CJ Pais.
-        Speech recognition by <a href={SHERPA_ONNX_URL} style="white-space: nowrap">sherpa-onnx</a>, silence detection by
-        <a href={SILERO_VAD_URL}>Silero VAD</a>, desktop shell by <a href={TAURI_URL}>Tauri</a>.
+        <a href={AUTHOR_URL}>{AUTHOR_NAME}</a>. It is a native app on each platform over one Rust core: SwiftUI and
+        AppKit on the Mac, WinUI 3 on Windows.
       </p>
       <p>
-        The app is Rust and Tauri v2, with sherpa-onnx on ONNX Runtime (CPU) for inference, cpal for capture,
-        rubato for resampling and SQLite for history. Its front end is React 19, TypeScript, Tailwind v4,
-        Framer Motion and a WebGL ink shader, which this page borrows.
+        It runs on {CREDITS.map((c, i) => (
+          <>{i > 0 && (i === CREDITS.length - 1 ? ' and ' : ', ')}<a href={c.url}>{c.name}</a></>
+        ))} (<a href={THIRD_PARTY_URL}>all, with licences</a>). Inkwell 0.2, on the
+        <a href={LEGACY_BRANCH_URL}>legacy/0.2</a> branch, was originally based on <a href={HANDY_URL}>Handy</a> by CJ Pais.
       </p>
-      <p>This site sets no cookies and runs no analytics.</p>
+      <p>The glow at the top of this page is the app’s own orb shader, ported to WebGL. This site sets no cookies and runs no analytics.</p>
     </div>
     <ul class="colophon-links" aria-label="Project links">
       <li><a href={GITHUB_URL}>GitHub</a></li>

@@ -1,107 +1,57 @@
 ---
-// The hero: the instrument on a desk. Copy and the download on the left; the real app window, its
-// live ink, the key and a text field on the right. The one orchestrated moment lives here.
-import { Picture } from 'astro:assets';
-import dashboard from '../assets/inkwell-dashboard.png';
-import { APP_VERSION, DEMO_SENTENCES, GITHUB_URL, RELEASES_LATEST_URL } from '../lib/constants';
-import { DOWNLOADS, PRIMARY } from '../lib/release';
+// The hero, always dark: the headline, the product right under it, and the download block. Behind
+// it, one canvas draws the app's orb (src/lib/glow-orb.ts), wandering slowly as it does behind the
+// app's main window; over it, a coded dictation (src/lib/hero.ts): the key goes down, the Drop
+// shows the live words with its orb live, the key comes up and the final text is typed. Without JS,
+// or under reduced motion, it is one still frame of that moment.
+import SiteHeader from './SiteHeader.astro';
+import Downloads from './Downloads.astro';
+import { PRESETS } from '../data/glow';
+import { DEMO_LINES } from '../lib/demo-lines';
 ---
 
-<section class="hero wrap" id="how-it-works" aria-labelledby="hero-title">
-  <div class="hero-copy">
-    {/* Non-breaking spaces bind "that stays" and "on your desk." so no width strands a single word
-         after the first line, at any width. */}
-    <h1 id="hero-title">Dictation that&nbsp;stays on&nbsp;your&nbsp;desk.</h1>
+<section class="hero band-dark" aria-labelledby="hero-title" data-hero>
+  <div class="orb-fallback" aria-hidden="true"></div>
+  <canvas class="orb-canvas" data-orb aria-hidden="true"></canvas>
+  <SiteHeader />
+  <div class="hero-inner wrap">
+    <h1 id="hero-title">Dictation and meeting notes that stay on&nbsp;your&nbsp;machine.</h1>
     <p class="lead">
-      Hold a key, speak, let go. The text lands in whatever app you were typing in. Speech recognition runs
-      on your own CPU, so your audio never leaves the machine, and once a model is downloaded it works with
-      the Wi‑Fi off.
+      Hold a key, speak, let go: the text lands where you were typing. In a meeting, you and the other side are
+      recorded as two streams and transcribed on your own Mac or PC.
     </p>
 
-    <div class="get">
-      <a class="btn" href={RELEASES_LATEST_URL} data-choices={JSON.stringify(PRIMARY)} data-note-id="download-note">
-        <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true" focusable="false">
-          <path d="M9 2.5v9m0 0-3.6-3.6M9 11.5l3.6-3.6M3 15.5h12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path>
-        </svg>
-        <span data-download-label>Download Inkwell</span>
-      </a>
-      <a class="text-link" href={GITHUB_URL}>Source on GitHub</a>
-    </div>
-    <p class="get-meta">
-      <span id="download-note">Version {APP_VERSION} for macOS, Windows and Linux.</span>
-      Free and MIT licensed; no account, no telemetry.
-    </p>
-  </div>
-
-  <figure class="instrument" data-demo>
-    <div class="window">
-      <div class="window-inner">
-        <Picture
-          src={dashboard}
-          formats={['avif', 'webp']}
-          widths={[720, 1080, 1280, 1600]}
-          sizes="(min-width: 64rem) 77vw, (min-width: 40rem) 92vw, 190vw"
-          alt="The Inkwell window: the ink panel on the left, the sidebar, and a history of transcripts, each tagged with the model that wrote it."
-          loading="eager"
-          fetchpriority="high"
-          class="window-shot"
-          pictureAttributes={{ class: 'window-shot' }}
-        />
-        <ink-field
-          class="window-ink"
-          data-demo-ink
-          rest
-          bg="#f0ede8"
-          ink="#0f0f0f"
-          size="0.42"
-          warp="0.3"
-          speed="1.6"
-          aria-hidden="true"></ink-field>
+    <figure class="stage" data-demo>
+      <div class="note" aria-hidden="true">
+        <div class="note-bar"><b>New message</b><span>To: the team</span></div>
+        <p class="note-body"><span class="before">Hi all, </span><span data-field></span><span class="caret"></span></p>
       </div>
-    </div>
-
-    <div class="controls">
-      <button class="keycap" type="button" data-demo-key disabled>
-        <span class="keycap-lamp" aria-hidden="true"></span>
-        <span>Hold</span><span class="sr-only"> to replay a dictation</span>
-      </button>
-      <div class="field">
-        <p class="field-label">A text field, in whatever app you were typing in</p>
-        <div class="field-window">
-          <p data-demo-field><span class="seed">{DEMO_SENTENCES[0]}</span><span class="caret" data-demo-caret aria-hidden="true"></span></p>
+      <div class="stage-row" aria-hidden="true">
+        <div class="keys is-down" data-keys><kbd>⌃</kbd><kbd>⇧</kbd><kbd class="is-wide">Space</kbd></div>
+        <div class="drop" data-drop>
+          <span class="drop-orb" data-drop-orb></span>
+          <span class="drop-words" data-drop-words>{DEMO_LINES[0].live}</span>
+          <span class="drop-rec"><span>●</span>&nbsp;REC</span>
         </div>
       </div>
-    </div>
-    <p class="demo-status" data-demo-status aria-live="polite">
-      <span class="js-only">Hold the key, or focus it and hold Space.</span>
-    </p>
-    <figcaption id="demo-caption">
-      A re-enactment: this page never uses your microphone. The ink follows a synthetic voice, and the words
-      were written in advance.
-    </figcaption>
-  </figure>
+      <figcaption class="sr-only">
+        An animation of a dictation: a shortcut is held, the Drop, Inkwell’s small recording light, shows the
+        words as they are heard, and when the keys come up the finished sentence is typed into a message.
+      </figcaption>
+      <div class="presets js-only">
+        <span id="presets-label">Dot colours</span>
+        <ul aria-labelledby="presets-label">
+          {PRESETS.map((p, i) => (
+            <li>
+              <button type="button" data-preset={p.id} aria-pressed={i === 0 ? 'true' : 'false'} title={p.name} aria-label={p.name} style={`--a:${p.you};--b:${p.them}`}>
+                <span></span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </figure>
 
-  <div class="hero-specs">
-    <ul class="builds" aria-label="Builds by platform">
-      <li data-platform="macOS">
-        <a href={DOWNLOADS.macOS.url}>macOS<span class="sr-only"> disk image for Apple Silicon, {DOWNLOADS.macOS.size}</span></a>
-        <span>Apple Silicon, {DOWNLOADS.macOS.size}, or <a href={DOWNLOADS.macOSIntel.url}>Intel<span class="sr-only"> Mac disk image, {DOWNLOADS.macOSIntel.size}</span></a>, {DOWNLOADS.macOSIntel.size}. Both signed with a Developer ID and notarised by Apple, so they open normally.</span>
-      </li>
-      <li data-platform="Windows">
-        <a href={DOWNLOADS.windows.url}>Windows<span class="sr-only"> installer, {DOWNLOADS.windows.size}</span></a>
-        <span>Installer, {DOWNLOADS.windows.size}. Not code signed yet, so SmartScreen warns: click “More info”, then “Run anyway”.</span>
-      </li>
-      <li data-platform="Linux">
-        <a href={DOWNLOADS.appImage.url}>Linux<span class="sr-only"> AppImage, {DOWNLOADS.appImage.size}</span></a>
-        <span>AppImage, {DOWNLOADS.appImage.size}, or the <a href={DOWNLOADS.deb.url}>.deb</a>. Best effort, not regularly tested.</span>
-      </li>
-    </ul>
-
-    <p class="calls">
-      It connects to four places and no others: Hugging Face, for a speech model the first time you pick it;
-      GitHub, for the small voice-detection model if it is missing; the project’s own update worker, five
-      seconds after launch; and, only when you use AI polish or voice editing with a key you added, that key’s
-      provider, which gets your text and never the audio. <a href="#privacy">What each call carries</a>.
-    </p>
+    <Downloads id="get" />
   </div>
 </section>

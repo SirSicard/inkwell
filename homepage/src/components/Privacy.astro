@@ -1,100 +1,73 @@
 ---
-// What stays and every network call, from the README's Privacy section ("Every network call, listed").
-// The update check's contents are the README's words. Checked against the app at the v0.2.9 tag: the
-// check runs five seconds after launch with no setting to turn it off, the Silero model URL is the
-// sherpa-onnx GitHub release, and Save Debug Audio defaults to off.
-import { HUGGING_FACE_URL, UPDATER_HOST } from '../lib/constants';
+// Privacy, from the README's "Privacy" (1.0). What changed from 0.2's page: meeting audio is written
+// to disk, beside the library; the claim is "no telemetry of its own", with the Windows App SDK's
+// part in Windows diagnostics stated; the network list is 1.0's (Hugging Face at pinned revisions,
+// GitHub releases for updates, your own provider); every feature that sends text asks first, and
+// Local only refuses remote endpoints in code.
+import Shot from './Shot.astro';
+import { APP_SDK_NOTE_URL, HUGGING_FACE_URL } from '../lib/constants';
 ---
 
-<section class="privacy wrap" id="privacy" aria-labelledby="privacy-title">
-  <div class="section-head">
-    <h2 id="privacy-title">What it sends, all of it.</h2>
-    <p class="section-intro">
-      No account, no telemetry, no analytics, no crash reporting, and no server of this project’s that your
-      text passes through. Here is what stays, and every call that goes out.
+<section class="section" id="privacy" aria-labelledby="privacy-title">
+  <div class="wrap">
+    <h2 id="privacy-title" class="sr-only">Privacy</h2>
+    <p class="statement">
+      Your voice stays on your machine. <span>Text leaves only when a feature you switched on asks first, and you
+      say where it goes.</span>
     </p>
-  </div>
 
-  <div class="spec-group">
-    <h3>Stays on this machine</h3>
-    <dl class="spec">
+    <dl class="specs">
       <div>
-        <dt>Your voice</dt>
+        <dt>Recognised here, never uploaded</dt>
+        <dd>Audio is captured, transcribed and stored locally. No account, and no telemetry of its own.</dd>
+      </div>
+      <div>
+        <dt>The library is a local file</dt>
         <dd>
-          Captured, resampled and transcribed in memory by a model on your CPU. Never uploaded, and never
-          written to disk unless you switch on Save Debug Audio, a troubleshooting setting that is off by
-          default.
+          SQLite, with meetings’ audio beside it, written to disk as it records. Nothing syncs.
+          <span class="paths"><code>~/Library/Application Support/Inkwell</code><code>%LOCALAPPDATA%\Inkwell</code></span>
         </dd>
       </div>
       <div>
-        <dt>Your transcripts</dt>
-        <dd>A SQLite file in the app’s data directory. Nothing syncs.</dd>
+        <dt>Local only is on unless you turn it off</dt>
+        <dd>While it is on, the core refuses any language-model endpoint that is not on this machine, in code.</dd>
       </div>
       <div>
-        <dt>Your settings</dt>
-        <dd>Modes, snippets, dictionary and voice commands, as plain files on your disk.</dd>
-      </div>
-      <div>
-        <dt>Your API key</dt>
-        <dd>
-          If you add one, it lives in the OS keyring (the macOS Keychain, the Windows Credential Manager or the Secret Service on Linux),
-          never in a config file in plain text. A key an older build did write in plain text is stripped the
-          next time settings load.
-        </dd>
+        <dt>Every feature that sends text asks first</dt>
+        <dd>Polish, voice edit, summaries and Ask each ask where your words will go, and ask again if that changes. Only text is sent, never audio.</dd>
       </div>
     </dl>
-  </div>
-
-  <div class="spec-group is-table">
-    <h3 id="calls-title">Every network call</h3>
-    <div class="ledger-wrap">
-      <table class="ledger" role="table" aria-labelledby="calls-title">
-        <thead role="rowgroup">
-          <tr role="row">
-            <th scope="col" role="columnheader">Call</th>
-            <th scope="col" role="columnheader">Goes to</th>
-            <th scope="col" role="columnheader">When</th>
-            <th scope="col" role="columnheader">What it carries</th>
-          </tr>
-        </thead>
-        <tbody role="rowgroup">
-          <tr role="row">
-            <th scope="row" role="rowheader">Speech model download</th>
-            <td role="cell"><span class="m-only">Goes to</span><a href={HUGGING_FACE_URL}>Hugging Face</a></td>
-            <td role="cell"><span class="m-only">When</span>The first time you pick a model</td>
-            <td role="cell"><span class="m-only">What it carries</span>A request for the model’s files</td>
-          </tr>
-          <tr role="row">
-            <th scope="row" role="rowheader">Voice-detection model download</th>
-            <td role="cell"><span class="m-only">Goes to</span>GitHub, the sherpa-onnx releases</td>
-            <td role="cell"><span class="m-only">When</span>On first run, if the Silero VAD model is missing</td>
-            <td role="cell"><span class="m-only">What it carries</span>A request for that one file</td>
-          </tr>
-          <tr role="row">
-            <th scope="row" role="rowheader">Update check</th>
-            <td role="cell"><span class="m-only">Goes to</span>The project’s own worker, <span class="host" translate="no" set:html={UPDATER_HOST.split('.').map((part) => `<span>${part}</span>`).join('.<wbr>')} /></td>
-            <td role="cell"><span class="m-only">When</span>Five seconds after every launch. There is no switch for it yet</td>
-            <td role="cell">
-              <span class="m-only">What it carries</span>The app version, OS target and CPU architecture. The worker
-              only reads the latest release record
-            </td>
-          </tr>
-          <tr role="row">
-            <th scope="row" role="rowheader">AI polish and voice editing</th>
-            <td role="cell">
-              <span class="m-only">Goes to</span>The provider whose key you added: OpenAI, Groq, Anthropic,
-              OpenRouter or your own endpoint
-            </td>
-            <td role="cell"><span class="m-only">When</span>Only while polish is on, or when you use voice editing</td>
-            <td role="cell"><span class="m-only">What it carries</span>Your text, never the audio, sent straight from your machine</td>
-          </tr>
-        </tbody>
-      </table>
+    <details class="more wide-open privacy-more">
+      <summary>Keys, logs, the network and updates</summary>
+      <div class="more-body">
+        <dl class="specs">
+      <div>
+        <dt>Keys and logs</dt>
+        <dd>Keys stay in the Keychain or the Credential Manager and go straight to your provider; no server of this project is in the path. Logs never contain what you said.</dd>
+      </div>
+      <div>
+        <dt>What connects to the network</dt>
+        <dd>
+          Model downloads from <a href={HUGGING_FACE_URL}>Hugging Face</a> at pinned revisions, SHA-256 checked; update
+          checks against the project’s GitHub releases; and your language-model provider, if you set one up.
+        </dd>
+      </div>
+      <div>
+        <dt>Updates</dt>
+        <dd>On the Mac, Sparkle asks before its first automatic check and sends no system profile. On Windows, Inkwell checks only when you press Check Now.</dd>
+      </div>
+      <div>
+        <dt>Windows App SDK</dt>
+        <dd>
+          Microsoft’s runtime in the Windows app takes part in Windows’ own diagnostic data (Settings > Privacy &
+          security > Diagnostics & feedback). It never sees what you dictate or record. <a href={APP_SDK_NOTE_URL}>Details</a>.
+        </dd>
+      </div>
+        </dl>
+      </div>
+    </details>
+    <div class="privacy-shot">
+      <Shot shot="p3" optional sizes="(min-width: 46rem) 30rem, 100vw" caption="Polish asks before its first send." />
     </div>
-    <p class="after-ledger">
-      Without polish or voice editing, and with your models on disk, the update check is the only call left:
-      dictation works with the network unplugged. Earlier builds had a free proxy tier that routed polish through a
-      server the maintainer paid for. It is gone; your own key is the only path.
-    </p>
   </div>
 </section>

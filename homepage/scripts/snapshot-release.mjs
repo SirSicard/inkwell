@@ -19,7 +19,8 @@ const r = JSON.parse(raw);
 const out = {
   tag: r.tagName,
   publishedAt: r.publishedAt,
-  assets: r.assets.map((a) => ({ name: a.name, size: a.size, url: a.url })),
+  // digest: GitHub's SHA-256 of the upload; the page shows the Windows installer's beside its check.
+  assets: r.assets.map((a) => ({ name: a.name, size: a.size, url: a.url, ...(a.digest ? { digest: a.digest } : {}) })),
 };
 writeFileSync(new URL('../src/data/release.json', import.meta.url), JSON.stringify(out, null, 2) + '\n');
 console.log(`wrote src/data/release.json: ${out.tag}, ${out.assets.length} assets`);

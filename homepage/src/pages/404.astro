@@ -1,8 +1,6 @@
 ---
 // The designed 404. Served with a real 404 status by the host, kept out of the sitemap, not indexed.
-// No script: the ink here is the favicon's blot (one still frame of the app's shader, traced by
-// scripts/make-icons.mjs), so the page works the same with JS off.
-import blot from '../data/blot.json';
+// No script beyond the shared shell: the orb here is a CSS still of the app's, so it works with JS off.
 import Base from '../layouts/Base.astro';
 import SiteHeader from '../components/SiteHeader.astro';
 import Colophon from '../components/Colophon.astro';
@@ -11,24 +9,31 @@ import { RELEASES_LATEST_URL } from '../lib/constants';
 
 <Base
   title="Page not found | Inkwell"
-  description="This page doesn’t exist. Inkwell’s homepage has the download, the models and the full privacy list."
+  description="This page doesn’t exist. Inkwell’s homepage has the download, the models and the full list of what Inkwell sends."
   noindex
 >
   <a class="skip" href="#main">Skip to content</a>
-  <SiteHeader base="/" />
-  <main id="main" class="lost wrap">
-    <div class="lost-blot" aria-hidden="true"><svg viewBox={blot.viewBox} focusable="false"><path d={blot.d}></path></svg></div>
-    <div class="lost-copy">
-      <h1>Nothing was written here.</h1>
-      <p class="lead">
-        The page you asked for doesn’t exist, or it moved. The homepage has the download, the models and the
-        full list of what Inkwell sends.
-      </p>
-      <div class="get">
-        <a class="btn" href="/">Go to the homepage</a>
-        <a class="text-link" href={RELEASES_LATEST_URL}>Latest release on GitHub</a>
+  <div class="band-dark">
+    <SiteHeader base="/" />
+    <main id="main" class="lost wrap">
+      <div>
+        <div class="lost-orb" aria-hidden="true"></div>
+        <h1>Nothing was said here.</h1>
+        <p>The page you asked for doesn’t exist, or it moved. The homepage has the download and everything Inkwell does.</p>
+        <div class="actions">
+          <a class="btn" href="/">Go to the homepage</a>
+          <a class="btn is-quiet" href={RELEASES_LATEST_URL}>Latest release on GitHub</a>
+        </div>
       </div>
-    </div>
-  </main>
+    </main>
+  </div>
   <Colophon base="/" />
+  <script>
+    import { themeSwitch } from '../lib/theme';
+    try {
+      themeSwitch();
+    } catch {
+      /* the system theme stays */
+    }
+  </script>
 </Base>
