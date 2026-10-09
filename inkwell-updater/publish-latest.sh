@@ -1,5 +1,6 @@
 #!/bin/sh
-# Push the newest GitHub release's latest.json into the updater's KV.
+# Push a GitHub release's latest.json into the updater's KV: the newest published release's, or
+# the release named as the first argument (publish-latest.sh 0.2.10).
 #
 # The worker serves updates from KV, not from GitHub, so publishing a release
 # does nothing for installed copies until this runs. Run it after every
@@ -10,7 +11,14 @@ cd "$(dirname "$0")"
 TMP="$(mktemp)"
 trap 'rm -f "$TMP"' EXIT
 
-curl -sfL "https://github.com/SirSicard/inkwell/releases/latest/download/latest.json" -o "$TMP"
+# A version given (publish-latest.sh 0.2.10) reads that release's manifest: once 1.x is the
+# latest release, "latest" has no 0.2 manifest, so a 0.2 release must be named.
+if [ -n "${1:-}" ]; then
+  SRC="https://github.com/SirSicard/inkwell/releases/download/v$1/latest.json"
+else
+  SRC="https://github.com/SirSicard/inkwell/releases/latest/download/latest.json"
+fi
+curl -sfL "$SRC" -o "$TMP"
 
 # Refuse to push something that is not JSON (a GitHub error page, an empty
 # body): a malformed KV value makes the worker answer 500 to every client.
