@@ -250,7 +250,9 @@ final class ShortcutRecorderTests: XCTestCase {
         let sent = Sent(); let screens = live(sent); let recorder = screens.shortcuts
         recorder.checkTimeout = .milliseconds(10)
         recorder.start(.meeting)
-        try await Task.sleep(for: .milliseconds(60))
+        // Waits for the timeout to land rather than a fixed while: a busy CI runner can take longer
+        // than 60 ms to run it.
+        for _ in 0..<200 where recorder.busy { try await Task.sleep(for: .milliseconds(10)) }
         XCTAssertFalse(recorder.busy)
         XCTAssertTrue(recorder.message(for: .meeting)?.isProblem ?? false)
         XCTAssertEqual(sent.commands.last, .meetingsShortcutSuspend(suspended: false, ref: nil))
@@ -356,7 +358,7 @@ final class ShortcutRecorderTests: XCTestCase {
         recorder.start(.meeting); acknowledge(screens, sent)
         _ = recorder.feed(.keyDown(keyCode: 0x69, flags: 0, isRepeat: false))
         guard case .hotkeyCheck(_, let ref) = sent.commands.last else { return XCTFail("no check") }
-        try await Task.sleep(for: .milliseconds(60))
+        for _ in 0..<200 where recorder.busy { try await Task.sleep(for: .milliseconds(10)) }
         XCTAssertFalse(recorder.busy)
         screens.apply([event("{\"type\":\"hotkey.checked\",\"binding\":\"f13\",\"canonical\":\"f13\",\"ok\":true,\"ref\":\"\(ref)\"}")])
         XCTAssertFalse(sent.commands.contains(.settingSet(.meetingsKey, "f13")))
