@@ -9,7 +9,7 @@
  * bump it after a release is published, never before, then run `node scripts/snapshot-release.mjs`
  * so the download links follow (see ./release.ts).
  */
-export const APP_VERSION = "0.2.9";
+export const APP_VERSION = "1.0.0";
 
 /** Canonical origin: the Vercel project alias until an owned domain exists. */
 export const SITE_URL = "https://getinkwell.vercel.app";
