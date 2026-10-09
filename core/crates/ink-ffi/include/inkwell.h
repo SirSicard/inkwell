@@ -310,11 +310,12 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       "dictation.polish" (on|off; setting.set takes only off, which also withdraws polish's
  *       consent in the same write, and answers "consent.state" too: consent.allow turns it on),
  *       "dictation.key" (any key this computer can watch, as hotkey.check judges it: a
- *       right-hand modifier, or fn on macOS, held on its own; a function key; or modifiers and
- *       one key such as ctrl+shift+space. Stored in hotkey.check's one spelling, which
- *       "setting.value" echoes; a key it refuses is refused here with its reason. The named
- *       tokens fn|right_option|right_command|right_control|right_shift|right_alt|right_win are
- *       stored on either OS: one this OS cannot hold is refused when dictation binds it, as
+ *       modifier, or fn on macOS, held on its own (a left-hand one starts only once held alone
+ *       for 300 ms); a function key; or modifiers and one key such as ctrl+shift+space, but not
+ *       an editing shortcut every app shares (ctrl+v, cmd+c...). Stored in hotkey.check's one
+ *       spelling, which "setting.value" echoes; a key it refuses is refused here with its
+ *       reason. The named tokens fn|right_option|right_command|right_control|right_shift|
+ *       right_alt|right_win are stored on either OS: one this OS cannot hold is refused when dictation binds it, as
  *       "dictation.off" with "key_refused". The default is fn on macOS and right_control on
  *       Windows),
  *       "dictation.edit_key" (off or a key as for dictation.key, never the dictation key in any

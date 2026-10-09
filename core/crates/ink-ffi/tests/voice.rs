@@ -474,7 +474,7 @@ fn changing_the_key_setting_rebinds_it_at_once() {
     // A key the platform cannot hold is refused before it is stored.
     assert!(
         rig.core()
-            .command(r#"{"cmd":"setting.set","key":"dictation.key","value":"left_option"}"#)
+            .command(r#"{"cmd":"setting.set","key":"dictation.key","value":"caps_lock"}"#)
             .is_err()
     );
 }

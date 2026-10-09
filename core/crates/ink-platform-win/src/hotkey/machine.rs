@@ -45,9 +45,28 @@
 //! switches the keyboard layout (Ctrl+Shift, Alt+Shift). So a chord press with modifiers asks for a
 //! **mask key**: the hook thread injects one unassigned key while they are still down, which
 //! Windows counts as "another key was pressed", as a typed chord would have been.
+//!
+//! **A left-hand modifier on its own waits (decided).** Left Ctrl, Alt, Shift and Win carry the
+//! shortcuts every app uses, so their events are never swallowed: the OS and the app see the key
+//! go down and come up, and Ctrl+C, Alt+Tab and Win+E work as always. Its press only arms a wait
+//! ([`Verdict::arm_ms`]: the hook thread sets a timer, [`HoldMachine::on_timer`]). Held alone for
+//! [`LONE_MODIFIER_DELAY_MS`], the hold starts there, stamped at the key's press so nothing said
+//! since is lost, and asks for the mask key so its release opens no menu and no Start. Any other
+//! key going down first (its repeats too), another modifier already down at its press (the same
+//! modifier's other key too), or the mouse (a button down when the wait ends, or a click or the
+//! wheel during it: Ctrl+click, Shift+drag, Ctrl+wheel) means a shortcut: no hold until the key
+//! comes up and is pressed again. Let go of before the wait ends, it did nothing. Once the hold has
+//! started, other keys pass and the hold goes on, as a right-hand modifier's does. In toggle mode
+//! both the start and the stop are such a hold (decided: a tap is a shortcut's, never a toggle).
+//!
+//! **Accepted edge (decided).** A key already held before the modifier's press and never repeated
+//! (some keys do not auto-repeat, or the hook missed its press) is not seen as "another key": the
+//! hold may start. When the wait ends only the mouse and the key itself are read back; scanning
+//! every key's state there would also block the modifier for good behind a key whose release
+//! Windows lost (one let go of in an elevated window), which is worse.
 #![cfg(windows)]
 
-use super::binding::Binding;
+use super::binding::{Binding, LONE_MODIFIER_DELAY_MS};
 
 /// One key event from the hook, reduced to what the decision needs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,7 +75,9 @@ pub(crate) enum HookInput {
     KeyDown {
         /// The virtual key.
         vk: u32,
-        /// The chord modifiers down at the time ([`super::binding::modifier`] bits).
+        /// The chord modifiers down at the time ([`super::binding::modifier`] bits). For a lone
+        /// left-hand modifier's own key, the others only: its sibling (right Shift for left Shift)
+        /// counts, the key itself does not.
         modifiers: u8,
         /// The key state reads the key as down already: a repeat of a key the OS saw (one the
         /// hook passed on). A swallowed key reads as up at its repeats too. Read for the hotkey's
@@ -94,8 +115,15 @@ pub(crate) struct Verdict {
     pub(crate) swallow: bool,
     /// Report this to the core.
     pub(crate) edge: Option<Edge>,
-    /// Inject the mask key now: a chord with modifiers was swallowed.
+    /// Inject the mask key now: a chord with modifiers was swallowed, or a lone left-hand
+    /// modifier's hold started.
     pub(crate) mask: bool,
+    /// Call [`HoldMachine::on_timer`] this many milliseconds from now: a lone left-hand modifier
+    /// is waiting to be held alone long enough. A newer wait replaces an older one.
+    pub(crate) arm_ms: Option<u32>,
+    /// The tick the edge happened at, when it is not the event's own: a lone modifier's hold
+    /// starts at its press, not when the wait ends.
+    pub(crate) at_ms: Option<u32>,
 }
 
 /// The longest pause between two key-downs of a held key that is still a repeat, from the
@@ -134,6 +162,10 @@ pub(crate) struct HoldMachine {
     /// The OS saw this key go down before the hook was installed. Its repeats/up belong to
     /// the app, and no action may start until that initial hold has ended.
     initial_release: bool,
+    /// A lone left-hand modifier is down and waiting: since this tick.
+    pending_since_ms: Option<u32>,
+    /// A lone left-hand modifier is down, and was part of a shortcut: no hold until it comes up.
+    vetoed: bool,
 }
 
 impl HoldMachine {
@@ -145,11 +177,26 @@ impl HoldMachine {
             last_down_ms: 0,
             repeat_gap_ms,
             initial_release: false,
+            pending_since_ms: None,
+            vetoed: false,
         }
     }
 
     pub(crate) const fn is_held(&self) -> bool {
         self.held
+    }
+
+    /// The binding is a lone left-hand modifier: its press waits (the module's rules).
+    pub(crate) const fn waits(&self) -> bool {
+        matches!(self.binding, Binding::LeftModifier(_))
+    }
+
+    /// The wait could not be timed (no timer): it ends as a shortcut would, with no hold until
+    /// the key comes up and is pressed again, rather than a key that never starts and never says.
+    pub(crate) fn abandon_wait(&mut self) {
+        if self.pending_since_ms.take().is_some() {
+            self.vetoed = true;
+        }
     }
 
     /// A key pressed before this hook existed must be released before it can start a hold.
@@ -161,6 +208,7 @@ impl HoldMachine {
     pub(crate) const fn key_vk(&self) -> u32 {
         match self.binding {
             Binding::Modifier(key) => key.vk(),
+            Binding::LeftModifier(key) => key.vk(),
             Binding::Chord(chord) => chord.vk,
         }
     }
@@ -173,8 +221,47 @@ impl HoldMachine {
     /// Abandons the hold (the core may have missed an edge: its sink panicked). A key still down
     /// stays ours until it comes up: its repeats start nothing and reach no app.
     pub(crate) fn reset(&mut self) {
-        self.trailing |= self.held;
+        if let Binding::LeftModifier(_) = self.binding {
+            // Its events were never swallowed: nothing trails. A key still down starts nothing
+            // more until it comes up.
+            self.vetoed |= self.held || self.pending_since_ms.is_some();
+            self.pending_since_ms = None;
+        } else {
+            self.trailing |= self.held;
+        }
         self.held = false;
+    }
+
+    /// The wait [`Verdict::arm_ms`] asked for has ended, at tick `now_ms`. `interrupted`: what the
+    /// keyboard hook cannot see says this was no lone hold (a mouse button down now, or pressed or
+    /// wheeled during the wait: Ctrl+click, Ctrl+wheel; or the key itself reads up, its key-up
+    /// lost). Starts the hold of a lone left-hand modifier held alone long enough, or waits on if
+    /// the timer came early. Anything else (the key came up, or met another key, meanwhile)
+    /// changes nothing.
+    pub(crate) fn on_timer(&mut self, now_ms: u32, interrupted: bool) -> Verdict {
+        let Some(since_ms) = self.pending_since_ms else {
+            return Verdict::default();
+        };
+        let waited_ms = now_ms.wrapping_sub(since_ms);
+        if waited_ms < LONE_MODIFIER_DELAY_MS {
+            return Verdict {
+                arm_ms: Some(LONE_MODIFIER_DELAY_MS - waited_ms),
+                ..Verdict::default()
+            };
+        }
+        self.pending_since_ms = None;
+        if interrupted {
+            self.vetoed = true;
+            return Verdict::default();
+        }
+        self.held = true;
+        Verdict {
+            swallow: false,
+            edge: Some(Edge::Pressed),
+            mask: true,
+            arm_ms: None,
+            at_ms: Some(since_ms),
+        }
     }
 
     /// Decides one event.
@@ -188,6 +275,9 @@ impl HoldMachine {
                 }
                 _ => {}
             }
+        }
+        if let Binding::LeftModifier(key) = self.binding {
+            return self.lone(key, input);
         }
         match (self.binding, input) {
             (
@@ -226,12 +316,67 @@ impl HoldMachine {
                 self.held = false;
                 self.trailing = true;
                 Verdict {
-                    swallow: false,
                     edge: Some(Edge::Released),
-                    mask: false,
+                    ..Verdict::default()
                 }
             }
             _ => Verdict::default(),
+        }
+    }
+
+    /// One event for a lone left-hand modifier (the module's rules): nothing is swallowed.
+    fn lone(&mut self, key: super::binding::LeftModifier, input: HookInput) -> Verdict {
+        let down = self.held || self.pending_since_ms.is_some() || self.vetoed;
+        match input {
+            HookInput::KeyDown {
+                vk,
+                modifiers,
+                reads_down,
+                at_ms,
+            } if vk == key.vk() => {
+                let since_ms = at_ms.wrapping_sub(self.last_down_ms);
+                let behind_ms = self.last_down_ms.wrapping_sub(at_ms);
+                self.last_down_ms = at_ms;
+                let soon = since_ms <= self.repeat_gap_ms || behind_ms <= self.repeat_gap_ms;
+                if down && (reads_down || soon) {
+                    // A repeat of the key that is down: the app's, as its press was.
+                    return Verdict::default();
+                }
+                // A press. A hold still on means its key-up was lost (the secure desktop): it
+                // ends here, and this press is judged on its own.
+                let lost = self.held;
+                self.held = false;
+                // The hook gives the other modifiers down (its sibling included): a modifier
+                // pressed with another is a shortcut.
+                let alone = modifiers == 0;
+                self.vetoed = !alone;
+                self.pending_since_ms = alone.then_some(at_ms);
+                Verdict {
+                    edge: lost.then_some(Edge::Released),
+                    arm_ms: alone.then_some(LONE_MODIFIER_DELAY_MS),
+                    ..Verdict::default()
+                }
+            }
+            HookInput::KeyDown { .. } => {
+                // Another key while it waits: a shortcut, and the app's.
+                if self.pending_since_ms.take().is_some() {
+                    self.vetoed = true;
+                }
+                Verdict::default()
+            }
+            HookInput::KeyUp { vk, .. } if vk == key.vk() => {
+                // Let go of: a hold ends (the app sees the key-up, as it saw the press); a wait or
+                // a shortcut ends with nothing to say.
+                let edge = self.held.then_some(Edge::Released);
+                self.held = false;
+                self.pending_since_ms = None;
+                self.vetoed = false;
+                Verdict {
+                    edge,
+                    ..Verdict::default()
+                }
+            }
+            HookInput::KeyUp { .. } => Verdict::default(),
         }
     }
 
@@ -248,8 +393,7 @@ impl HoldMachine {
             // A repeat of the held key, or of the trailing one: still ours, no edge.
             return Verdict {
                 swallow: true,
-                edge: None,
-                mask: false,
+                ..Verdict::default()
             };
         }
         // A press. A hold or trail still on means the key came up unseen: that ends here, and
@@ -266,6 +410,7 @@ impl HoldMachine {
                 (false, false) => None,
             },
             mask: starts && mask,
+            ..Verdict::default()
         }
     }
 
@@ -281,7 +426,7 @@ impl HoldMachine {
         Verdict {
             swallow,
             edge,
-            mask: false,
+            ..Verdict::default()
         }
     }
 }
@@ -371,16 +516,22 @@ mod tests {
         swallow: true,
         edge: None,
         mask: false,
+        arm_ms: None,
+        at_ms: None,
     };
     const PASS: Verdict = Verdict {
         swallow: false,
         edge: None,
         mask: false,
+        arm_ms: None,
+        at_ms: None,
     };
     const PRESSED: Verdict = Verdict {
         swallow: true,
         edge: Some(Edge::Pressed),
         mask: false,
+        arm_ms: None,
+        at_ms: None,
     };
     /// A chord with modifiers: pressed, and the mask key asked for.
     const PRESSED_MASKED: Verdict = Verdict {
@@ -391,6 +542,8 @@ mod tests {
         swallow: true,
         edge: Some(Edge::Released),
         mask: false,
+        arm_ms: None,
+        at_ms: None,
     };
 
     #[test]
@@ -483,6 +636,8 @@ mod tests {
             swallow: false,
             edge: Some(Edge::Released),
             mask: false,
+            arm_ms: None,
+            at_ms: None,
         };
         assert_eq!(m.on(up_with(vk::LSHIFT, modifier::CTRL)), released_passing);
         assert!(!m.is_held());
@@ -693,6 +848,8 @@ mod tests {
                 swallow: false,
                 edge: Some(Edge::Released),
                 mask: false,
+                arm_ms: None,
+                at_ms: None,
             }
         );
         assert!(!m.is_held());
@@ -796,6 +953,237 @@ mod tests {
         );
     }
 
+    /// The tick counter now, as the timer reads it.
+    fn now() -> u32 {
+        NOW_MS.with(Cell::get)
+    }
+
+    /// The verdict for a lone modifier's press: the app's, and a wait armed.
+    const ARMED: Verdict = Verdict {
+        swallow: false,
+        edge: None,
+        mask: false,
+        arm_ms: Some(LONE_MODIFIER_DELAY_MS),
+        at_ms: None,
+    };
+
+    /// Left Alt held alone: nothing at its press (the app sees it), the hold starts once the wait
+    /// ends, stamped at the press, with the mask key so its release opens no menu; its key-up is
+    /// the app's and ends the hold. A timer that fires early waits on for the rest.
+    #[test]
+    fn a_lone_left_modifier_held_alone_starts_after_the_wait() {
+        let mut m = machine("left_alt");
+        assert_eq!(m.on(down(vk::LMENU, 0)), ARMED);
+        let pressed_at = now();
+        assert!(!m.is_held());
+        assert_eq!(
+            m.on(down_seen_after(33, vk::LMENU, modifier::ALT)),
+            PASS,
+            "its repeats are the app's and arm nothing"
+        );
+        assert_eq!(
+            m.on_timer(pressed_at + 290, false),
+            Verdict {
+                arm_ms: Some(10),
+                ..Verdict::default()
+            },
+            "early: the rest of the wait"
+        );
+        assert!(!m.is_held());
+        assert_eq!(
+            m.on_timer(pressed_at + LONE_MODIFIER_DELAY_MS, false),
+            Verdict {
+                swallow: false,
+                edge: Some(Edge::Pressed),
+                mask: true,
+                arm_ms: None,
+                at_ms: Some(pressed_at),
+            }
+        );
+        assert!(m.is_held());
+        assert_eq!(
+            m.on_timer(pressed_at + 400, false),
+            Verdict::default(),
+            "one press"
+        );
+        assert_eq!(
+            m.on(down_seen_after(500, vk::LMENU, modifier::ALT)),
+            PASS,
+            "a repeat while held"
+        );
+        assert_eq!(
+            m.on(up_seen(vk::LMENU)),
+            Verdict {
+                edge: Some(Edge::Released),
+                ..PASS
+            },
+            "the app sees the key-up, as it saw the press"
+        );
+        assert!(!m.is_held());
+    }
+
+    /// Alt+Tab, Ctrl+C, Alt+F4: the other key goes down while the modifier waits. Every event
+    /// passes, and no hold starts, however long the modifier stays down.
+    #[test]
+    fn a_lone_left_modifier_with_another_key_is_a_shortcut() {
+        for (token, key, bit, other) in [
+            ("left_alt", vk::LMENU, modifier::ALT, vk::TAB),
+            ("left_control", vk::LCONTROL, modifier::CTRL, 0x43),
+            ("left_alt", vk::LMENU, modifier::ALT, vk::F1 + 3),
+            ("left_win", vk::LWIN, modifier::WIN, 0x45),
+            ("left_shift", vk::LSHIFT, modifier::SHIFT, 0x41),
+        ] {
+            let mut m = machine(token);
+            assert_eq!(m.on(down(key, 0)), ARMED, "{token}");
+            let pressed_at = now();
+            assert_eq!(
+                m.on(down_after(80, other, bit)),
+                PASS,
+                "{token}: the key is the app's"
+            );
+            assert_eq!(m.on(up_with(other, bit)), PASS, "{token}");
+            assert_eq!(
+                m.on_timer(pressed_at + LONE_MODIFIER_DELAY_MS, false),
+                Verdict::default(),
+                "{token}: no hold"
+            );
+            assert_eq!(
+                m.on(down_seen_after(1_000, key, bit)),
+                PASS,
+                "{token}: still down, still no hold"
+            );
+            assert!(!m.is_held(), "{token}");
+            assert_eq!(m.on(up_seen(key)), PASS, "{token}: nothing to release");
+            // Pressed again, alone, it waits afresh.
+            assert_eq!(m.on(down(key, 0)), ARMED, "{token}");
+        }
+    }
+
+    /// Let go of before the wait ends: nothing, and the late timer starts nothing.
+    #[test]
+    fn a_quick_tap_of_a_lone_left_modifier_does_nothing() {
+        let mut m = machine("left_control");
+        assert_eq!(m.on(down(vk::LCONTROL, 0)), ARMED);
+        let pressed_at = now();
+        assert_eq!(m.on(up(vk::LCONTROL)), PASS);
+        assert_eq!(
+            m.on_timer(pressed_at + LONE_MODIFIER_DELAY_MS, false),
+            Verdict::default()
+        );
+        assert!(!m.is_held());
+        // Tapped twice inside one wait: the second press waits its own full time.
+        assert_eq!(m.on(down(vk::LCONTROL, 0)), ARMED);
+        let first = now();
+        m.on(up(vk::LCONTROL));
+        assert_eq!(m.on(down_after(100, vk::LCONTROL, 0)), ARMED);
+        assert_eq!(
+            m.on_timer(first + LONE_MODIFIER_DELAY_MS, false),
+            Verdict {
+                arm_ms: Some(100),
+                ..Verdict::default()
+            }
+        );
+    }
+
+    /// Another modifier already down at its press (Ctrl+Alt, AltGr's left Ctrl with right Alt), or
+    /// a mouse button down when the wait ends (Ctrl+click, Shift+drag): a shortcut, no hold.
+    #[test]
+    fn a_lone_left_modifier_with_another_modifier_or_a_click_is_a_shortcut() {
+        let mut sibling = machine("left_shift");
+        assert_eq!(
+            sibling.on(down(vk::LSHIFT, modifier::SHIFT)),
+            PASS,
+            "right Shift was down"
+        );
+        assert!(!sibling.is_held());
+
+        let mut m = machine("left_alt");
+        assert_eq!(m.on(down(vk::LMENU, modifier::CTRL)), PASS, "Ctrl was down");
+        assert_eq!(m.on(down_seen_after(600, vk::LMENU, modifier::ALT)), PASS);
+        assert!(!m.is_held());
+        m.on(up_seen(vk::LMENU));
+
+        // AltGr: Windows sends left Ctrl, then right Alt.
+        let mut altgr = machine("left_control");
+        assert_eq!(altgr.on(down(vk::LCONTROL, 0)), ARMED);
+        let pressed_at = now();
+        assert_eq!(altgr.on(down_after(0, vk::RMENU, modifier::CTRL)), PASS);
+        assert_eq!(
+            altgr.on_timer(pressed_at + LONE_MODIFIER_DELAY_MS, false),
+            Verdict::default()
+        );
+
+        let mut click = machine("left_control");
+        assert_eq!(click.on(down(vk::LCONTROL, 0)), ARMED);
+        let pressed_at = now();
+        assert_eq!(
+            click.on_timer(pressed_at + LONE_MODIFIER_DELAY_MS, true),
+            Verdict::default(),
+            "a button is down, or was used, or the key reads up"
+        );
+        assert!(!click.is_held());
+        assert_eq!(click.on(up(vk::LCONTROL)), PASS);
+
+        // No timer to be had: the wait ends as a shortcut, and the next press waits afresh.
+        let mut untimed = machine("left_control");
+        assert_eq!(untimed.on(down(vk::LCONTROL, 0)), ARMED);
+        untimed.abandon_wait();
+        assert_eq!(untimed.on_timer(now() + 1_000, false), Verdict::default());
+        assert_eq!(untimed.on(up(vk::LCONTROL)), PASS);
+        assert_eq!(untimed.on(down(vk::LCONTROL, 0)), ARMED);
+    }
+
+    /// Once the hold has started, other keys pass and the hold goes on, as a right-hand
+    /// modifier's does; the right-hand key of the same modifier is not the hotkey.
+    #[test]
+    fn a_lone_left_modifiers_hold_lets_other_keys_through() {
+        let mut m = machine("left_shift");
+        assert_eq!(m.on(down(vk::RSHIFT, 0)), PASS, "right Shift is not it");
+        m.on(up(vk::RSHIFT));
+        m.on(down(vk::LSHIFT, 0));
+        let pressed_at = now();
+        assert_eq!(
+            m.on_timer(pressed_at + LONE_MODIFIER_DELAY_MS, false).edge,
+            Some(Edge::Pressed)
+        );
+        assert_eq!(m.on(down(0x41, modifier::SHIFT)), PASS);
+        assert_eq!(m.on(up_with(0x41, modifier::SHIFT)), PASS);
+        assert!(m.is_held());
+        assert_eq!(m.on(up(vk::LSHIFT)).edge, Some(Edge::Released));
+    }
+
+    /// The sink panicked mid-hold: the key, still down, starts nothing more until it comes up.
+    /// Its key-up lost on the secure desktop: the next press ends the hold and waits afresh.
+    #[test]
+    fn a_lone_left_modifier_recovers_from_a_reset_and_a_lost_key_up() {
+        let mut m = machine("left_alt");
+        m.on(down(vk::LMENU, 0));
+        m.on_timer(now() + LONE_MODIFIER_DELAY_MS, false);
+        m.reset();
+        assert!(!m.is_held());
+        assert_eq!(m.on(down_seen_after(500, vk::LMENU, modifier::ALT)), PASS);
+        assert_eq!(m.on_timer(now() + 1_000, false), Verdict::default());
+        assert_eq!(
+            m.on(up_seen(vk::LMENU)),
+            PASS,
+            "no edge: the core had Cancelled"
+        );
+        assert_eq!(m.on(down(vk::LMENU, 0)), ARMED);
+
+        let mut lost = machine("left_alt");
+        lost.on(down(vk::LMENU, 0));
+        lost.on_timer(now() + LONE_MODIFIER_DELAY_MS, false);
+        assert_eq!(
+            lost.on(down(vk::LMENU, 0)),
+            Verdict {
+                edge: Some(Edge::Released),
+                ..ARMED
+            },
+            "the key came up unseen: the hold ends, the press waits"
+        );
+        assert!(!lost.is_held());
+    }
+
     #[test]
     fn the_gap_follows_the_keyboard_settings() {
         assert_eq!(repeat_gap_ms(1, None), 750, "Windows' default delay");
@@ -849,6 +1237,8 @@ mod tests {
                 swallow: false,
                 edge: Some(Edge::Released),
                 mask: false,
+                arm_ms: None,
+                at_ms: None,
             },
             "the OS gets its key-up"
         );
@@ -885,6 +1275,8 @@ mod tests {
                 swallow: false,
                 edge: Some(Edge::Released),
                 mask: false,
+                arm_ms: None,
+                at_ms: None,
             }
         );
     }

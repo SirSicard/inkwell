@@ -5,8 +5,9 @@
 // records, the next key press is captured (a modifier alone when it comes up with nothing else
 // pressed, a function key, or modifiers and a key), named as the core names it, and sent to the
 // core's hotkey.check: the core is the one judge of what it can watch. Only a key it accepts is
-// saved, in the spelling it answers; a refusal is shown with its reason and the old key stays.
-// Escape on its own cancels. While recording, dictation is off (dictation.disable), or the current
+// saved, in the spelling it answers; a refusal is shown with its reason, the old key stays, and the
+// recorder goes on listening for another key (stopping there left the refusal on screen while
+// every later press did nothing, which read as every key being refused). Escape on its own cancels. While recording, dictation is off (dictation.disable), or the current
 // key would start a take, and the core's hook would swallow it before the recorder saw it; it comes
 // back on (dictation.enable, after the save) when recording ends, however it ends. A check that
 // gets no answer in 5 s gives up; a core that stops ends the recording.
@@ -76,11 +77,30 @@ public sealed class ShortcutCapture
     private readonly HashSet<string> down = new(StringComparer.Ordinal);
     private readonly List<string> pressed = [];
 
+    /// <summary>Keys still down from an attempt the core refused: their repeats and releases are not a new press.</summary>
+    private readonly HashSet<CapturedKey> stale;
+
+    /// <param name="stillDown">Keys held from the attempt before this one (a refused Ctrl+V's Ctrl, say), whose release must not read as a modifier pressed alone.</param>
+    public ShortcutCapture(IEnumerable<CapturedKey>? stillDown = null)
+    {
+        stale = [.. stillDown ?? []];
+    }
+
     public Outcome Feed(Input input)
     {
         ArgumentNullException.ThrowIfNull(input);
+        // A key still down from the refused attempt: its repeats and its release are that
+        // attempt's. Pressed afresh, it is a key like any other.
+        if (input is Input.KeyDown { Repeat: false } fresh)
+        {
+            stale.Remove(fresh.Key);
+        }
         switch (input)
         {
+            case Input.KeyDown { Repeat: true } staleDown when stale.Contains(staleDown.Key):
+                return new Outcome.Listening();
+            case Input.KeyUp staleUp when stale.Remove(staleUp.Key):
+                return new Outcome.Listening();
             // A modifier that is not down yet is a press even when it says it repeats: on a layout
             // with AltGr, WinUI marks right Alt's press, after the left Ctrl Windows makes, a repeat.
             case Input.KeyDown { Repeat: true, Key.Modifier: var held } when held is null || down.Contains(held):
@@ -220,7 +240,7 @@ public sealed class ShortcutRecorderModel : ObservableModel
 
     /// <summary>The button's hint for Narrator.</summary>
     public string ButtonHint(ShortcutTarget target) =>
-        Recording == target ? "Press the keys you want: a right-hand modifier alone, a function key, or modifiers and a key. Escape on its own cancels."
+        Recording == target ? "Press the keys you want: a modifier alone, a function key, or modifiers and a key. Escape on its own cancels."
             : Checking?.Target == target ? ""
             : "Then press the keys you want to use.";
 
@@ -311,9 +331,8 @@ public sealed class ShortcutRecorderModel : ObservableModel
                 Announce("Recording cancelled. The key is unchanged.");
                 break;
             case ShortcutCapture.Outcome.UnknownKey:
-                Recording = null;
-                Show("Inkwell doesn't know that key (keypad and media keys, for one). Try another.", target);
-                Resume();
+                Show("Inkwell doesn't know that key (keypad and media keys, for one). Try another.", target, ListeningOn);
+                Listen(target, heldKeys);
                 Changed();
                 break;
             case ShortcutCapture.Outcome.Captured captured:
@@ -370,16 +389,25 @@ public sealed class ShortcutRecorderModel : ObservableModel
                     checkedWhileHeld = checkedKey;
                     return;
                 }
+                var stillDown = heldKeys.ToList();
                 EndCheck();
+                // Refused, by the core or here: the next press is the next try.
                 if (checkedKey.Ok && checkedKey.Canonical is string canonical)
                 {
-                    Save(canonical, target, Describe(canonical));
+                    if (Save(canonical, target, Describe(canonical)))
+                    {
+                        Resume();
+                    }
+                    else
+                    {
+                        Listen(target, stillDown);
+                    }
                 }
                 else
                 {
-                    Show($"Can't use {Describe(token).Cap}: {checkedKey.Reason ?? "Windows can't watch it"}.", target);
+                    Show($"Can't use {Describe(token).Cap}: {checkedKey.Reason ?? "Windows can't watch it"}.", target, ListeningOn);
+                    Listen(target, stillDown);
                 }
-                Resume();
                 Changed();
                 break;
             case CommandFailed failed when failed.Id is not null && failed.Id == reference:
@@ -450,43 +478,60 @@ public sealed class ShortcutRecorderModel : ObservableModel
         timeout = null;
     }
 
-    private void Show(string text, ShortcutTarget target)
+    /// <summary>Said after a refusal while the recorder goes on listening.</summary>
+    private const string ListeningOn = "Press another key, or Escape to cancel.";
+
+    /// <param name="then">Said after <paramref name="text"/>, not shown: what happens next.</param>
+    private void Show(string text, ShortcutTarget target, string? then = null)
     {
         messages[target] = new ShortcutMessage(text, true);
-        Announce(text);
+        Announce(then is null ? text : $"{text} {then}");
     }
 
-    /// <summary>The two keys are never one: the core would refuse the edit key, and a key that dictates and edits at once does neither well.</summary>
-    private void Save(string canonical, ShortcutTarget target, DictationKey key)
+    /// <summary>
+    /// A key was refused: recording goes on for <paramref name="target"/>, dictation still paused,
+    /// the refusal still shown. Keys still held from the refused try are ignored until let go of.
+    /// </summary>
+    private void Listen(ShortcutTarget target, IEnumerable<CapturedKey> stillDown)
+    {
+        var held = stillDown.ToList();
+        Recording = target;
+        capture = new ShortcutCapture(held);
+        heldKeys.Clear();
+        heldKeys.UnionWith(held);
+    }
+
+    /// <summary>The two keys are never one: the core would refuse the edit key, and a key that dictates and edits at once does neither well. Whether it saved.</summary>
+    private bool Save(string canonical, ShortcutTarget target, DictationKey key)
     {
         if (target != ShortcutTarget.Meeting && meeting?.Key == canonical)
         {
-            Show($"{key.Cap} is the meeting key. Pick another, or change the meeting key first.", target);
-            return;
+            Show($"{key.Cap} is the meeting key. Pick another, or change the meeting key first.", target, ListeningOn);
+            return false;
         }
         switch (target)
         {
             case ShortcutTarget.Meeting:
                 if (canonical == dictation.CurrentKey || canonical == dictation.EditKey)
                 {
-                    Show($"{key.Cap} is a dictation or edit key. Pick another.", target);
-                    return;
+                    Show($"{key.Cap} is a dictation or edit key. Pick another.", target, ListeningOn);
+                    return false;
                 }
                 meeting?.SetKey(canonical);
                 break;
             case ShortcutTarget.Dictation:
                 if (canonical == dictation.EditKey)
                 {
-                    Show($"{key.Cap} is the edit key. Pick another, or change the edit key first.", target);
-                    return;
+                    Show($"{key.Cap} is the edit key. Pick another, or change the edit key first.", target, ListeningOn);
+                    return false;
                 }
                 dictation.SetKey(canonical);
                 break;
             default:
                 if (canonical == dictation.CurrentKey)
                 {
-                    Show($"{key.Cap} is the dictation key. Pick another.", target);
-                    return;
+                    Show($"{key.Cap} is the dictation key. Pick another.", target, ListeningOn);
+                    return false;
                 }
                 saveEditKey(canonical);
                 break;
@@ -503,5 +548,6 @@ public sealed class ShortcutRecorderModel : ObservableModel
             messages.Remove(target);
             Announce(saved);
         }
+        return true;
     }
 }

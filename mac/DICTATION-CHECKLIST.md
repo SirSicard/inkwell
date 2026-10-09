@@ -68,11 +68,15 @@ rules and the chord hold (`cargo test -p ink-platform-mac hotkey`), and the shel
       space still types.
 - [ ] Record the letter **A** alone: "Can't use A: that key on its own would stop working
       everywhere else…" shows under the row, and ⌃⇧Space still dictates.
-- [ ] Record **left Option** alone (press and let go): refused, naming left-hand modifiers.
-      Record **right Option** alone: accepted ("Right ⌥").
+- [ ] Record **left Option** alone (press and let go): accepted ("Left ⌥"). In TextEdit: hold
+      it alone, and dictation starts after a moment; ⌥ with a letter types its character and
+      starts nothing; ⌥-click starts nothing; a quick tap does nothing. Record **right Option**
+      alone: accepted ("Right ⌥").
+- [ ] Record **left Command** alone: accepted. ⌘C, ⌘V, ⌘Tab and ⌘-click all still work and
+      start no take; held alone, it dictates after a moment.
 - [ ] Record **F13** (or another function key your keyboard has): accepted; it dictates.
-- [ ] Record **⌘Space**: saved, with the warning that it is Spotlight's shortcut. Note whether
-      holding ⌘Space dictates or opens Spotlight (macOS may take it first). Pick **fn** again.
+- [ ] Record **⌘Space**: refused ("that's Spotlight…"), and the recorder still listens. Record
+      **⌘V**: refused ("that's Paste…"). Pick **fn** again.
 - [ ] Edit a selection > Record a shortcut…, then press the dictation key: "… is the dictation
       key. Pick another." Record **⌥⌘E**: the consent dialog asks first, as picking a key does.
 - [ ] While recording, switch to another app (⌘Tab), or click another Inkwell window: recording

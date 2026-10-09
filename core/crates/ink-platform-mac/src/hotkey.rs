@@ -215,7 +215,7 @@ mod tests {
         let source = MacHotkeySource::new(MacClock::new().expect("clock"));
         let sink: EventSink<HotkeyEvent> = Arc::new(|_| {});
         assert!(matches!(
-            source.start(&HotkeyBinding("left_option".into()), sink),
+            source.start(&HotkeyBinding("cmd+v".into()), sink),
             Err(PlatformError::Unsupported(_))
         ));
         assert!(source.tap.lock().expect("unpoisoned").is_none());

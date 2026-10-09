@@ -1,7 +1,8 @@
 //! The keys the user may choose: `hotkey.check`, and the rule the key settings share with it.
 //!
-//! The user picks any dictation key and any edit key this computer can watch: a right-hand
-//! modifier (or Fn on the Mac) held on its own, a function key, or modifiers and one key. The
+//! The user picks any dictation key and any edit key this computer can watch: a modifier (or Fn on
+//! the Mac) held on its own (a left-hand one waits a moment, so its shortcuts keep working), a
+//! function key, or modifiers and one key, but not an editing shortcut every app shares. The
 //! platform's parser is the one judge (ink-platform-mac's `hotkey::check`, ink-platform-win's):
 //! a key binds exactly when it says yes. `hotkey.check` asks it about a key the user recorded,
 //! before the shell stores it, and answers `hotkey.checked` with the key's one spelling or why
@@ -172,7 +173,7 @@ mod tests {
         assert_eq!(spelling(" shift+ctrl+space "), spelling("ctrl+shift+space"));
         assert!(stored_value("a").is_err());
         // Not watchable here, and not a named token: kept as stored for the platform to refuse.
-        assert_eq!(spelling(" left_option "), "left_option");
+        assert_eq!(spelling(" caps_lock "), "caps_lock");
         // Windows' right-hand Windows key: named, so stored, and refused by name at binding.
         assert_eq!(stored_value("right_win").as_deref(), Ok("right_win"));
         assert!(check("right_win").is_err());

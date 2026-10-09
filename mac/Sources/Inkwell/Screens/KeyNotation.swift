@@ -58,8 +58,8 @@ enum KeyNotation {
             cap: (hasFn ? "fn " : "") + cap + key.cap)
     }
 
-    /// The core's tokens for modifiers held on their own, and the left-hand and Caps Lock tokens
-    /// the recorder makes (the core refuses those, and says why).
+    /// The core's tokens for modifiers held on their own (a left-hand one waits a moment before its
+    /// hold starts), and the Caps Lock token the recorder makes (the core refuses it, and says why).
     static let modifiersAlone: [String: (name: String, cap: String)] = [
         "fn": ("fn (Globe)", "fn"),
         "right_option": ("Right Option", "Right \u{2325}"),

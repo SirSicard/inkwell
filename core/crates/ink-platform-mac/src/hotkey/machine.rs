@@ -17,9 +17,25 @@
 //! does. The modifier's own change passes through (the app saw it go down), and the key, still
 //! down, keeps its repeats and its key-up swallowed: they were the hotkey's, and an app getting
 //! them would type spaces nobody asked for.
+//!
+//! **A left-hand modifier on its own waits (decided).** Left Command, Option, Control and Shift
+//! carry the shortcuts every app uses, so their changes are never swallowed: the app sees the key
+//! go down and come up, and Cmd+C or Cmd+click work as always. Its press only arms a wait
+//! ([`Verdict::arm`]: the tap thread runs its loop until then, [`HoldMachine::on_timer`]). Held
+//! alone for [`LONE_MODIFIER_DELAY_NS`](super::binding::LONE_MODIFIER_DELAY_NS), the hold starts
+//! there, stamped at the key's press so nothing said since is lost. A key or a click first,
+//! another modifier going down or already down at its press, means a shortcut: no hold until the
+//! key comes up and is pressed again. Let go of before the wait ends, it did nothing. Once the
+//! hold has started, other keys pass and the hold goes on, as a right-hand modifier's does. In
+//! toggle mode both the start and the stop are such a hold (decided: a tap is a shortcut's, never
+//! a toggle).
+//!
+//! **Accepted edge (decided).** A non-modifier key already held before the modifier's press, whose
+//! auto-repeat is off or slower than the wait, is not seen as "another key": the hold may start.
+//! When the wait ends the session's modifiers and mouse buttons are read back, not every key.
 #![cfg(target_os = "macos")]
 
-use super::binding::Binding;
+use super::binding::{Binding, ModifierKey};
 
 /// One event from the tap, reduced to what the decision needs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -45,6 +61,10 @@ pub(crate) enum TapInput {
         /// The key.
         keycode: u16,
     },
+    /// A mouse button went down (`kCGEventLeftMouseDown`, `RightMouseDown`, `OtherMouseDown`), or
+    /// the wheel turned (`kCGEventScrollWheel`): a modifier held with it is a click or a zoom
+    /// (Cmd+click, Ctrl+scroll), not a dictation.
+    PointerDown,
     /// `kCGEventTapDisabledByTimeout` or `kCGEventTapDisabledByUserInput`: the OS switched the
     /// tap off, and events may have been missed.
     Disabled,
@@ -71,6 +91,9 @@ pub(crate) struct Verdict {
     /// Switch the tap back on. A hotkey that silently dies after the OS disables its tap is a
     /// stuck recording in disguise.
     pub(crate) reenable: bool,
+    /// A lone left-hand modifier went down alone: call [`HoldMachine::on_timer`] once it has been
+    /// held for the wait, from its press (the tap thread keeps the time).
+    pub(crate) arm: bool,
 }
 
 /// Whether the hotkey is held, and the rules above. `Copy`, so the tap callback can keep it in a
@@ -82,6 +105,10 @@ pub(crate) struct HoldMachine {
     /// A chord's key is still down after a modifier ended the hold: its repeats and key-up are
     /// ours to swallow, without another edge.
     trailing: bool,
+    /// A lone left-hand modifier is down alone, waiting.
+    waiting: bool,
+    /// A lone left-hand modifier is down, and was part of a shortcut: no hold until it comes up.
+    vetoed: bool,
 }
 
 impl HoldMachine {
@@ -91,6 +118,8 @@ impl HoldMachine {
             binding,
             held: false,
             trailing: false,
+            waiting: false,
+            vetoed: false,
         }
     }
 
@@ -99,11 +128,38 @@ impl HoldMachine {
         self.held
     }
 
+    /// Whether a lone left-hand modifier is waiting to be held long enough.
+    pub(crate) const fn is_waiting(&self) -> bool {
+        self.waiting
+    }
+
     /// Forgets any hold, so the next press starts a new one. For when the core may not have seen
     /// an edge (its sink panicked) or the hotkey was lost.
     pub(crate) fn reset(&mut self) {
         self.held = false;
         self.trailing = false;
+        self.waiting = false;
+        self.vetoed = false;
+    }
+
+    /// The wait [`Verdict::arm`] asked for has ended: a lone left-hand modifier still down alone
+    /// starts its hold (stamped by the tap thread at its press). `interrupted`: the session's state
+    /// says otherwise (the key reads up, its release missed; another modifier or a mouse button is
+    /// down, pressed before the key). Anything else changes nothing.
+    pub(crate) fn on_timer(&mut self, interrupted: bool) -> Verdict {
+        if !self.waiting {
+            return Verdict::default();
+        }
+        self.waiting = false;
+        if interrupted {
+            self.vetoed = true;
+            return Verdict::default();
+        }
+        self.held = true;
+        Verdict {
+            edge: Some(Edge::Pressed),
+            ..Verdict::default()
+        }
     }
 
     /// Decides one event.
@@ -113,11 +169,12 @@ impl HoldMachine {
                 let edge = self.held.then_some(Edge::Cancelled);
                 self.reset();
                 Verdict {
-                    swallow: false,
                     edge,
                     reenable: true,
+                    ..Verdict::default()
                 }
             }
+            (Binding::Modifier(key), input) if key.waits() => self.lone(key, input),
             (Binding::Modifier(key), TapInput::FlagsChanged { keycode, flags })
                 if keycode == key.keycode() =>
             {
@@ -169,12 +226,53 @@ impl HoldMachine {
                 self.held = false;
                 self.trailing = true;
                 Verdict {
-                    swallow: false,
                     edge: Some(Edge::Released),
-                    reenable: false,
+                    ..Verdict::default()
                 }
             }
             _ => Verdict::default(),
+        }
+    }
+
+    /// One event for a lone left-hand modifier (the module's rules): nothing is swallowed.
+    fn lone(&mut self, key: ModifierKey, input: TapInput) -> Verdict {
+        match input {
+            TapInput::FlagsChanged { keycode, flags } if keycode == key.keycode() => {
+                if flags & key.down_mask() != 0 {
+                    // A press (a change never repeats). A hold still on means its release was
+                    // missed: it ends here, and this press is judged on its own.
+                    let lost = self.held;
+                    let alone = key.alone_in(flags);
+                    self.held = false;
+                    self.waiting = alone;
+                    self.vetoed = !alone;
+                    Verdict {
+                        edge: lost.then_some(Edge::Released),
+                        arm: alone,
+                        ..Verdict::default()
+                    }
+                } else {
+                    // Let go of: a hold ends (the app sees it, as it saw the press); a wait or a
+                    // shortcut ends with nothing to say.
+                    let edge = self.held.then_some(Edge::Released);
+                    self.held = false;
+                    self.waiting = false;
+                    self.vetoed = false;
+                    Verdict {
+                        edge,
+                        ..Verdict::default()
+                    }
+                }
+            }
+            TapInput::FlagsChanged { .. } | TapInput::KeyDown { .. } | TapInput::PointerDown => {
+                // Another modifier, a key or a click while it waits: a shortcut, and the app's.
+                if self.waiting {
+                    self.waiting = false;
+                    self.vetoed = true;
+                }
+                Verdict::default()
+            }
+            TapInput::KeyUp { .. } | TapInput::Disabled => Verdict::default(),
         }
     }
 
@@ -191,7 +289,7 @@ impl HoldMachine {
         Verdict {
             swallow: true,
             edge,
-            reenable: false,
+            ..Verdict::default()
         }
     }
 }
@@ -216,11 +314,13 @@ mod tests {
         swallow: true,
         edge: None,
         reenable: false,
+        arm: false,
     };
     const PASS: Verdict = Verdict {
         swallow: false,
         edge: None,
         reenable: false,
+        arm: false,
     };
 
     fn pressed() -> Verdict {
@@ -228,6 +328,7 @@ mod tests {
             swallow: true,
             edge: Some(Edge::Pressed),
             reenable: false,
+            arm: false,
         }
     }
 
@@ -236,6 +337,7 @@ mod tests {
             swallow: true,
             edge: Some(Edge::Released),
             reenable: false,
+            arm: false,
         }
     }
 
@@ -374,6 +476,7 @@ mod tests {
                 swallow: false,
                 edge: Some(Edge::Released),
                 reenable: false,
+                arm: false,
             }
         );
         assert!(!m.is_held());
@@ -512,6 +615,168 @@ mod tests {
         assert_eq!(m.on(fn_flags(true)), pressed());
     }
 
+    /// Left Command's change, down or up, with `others` (flags and device bits) also set.
+    fn left_cmd(down: bool, others: u64) -> TapInput {
+        TapInput::FlagsChanged {
+            keycode: keycode::LEFT_COMMAND,
+            flags: others
+                | if down {
+                    flag::COMMAND | flag::DEVICE_LEFT_COMMAND
+                } else {
+                    0
+                },
+        }
+    }
+
+    const ARMED: Verdict = Verdict {
+        swallow: false,
+        edge: None,
+        reenable: false,
+        arm: true,
+    };
+
+    /// Left Command held alone: nothing at its press (the app sees it), the hold starts when the
+    /// wait ends, and its release (the app's too) ends it.
+    #[test]
+    fn a_lone_left_modifier_held_alone_starts_when_the_wait_ends() {
+        let mut m = machine("left_command");
+        assert_eq!(m.on(left_cmd(true, 0)), ARMED);
+        assert!(m.is_waiting());
+        assert!(!m.is_held());
+        assert_eq!(
+            m.on_timer(false),
+            Verdict {
+                swallow: false,
+                edge: Some(Edge::Pressed),
+                reenable: false,
+                arm: false,
+            }
+        );
+        assert!(m.is_held());
+        assert_eq!(m.on_timer(false), PASS, "one press");
+        assert_eq!(
+            m.on(TapInput::KeyDown {
+                keycode: 0x02,
+                flags: flag::COMMAND,
+                autorepeat: false
+            }),
+            PASS,
+            "once held, other keys pass and the hold goes on"
+        );
+        assert!(m.is_held());
+        assert_eq!(
+            m.on(left_cmd(false, 0)),
+            Verdict {
+                swallow: false,
+                edge: Some(Edge::Released),
+                reenable: false,
+                arm: false,
+            }
+        );
+    }
+
+    /// Cmd+C, Cmd+Shift+4, Cmd+click: a key, another modifier or a click while it waits. Every
+    /// event passes, and no hold starts.
+    #[test]
+    fn a_lone_left_modifier_with_another_key_is_a_shortcut() {
+        let others = [
+            TapInput::KeyDown {
+                keycode: 0x08,
+                flags: flag::COMMAND,
+                autorepeat: false,
+            },
+            TapInput::FlagsChanged {
+                keycode: 0x38,
+                flags: flag::COMMAND | flag::DEVICE_LEFT_COMMAND | flag::SHIFT | 0x2,
+            },
+            TapInput::PointerDown,
+        ];
+        for other in others {
+            let mut m = machine("left_command");
+            assert_eq!(m.on(left_cmd(true, 0)), ARMED);
+            assert_eq!(m.on(other), PASS, "{other:?} is the app's");
+            assert!(!m.is_waiting());
+            assert_eq!(m.on_timer(false), PASS, "{other:?}: no hold");
+            assert!(!m.is_held());
+            assert_eq!(m.on(left_cmd(false, 0)), PASS, "nothing to release");
+            assert_eq!(
+                m.on(left_cmd(true, 0)),
+                ARMED,
+                "pressed alone again, it waits"
+            );
+        }
+    }
+
+    /// The session says the key is up, or something else is down, when the wait ends: no hold.
+    #[test]
+    fn a_lone_left_modifier_interrupted_out_of_sight_starts_nothing() {
+        let mut m = machine("left_command");
+        assert_eq!(m.on(left_cmd(true, 0)), ARMED);
+        assert_eq!(m.on_timer(true), PASS);
+        assert!(!m.is_held());
+        assert_eq!(m.on(TapInput::Disabled).edge, None, "nothing held");
+        assert_eq!(m.on(left_cmd(true, 0)), ARMED, "a fresh press waits");
+        m.reset();
+        assert_eq!(m.on_timer(false), PASS, "a reset ends the wait");
+    }
+
+    /// Let go of before the wait ends: nothing, and the late wake starts nothing.
+    #[test]
+    fn a_quick_tap_of_a_lone_left_modifier_does_nothing() {
+        let mut m = machine("left_option");
+        let option = |down| TapInput::FlagsChanged {
+            keycode: keycode::LEFT_OPTION,
+            flags: if down {
+                flag::OPTION | flag::DEVICE_LEFT_OPTION
+            } else {
+                0
+            },
+        };
+        assert_eq!(m.on(option(true)), ARMED);
+        assert_eq!(m.on(option(false)), PASS);
+        assert_eq!(m.on_timer(false), PASS);
+        assert!(!m.is_held());
+    }
+
+    /// Another modifier already down at its press (right Command, Shift): a shortcut.
+    #[test]
+    fn a_lone_left_modifier_pressed_with_another_down_is_a_shortcut() {
+        let mut m = machine("left_command");
+        assert_eq!(m.on(left_cmd(true, flag::DEVICE_RIGHT_COMMAND)), PASS);
+        assert_eq!(m.on_timer(false), PASS);
+        assert_eq!(
+            m.on(left_cmd(false, flag::COMMAND | flag::DEVICE_RIGHT_COMMAND)),
+            PASS
+        );
+        assert_eq!(m.on(left_cmd(true, flag::SHIFT | 0x2)), PASS);
+        assert!(!m.is_held());
+    }
+
+    /// The right-hand key of the same modifier is not the hotkey; a release missed while the tap
+    /// was off ends the old hold at the next press, which waits afresh.
+    #[test]
+    fn a_lone_left_modifier_ignores_its_right_hand_twin_and_recovers_a_lost_release() {
+        let mut m = machine("left_command");
+        let right = TapInput::FlagsChanged {
+            keycode: keycode::RIGHT_COMMAND,
+            flags: flag::COMMAND | flag::DEVICE_RIGHT_COMMAND,
+        };
+        assert_eq!(m.on(right), PASS);
+        assert!(!m.is_waiting());
+        m.on(left_cmd(false, 0));
+        m.on(left_cmd(true, 0));
+        m.on_timer(false);
+        assert_eq!(
+            m.on(left_cmd(true, 0)),
+            Verdict {
+                edge: Some(Edge::Released),
+                ..ARMED
+            }
+        );
+        assert!(!m.is_held());
+        assert!(m.is_waiting());
+    }
+
     #[test]
     fn disabled_while_held_cancels_and_reenables() {
         let mut m = machine("fn");
@@ -522,6 +787,7 @@ mod tests {
                 swallow: false,
                 edge: Some(Edge::Cancelled),
                 reenable: true,
+                arm: false,
             }
         );
         assert!(!m.is_held());
@@ -536,6 +802,7 @@ mod tests {
                 swallow: false,
                 edge: None,
                 reenable: true,
+                arm: false,
             }
         );
     }

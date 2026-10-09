@@ -33,8 +33,9 @@ branch. Intel Macs and Linux get no 1.0: Inkwell 0.2 is their last version.
 
 ### Dictation
 
-- **Push to talk, anywhere.** The dictation key can be a right-hand modifier (or Fn on the Mac)
-  held on its own, a function key, or modifiers and one key. Recording a shortcut in
+- **Push to talk, anywhere.** The dictation key can be a modifier (or Fn on the Mac) held on its
+  own, a function key, or modifiers and one key. A left-hand modifier waits a moment before
+  dictation starts, so its shortcuts keep working. Recording a shortcut in
   Settings > Dictation checks it on the spot and says why when a key can't be used.
 - **Live words while you speak**, shown in the Drop, the small recording light. They are
   provisional; the text that is typed comes from the final pass when you let go.

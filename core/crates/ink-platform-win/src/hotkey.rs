@@ -28,6 +28,14 @@
 //!
 //! **Timestamps** are host time on the [`WinClock`] timebase: the hook's `time` (milliseconds on
 //! the tick counter) gives the event's age, which is taken off the clock's `now_ns`.
+//!
+//! **A lone left-hand modifier's wait** (`machine`) is a thread timer on the hook thread: the
+//! callback only posts [`WM_INK_ARM`] (as it posts the mask key's message), and the message loop
+//! sets the timer and, when it fires, asks the machine whether the hold starts. The loop then
+//! injects the mask key and reports the press, stamped at the key's press. For the length of the
+//! wait only, a low-level mouse hook notes a click or the wheel (Ctrl+click, Ctrl+wheel), which
+//! the keyboard hook cannot see; it does nothing else, and is gone when the wait ends, so no
+//! mouse move passes through this thread outside a wait.
 #![cfg(windows)]
 
 pub(crate) mod binding;
@@ -56,8 +64,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, GetMessageW, HC_ACTION, HHOOK, KBDLLHOOKSTRUCT, KillTimer, MSG, PM_NOREMOVE,
     PeekMessageW, PostThreadMessageW, SPI_GETFILTERKEYS, SPI_GETKEYBOARDDELAY,
     SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SetTimer, SetWindowsHookExW, SystemParametersInfoW,
-    UnhookWindowsHookEx, WH_KEYBOARD_LL, WM_APP, WM_KEYDOWN, WM_KEYUP, WM_QUIT, WM_SYSKEYDOWN,
-    WM_SYSKEYUP, WM_TIMER,
+    UnhookWindowsHookEx, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_APP, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN,
+    WM_MBUTTONDOWN, WM_MOUSEHWHEEL, WM_MOUSEWHEEL, WM_QUIT, WM_RBUTTONDOWN, WM_SYSKEYDOWN,
+    WM_SYSKEYUP, WM_TIMER, WM_XBUTTONDOWN,
 };
 
 use crate::clock::WinClock;
@@ -96,6 +105,10 @@ pub(crate) const MASK_VK: u16 = 0xE8;
 /// The hook thread's message asking it to inject the mask key (posted from the hook callback,
 /// which does not inject from inside itself).
 const WM_INK_MASK: u32 = WM_APP + 2;
+
+/// The hook thread's message asking it to end a lone modifier's wait in `wParam` milliseconds
+/// (posted from the hook callback, which sets no timer itself). A newer one replaces it.
+const WM_INK_ARM: u32 = WM_APP + 3;
 
 /// How long `start` waits for the hook to be installed.
 const START_TIMEOUT: Duration = Duration::from_secs(5);
@@ -203,6 +216,21 @@ fn modifiers_down() -> u8 {
     bits
 }
 
+/// Whether a mouse button is down now: a modifier held with it is a click or a drag (Ctrl+click,
+/// Shift+drag), not a dictation. Reads key state only. **Hook thread.**
+fn pointer_down() -> bool {
+    [
+        vk::LBUTTON,
+        vk::RBUTTON,
+        vk::MBUTTON,
+        vk::XBUTTON1,
+        vk::XBUTTON2,
+    ]
+    .into_iter()
+    // SAFETY: GetAsyncKeyState takes any virtual key and only reads state.
+    .any(|key| unsafe { GetAsyncKeyState(key as i32) } < 0)
+}
+
 /// What the hook callback needs, kept on the hook thread.
 struct HookContext {
     sink: EventSink<HotkeyEvent>,
@@ -220,6 +248,38 @@ thread_local! {
     static HEARTBEAT_SEEN: Cell<bool> = const { Cell::new(false) };
     /// Every call of the callback, for telling a removed hook from a heartbeat another hook ate.
     static CALLBACKS: Cell<u64> = const { Cell::new(0) };
+    /// A click or the wheel during a lone modifier's wait, set by the mouse hook.
+    static POINTER_USED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// The mouse hook, installed only while a lone modifier waits: notes a button press or the wheel,
+/// and passes every event on. **Hook thread.**
+unsafe extern "system" fn mouse_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if code == HC_ACTION as i32
+        && matches!(
+            wparam.0 as u32,
+            WM_LBUTTONDOWN
+                | WM_RBUTTONDOWN
+                | WM_MBUTTONDOWN
+                | WM_XBUTTONDOWN
+                | WM_MOUSEWHEEL
+                | WM_MOUSEHWHEEL
+        )
+    {
+        POINTER_USED.set(true);
+    }
+    // SAFETY: passes the event on unchanged.
+    unsafe { CallNextHookEx(None, code, wparam, lparam) }
+}
+
+/// Installs the mouse hook on this thread.
+fn install_mouse() -> windows::core::Result<HHOOK> {
+    // SAFETY: this module's handle (the hook procedure lives in it) and a valid hook procedure.
+    unsafe {
+        GetModuleHandleW(None).and_then(|module| {
+            SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_hook), Some(module.into()), 0)
+        })
+    }
 }
 
 /// Calls the sink; a panic is caught, counted and recovered (the hold is abandoned, `Cancelled`
@@ -274,7 +334,12 @@ fn decide(event: &KBDLLHOOKSTRUCT, message: u32) -> bool {
     let input = match message {
         WM_KEYDOWN | WM_SYSKEYDOWN => HookInput::KeyDown {
             vk: event.vkCode,
-            modifiers: modifiers_down(),
+            // A lone modifier's own press counts the other modifiers only, its sibling included.
+            modifiers: if ours && machine.waits() {
+                modifiers_after_release(event.vkCode)
+            } else {
+                modifiers_down()
+            },
             reads_down: ours && reads_down(event.vkCode),
             at_ms: event.time,
         },
@@ -292,30 +357,70 @@ fn decide(event: &KBDLLHOOKSTRUCT, message: u32) -> bool {
         let _ =
             unsafe { PostThreadMessageW(GetCurrentThreadId(), WM_INK_MASK, WPARAM(0), LPARAM(0)) };
     }
+    if let Some(ms) = verdict.arm_ms {
+        // SAFETY: posts to this thread's own queue; the loop sets the timer after the callback.
+        let _ = unsafe {
+            PostThreadMessageW(
+                GetCurrentThreadId(),
+                WM_INK_ARM,
+                WPARAM(ms as usize),
+                LPARAM(0),
+            )
+        };
+    }
     if let Some(edge) = verdict.edge {
-        CONTEXT.with(|c| {
-            if let Some(context) = c.borrow().as_ref() {
-                // SAFETY: no arguments; reads the tick counter.
-                let now_tick = unsafe { GetTickCount() };
-                let at_ns = event_time_ns(context.clock.now_ns(), now_tick, event.time);
-                match edge {
-                    Edge::Pressed => {
+        report(edge, verdict.at_ms.unwrap_or(event.time));
+    }
+    verdict.swallow
+}
+
+/// Reports an edge that happened at `at_tick_ms` on the tick counter. **Hook thread**, in the
+/// callback or the loop.
+fn report(edge: Edge, at_tick_ms: u32) {
+    CONTEXT.with(|c| {
+        if let Some(context) = c.borrow().as_ref() {
+            // SAFETY: no arguments; reads the tick counter.
+            let now_tick = unsafe { GetTickCount() };
+            let at_ns = event_time_ns(context.clock.now_ns(), now_tick, at_tick_ms);
+            match edge {
+                Edge::Pressed => {
+                    emit(context, HotkeyEvent::Pressed { at_ns });
+                }
+                Edge::Released => {
+                    emit(context, HotkeyEvent::Released { at_ns });
+                }
+                Edge::ReleasedThenPressed => {
+                    // If the release panicked, the key now trails (`emit`): no press after it.
+                    if emit(context, HotkeyEvent::Released { at_ns }) {
                         emit(context, HotkeyEvent::Pressed { at_ns });
-                    }
-                    Edge::Released => {
-                        emit(context, HotkeyEvent::Released { at_ns });
-                    }
-                    Edge::ReleasedThenPressed => {
-                        // If the release panicked, the key now trails (`emit`): no press after it.
-                        if emit(context, HotkeyEvent::Released { at_ns }) {
-                            emit(context, HotkeyEvent::Pressed { at_ns });
-                        }
                     }
                 }
             }
-        });
+        }
+    });
+}
+
+/// A lone modifier's wait ended (its timer fired): the machine decides, the mask key goes in
+/// while the modifier is still down, then the press is reported. Returns a further wait, if the
+/// timer fired early. **Hook thread**, in the loop.
+fn wait_ended() -> Option<u32> {
+    // SAFETY: no arguments; reads the tick counter.
+    let now = unsafe { GetTickCount() };
+    let verdict = MACHINE.with(|m| {
+        let mut machine = m.get()?;
+        // The key itself reading up means its key-up was lost: no hold on a key nobody holds.
+        let interrupted = POINTER_USED.take() || pointer_down() || !reads_down(machine.key_vk());
+        let verdict = machine.on_timer(now, interrupted);
+        m.set(Some(machine));
+        Some(verdict)
+    })?;
+    if verdict.mask {
+        crate::insert::send_mask_key();
     }
-    verdict.swallow
+    if let Some(edge) = verdict.edge {
+        report(edge, verdict.at_ms.unwrap_or(now));
+    }
+    verdict.arm_ms
 }
 
 /// The hook thread: install, pump, uninstall. A hold in progress at the end is `Cancelled`.
@@ -413,6 +518,9 @@ fn pump(mut hook: HHOOK) -> (HHOOK, bool) {
     // SAFETY: a thread timer (no window, no callback); it posts WM_TIMER to this thread.
     let tick_timer = unsafe { SetTimer(None, 0, heartbeat::INTERVAL_MS, None) };
     let mut check_timer = 0usize;
+    // A lone modifier's wait: one at a time, a newer press replacing it, with the mouse hook on.
+    let mut wait_timer = 0usize;
+    let mut mouse: Option<HHOOK> = None;
     let lost = loop {
         // SAFETY: a live MSG; any window of this thread.
         let got = unsafe { GetMessageW(&mut msg, None, 0, 0) };
@@ -423,6 +531,26 @@ fn pump(mut hook: HHOOK) -> (HHOOK, bool) {
         }
         match msg.message {
             WM_INK_MASK => crate::insert::send_mask_key(),
+            WM_INK_ARM => {
+                POINTER_USED.set(false);
+                if mouse.is_none() {
+                    // Without it a click in the wait goes unseen; the wait itself still works.
+                    mouse = install_mouse().ok();
+                }
+                if !arm(&mut wait_timer, msg.wParam.0 as u32) {
+                    abandon_wait(&mut mouse);
+                }
+            }
+            WM_TIMER if wait_timer != 0 && msg.wParam.0 == wait_timer => {
+                // SAFETY: the timer made above on this thread.
+                let _ = unsafe { KillTimer(None, wait_timer) };
+                wait_timer = 0;
+                match wait_ended() {
+                    Some(ms) if arm(&mut wait_timer, ms) => {}
+                    Some(_) => abandon_wait(&mut mouse),
+                    None => unhook_mouse(&mut mouse),
+                }
+            }
             WM_TIMER if tick_timer != 0 && msg.wParam.0 == tick_timer => {
                 // The keyboard settings may have changed (FilterKeys switched on, say).
                 let gap = repeat_gap_now();
@@ -478,13 +606,45 @@ fn pump(mut hook: HHOOK) -> (HHOOK, bool) {
             _ => {}
         }
     };
-    for timer in [tick_timer, check_timer] {
+    for timer in [tick_timer, check_timer, wait_timer] {
         if timer != 0 {
             // SAFETY: timers made on this thread.
             let _ = unsafe { KillTimer(None, timer) };
         }
     }
+    unhook_mouse(&mut mouse);
     (hook, lost)
+}
+
+/// Sets the lone modifier's wait timer to `ms`, replacing the one in `timer`. Whether Windows gave
+/// a timer. **Hook thread**, in the loop.
+fn arm(timer: &mut usize, ms: u32) -> bool {
+    if *timer != 0 {
+        // SAFETY: a timer this thread made.
+        let _ = unsafe { KillTimer(None, *timer) };
+    }
+    // SAFETY: a one-shot thread timer, killed when it fires or is replaced.
+    *timer = unsafe { SetTimer(None, 0, ms, None) };
+    *timer != 0
+}
+
+/// No timer for the wait: it ends as a shortcut (see `machine`), and the mouse hook goes.
+fn abandon_wait(mouse: &mut Option<HHOOK>) {
+    MACHINE.with(|m| {
+        if let Some(mut machine) = m.get() {
+            machine.abandon_wait();
+            m.set(Some(machine));
+        }
+    });
+    unhook_mouse(mouse);
+}
+
+/// Removes the mouse hook, if it is in.
+fn unhook_mouse(mouse: &mut Option<HHOOK>) {
+    if let Some(hook) = mouse.take() {
+        // SAFETY: installed on this thread, removed once.
+        let _ = unsafe { UnhookWindowsHookEx(hook) };
+    }
 }
 
 /// After a reinstall: counted. A hold in progress is kept, because the miss may have been false

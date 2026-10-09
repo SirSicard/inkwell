@@ -645,13 +645,22 @@ fn the_mac_check_spells_a_chord_one_way_and_says_why_it_refuses() {
         "hotkey.checked",
         2,
     );
-    assert_eq!(left["ok"], false);
+    assert_eq!(
+        left["canonical"], "left_option",
+        "a left-hand modifier alone waits, and binds"
+    );
+    let paste = rig.ask(
+        json!({"cmd": "hotkey.check", "binding": "cmd+v"}),
+        "hotkey.checked",
+        3,
+    );
+    assert_eq!(paste["ok"], false);
     assert!(
-        left["reason"]
+        paste["reason"]
             .as_str()
             .unwrap_or_default()
-            .contains("left-hand modifier"),
-        "{left}"
+            .contains("that's Paste"),
+        "{paste}"
     );
     rig.finish();
 }

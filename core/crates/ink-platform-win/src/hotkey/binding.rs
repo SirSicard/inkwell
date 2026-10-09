@@ -1,15 +1,20 @@
 //! Hotkey tokens, parsed in pure Rust, and the Windows default.
 //!
-//! Two shapes, as on the Mac:
-//! - **A modifier held on its own:** `"right_control"`, `"right_alt"`, `"right_shift"`,
-//!   `"right_win"`. The low-level hook reports left and right modifiers as different virtual keys
-//!   (`VK_RCONTROL`, `VK_RMENU`...), so the right-hand key is watched on its own. Left-hand
-//!   modifiers alone are not offered: watching left Ctrl would start a hold on every Ctrl+C.
+//! Three shapes, as on the Mac:
+//! - **A right-hand modifier held on its own:** `"right_control"`, `"right_alt"`,
+//!   `"right_shift"`, `"right_win"`. The low-level hook reports left and right modifiers as
+//!   different virtual keys (`VK_RCONTROL`, `VK_RMENU`...), so the right-hand key is watched on its
+//!   own. Its hold starts at its press.
+//! - **A left-hand modifier held on its own:** `"left_control"`, `"left_alt"`, `"left_shift"`,
+//!   `"left_win"` (and the names without a side, which mean the left key). Its shortcuts must keep
+//!   working (Ctrl+C, Alt+Tab, Win+E), so its hold starts only once it has been held alone for
+//!   [`LONE_MODIFIER_DELAY_MS`], and never if another key went down meanwhile (see `machine`).
 //! - **A chord:** modifiers and one key, `"ctrl+shift+space"`, `"alt+d"`, or a function key alone,
 //!   `"f13"`. Any other key needs at least one modifier, or the hook would swallow it everywhere.
 //!   The keys are named as the Mac names them ([`NAMED_KEYS`]: arrows, Delete, Home and End,
 //!   Page Up and Down, the punctuation keys by their US position), plus `oem_102`, the extra key
-//!   by left Shift on ISO keyboards.
+//!   by left Shift on ISO keyboards. The editing shortcuts every app shares (Ctrl+C, Ctrl+V...,
+//!   [`EDITING_SHORTCUTS`]) are refused: the hook would take them from every app.
 //!
 //! A token Windows cannot watch is refused with a reason in plain words ([`refusal`], the Mac's
 //! list in Windows' terms), which the shell shows as it is.
@@ -35,6 +40,10 @@ pub const DEFAULT_BINDING: &str = "right_control";
 /// The modifier keys a shell may offer on Windows, held on their own.
 pub const KEYS: &[&str] = &["right_control", "right_alt", "right_shift", "right_win"];
 
+/// How long a left-hand modifier must be held alone before its hold starts: long enough that the
+/// modifier of a typed shortcut (Ctrl+C, Alt+Tab) has met its key, short enough to talk at once.
+pub const LONE_MODIFIER_DELAY_MS: u32 = 300;
+
 /// Virtual-key codes (`WinUser.h`), as the low-level hook reports them.
 pub(crate) mod vk {
     pub const RCONTROL: u32 = 0xA3;
@@ -57,6 +66,12 @@ pub(crate) mod vk {
     pub const LMENU: u32 = 0xA4;
     /// `VK_F1`; F1 to F24 are consecutive.
     pub const F1: u32 = 0x70;
+    /// The mouse buttons, as `GetAsyncKeyState` reads them (a modifier held for a click).
+    pub const LBUTTON: u32 = 0x01;
+    pub const RBUTTON: u32 = 0x02;
+    pub const MBUTTON: u32 = 0x04;
+    pub const XBUTTON1: u32 = 0x05;
+    pub const XBUTTON2: u32 = 0x06;
 }
 
 /// Chord modifier bits, as the hook reads them at the key's press.
@@ -98,6 +113,38 @@ impl RightModifier {
     }
 }
 
+/// A left-hand modifier held on its own: its hold starts only once it has been held alone for
+/// [`LONE_MODIFIER_DELAY_MS`], so its shortcuts keep working.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LeftModifier {
+    Control,
+    Alt,
+    Shift,
+    Win,
+}
+
+impl LeftModifier {
+    /// Its token, the canonical spelling.
+    const fn token(self) -> &'static str {
+        match self {
+            Self::Control => "left_control",
+            Self::Alt => "left_alt",
+            Self::Shift => "left_shift",
+            Self::Win => "left_win",
+        }
+    }
+
+    /// The virtual key its events carry.
+    pub(crate) const fn vk(self) -> u32 {
+        match self {
+            Self::Control => vk::LCONTROL,
+            Self::Alt => vk::LMENU,
+            Self::Shift => vk::LSHIFT,
+            Self::Win => vk::LWIN,
+        }
+    }
+}
+
 /// Modifiers plus one key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Chord {
@@ -117,8 +164,10 @@ impl Chord {
 /// A parsed hotkey token.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Binding {
-    /// Hold one modifier.
+    /// Hold one right-hand modifier.
     Modifier(RightModifier),
+    /// Hold one left-hand modifier, alone, past [`LONE_MODIFIER_DELAY_MS`].
+    LeftModifier(LeftModifier),
     /// Hold a chord.
     Chord(Chord),
 }
@@ -136,6 +185,7 @@ impl Binding {
     pub(crate) fn canonical(self) -> String {
         match self {
             Self::Modifier(key) => key.token().to_owned(),
+            Self::LeftModifier(key) => key.token().to_owned(),
             Self::Chord(chord) => {
                 let mut parts: Vec<String> = CHORD_ORDER
                     .iter()
@@ -159,9 +209,8 @@ pub(crate) mod refusal {
     /// Shift and any key but a function key already does something everywhere: a capital, a
     /// symbol, selecting text, a back-tab. The hook would swallow it.
     pub const SHIFT_TYPES: &str = "Shift with that key already does something everywhere (a capital, a symbol, selecting text); add Ctrl, Alt or Win";
-    /// Watching left Ctrl would start a hold on every Ctrl+C in every app.
-    pub const LEFT_MODIFIER_ALONE: &str = "a left-hand modifier on its own would start dictation with every shortcut that uses it; use a right-hand one, or add a key";
-    pub const MODIFIERS_ONLY: &str = "modifiers together need a key with them; hold one right-hand modifier on its own, or add a key";
+    pub const MODIFIERS_ONLY: &str =
+        "modifiers together need a key with them; hold one modifier on its own, or add a key";
     /// Caps Lock reports a switch, not a hold.
     pub const CAPS_LOCK: &str = "Caps Lock switches on and off instead of being held";
     /// The keyboard handles Fn in its firmware.
@@ -175,6 +224,52 @@ pub(crate) mod refusal {
     pub const EMPTY_PART: &str = "a part of the shortcut is empty";
 }
 
+/// The reason for one of [`EDITING_SHORTCUTS`], in the words [`refusal`] uses.
+macro_rules! editing {
+    ($what:literal) => {
+        concat!(
+            "that's ",
+            $what,
+            ", and using it for Inkwell would stop ",
+            $what,
+            " working in every app; pick another key"
+        )
+    };
+}
+
+/// Ctrl and a letter that every app gives the same meaning: held as a hotkey, the hook would take
+/// it from every app (holding Ctrl+V to dictate would stop paste working everywhere), so they are
+/// refused, not warned about. (virtual key, reason). Letters are layout-mapped virtual keys, as
+/// shortcuts are: Ctrl+Z is Undo wherever the layout puts Z. Deliberately the ones nearly every
+/// app shares, not every Ctrl and letter: the rest mean different things in different apps.
+pub(crate) const EDITING_SHORTCUTS: &[(u32, &str)] = &[
+    (0x43, editing!("Copy")),
+    (0x56, editing!("Paste")),
+    (0x58, editing!("Cut")),
+    (0x5A, editing!("Undo")),
+    (0x59, editing!("Redo")),
+    (0x41, editing!("Select All")),
+    (0x53, editing!("Save")),
+    (0x46, editing!("Find")),
+    (0x50, editing!("Print")),
+    (0x57, editing!("Close")),
+    (0x54, editing!("New Tab")),
+    (0x4E, editing!("New")),
+    (0x51, editing!("Quit")),
+];
+
+/// Why `modifiers`+`code` is refused as an editing shortcut, if it is one: exactly Ctrl and the
+/// key (Ctrl+Shift+V, say, is not on the list).
+fn editing_shortcut(modifiers: u8, code: u32) -> Option<&'static str> {
+    if modifiers != modifier::CTRL {
+        return None;
+    }
+    EDITING_SHORTCUTS
+        .iter()
+        .find(|(vk, _)| *vk == code)
+        .map(|(_, why)| *why)
+}
+
 fn parse_token(token: &str) -> Result<Binding, &'static str> {
     let token = token.trim().to_ascii_lowercase();
     if token.is_empty() {
@@ -183,6 +278,9 @@ fn parse_token(token: &str) -> Result<Binding, &'static str> {
     if !token.contains('+') {
         if let Some(key) = modifier_key(&token)? {
             return Ok(Binding::Modifier(key));
+        }
+        if let Some(key) = left_modifier_key(&token) {
+            return Ok(Binding::LeftModifier(key));
         }
         if let Some(code) = function_key(&token) {
             return Ok(Binding::Chord(Chord {
@@ -194,8 +292,6 @@ fn parse_token(token: &str) -> Result<Binding, &'static str> {
             refusal::FN
         } else if is_command(&token) {
             refusal::NO_COMMAND
-        } else if is_modifier_name(&token) {
-            refusal::LEFT_MODIFIER_ALONE
         } else if token == "caps_lock" || token == "capslock" {
             refusal::CAPS_LOCK
         } else if key_code(&token).is_some() {
@@ -248,6 +344,9 @@ fn parse_token(token: &str) -> Result<Binding, &'static str> {
     if bits == modifier::SHIFT && function_key(key).is_none() {
         return Err(refusal::SHIFT_TYPES);
     }
+    if let Some(why) = editing_shortcut(bits, code) {
+        return Err(why);
+    }
     Ok(Binding::Chord(Chord {
         modifiers: bits,
         vk: code,
@@ -285,6 +384,18 @@ fn modifier_key(token: &str) -> Result<Option<RightModifier>, &'static str> {
     }))
 }
 
+/// A left-hand modifier on its own: by its left-hand name, or by the modifier's name alone (the
+/// left key, as "Alt" means on a PC). Command is refused before this ([`is_command`]).
+fn left_modifier_key(token: &str) -> Option<LeftModifier> {
+    let bit = chord_modifier(token.strip_prefix("left_").unwrap_or(token))?;
+    Some(match bit {
+        modifier::CTRL => LeftModifier::Control,
+        modifier::ALT => LeftModifier::Alt,
+        modifier::SHIFT => LeftModifier::Shift,
+        _ => LeftModifier::Win,
+    })
+}
+
 /// The Mac's Command, by any of its names and sides.
 fn is_command(name: &str) -> bool {
     let unsided = name
@@ -294,8 +405,7 @@ fn is_command(name: &str) -> bool {
     matches!(unsided, "cmd" | "command")
 }
 
-/// A modifier named without a side, or by its left-hand key: never watched on its own, and never
-/// a chord's key.
+/// A modifier named without a side, or by its left-hand key: never a chord's key.
 fn is_modifier_name(name: &str) -> bool {
     chord_modifier(name.strip_prefix("left_").unwrap_or(name)).is_some()
 }
@@ -456,14 +566,6 @@ mod tests {
             ("left", refusal::KEY_ALONE),
             ("page_down", refusal::KEY_ALONE),
             ("slash", refusal::KEY_ALONE),
-            ("left_alt", refusal::LEFT_MODIFIER_ALONE),
-            ("left_control", refusal::LEFT_MODIFIER_ALONE),
-            ("left_ctrl", refusal::LEFT_MODIFIER_ALONE),
-            ("left_shift", refusal::LEFT_MODIFIER_ALONE),
-            ("left_win", refusal::LEFT_MODIFIER_ALONE),
-            ("alt", refusal::LEFT_MODIFIER_ALONE),
-            ("ctrl", refusal::LEFT_MODIFIER_ALONE),
-            ("win", refusal::LEFT_MODIFIER_ALONE),
             ("ctrl+shift", refusal::MODIFIERS_ONLY),
             ("ctrl+alt+win", refusal::MODIFIERS_ONLY),
             ("ctrl+right_shift", refusal::MODIFIERS_ONLY),
@@ -492,6 +594,7 @@ mod tests {
             ("+a", refusal::EMPTY_PART),
             ("shift+a", refusal::SHIFT_TYPES),
             ("shift+left", refusal::SHIFT_TYPES),
+            ("ctrl+v", editing!("Paste")),
         ];
         for (token, why) in cases {
             assert_eq!(refused(token), why, "{token:?}");
@@ -551,7 +654,7 @@ mod tests {
     fn keys_windows_cannot_bind_are_refused() {
         assert!(unsupported("fn"));
         assert!(unsupported("right_command"));
-        assert!(unsupported("left_control"));
+        assert!(unsupported("left_command"));
         assert!(unsupported(""));
         assert!(unsupported("space"), "a typing key alone");
         assert!(unsupported("a"));
@@ -632,6 +735,81 @@ mod tests {
         }
         assert!(Binding::parse("shift+f5").is_ok());
         assert!(Binding::parse("ctrl+shift+a").is_ok());
+    }
+
+    /// A left-hand modifier on its own binds (its hold waits, in `machine`), by its own name or
+    /// the modifier's name alone, and reads back as the left key's token.
+    #[test]
+    fn a_left_hand_modifier_alone_binds() {
+        let cases = [
+            ("left_control", LeftModifier::Control, "left_control"),
+            ("left_ctrl", LeftModifier::Control, "left_control"),
+            ("ctrl", LeftModifier::Control, "left_control"),
+            (" Left_Alt ", LeftModifier::Alt, "left_alt"),
+            ("alt", LeftModifier::Alt, "left_alt"),
+            ("left_option", LeftModifier::Alt, "left_alt"),
+            ("left_shift", LeftModifier::Shift, "left_shift"),
+            ("shift", LeftModifier::Shift, "left_shift"),
+            ("left_win", LeftModifier::Win, "left_win"),
+            ("win", LeftModifier::Win, "left_win"),
+        ];
+        for (token, key, canonical) in cases {
+            let parsed = Binding::parse(token).unwrap();
+            assert_eq!(parsed, Binding::LeftModifier(key), "{token:?}");
+            assert_eq!(parsed.canonical(), canonical, "{token:?}");
+            assert_eq!(super::super::check(token).as_deref(), Ok(canonical));
+        }
+        assert_eq!(LeftModifier::Control.vk(), vk::LCONTROL);
+        assert_eq!(LeftModifier::Alt.vk(), vk::LMENU);
+        assert_eq!(LeftModifier::Shift.vk(), vk::LSHIFT);
+        assert_eq!(LeftModifier::Win.vk(), vk::LWIN);
+        // Still never a chord's key.
+        assert_eq!(refused("ctrl+left_alt"), refusal::MODIFIERS_ONLY);
+    }
+
+    /// Ctrl and an editing letter every app shares is refused with what it does, in plain words:
+    /// the hook would take it from every app. Exactly Ctrl: other modifiers with the key are fine.
+    #[test]
+    fn the_editing_shortcuts_every_app_shares_are_refused() {
+        let cases = [
+            ("ctrl+c", "Copy"),
+            ("ctrl+v", "Paste"),
+            ("ctrl+x", "Cut"),
+            ("ctrl+z", "Undo"),
+            ("ctrl+y", "Redo"),
+            ("ctrl+a", "Select All"),
+            ("ctrl+s", "Save"),
+            ("ctrl+f", "Find"),
+            ("ctrl+p", "Print"),
+            ("ctrl+w", "Close"),
+            ("ctrl+t", "New Tab"),
+            ("ctrl+n", "New"),
+            ("ctrl+q", "Quit"),
+            ("Control+V", "Paste"),
+        ];
+        for (token, what) in cases {
+            let why = refused(token);
+            assert!(
+                why.starts_with(&format!("that's {what}, ")),
+                "{token}: {why}"
+            );
+            assert!(why.ends_with("; pick another key"), "{token}: {why}");
+        }
+        assert_eq!(
+            refused("ctrl+v"),
+            "that's Paste, and using it for Inkwell would stop Paste working in every app; pick another key"
+        );
+        for token in [
+            "ctrl+shift+v",
+            "ctrl+alt+c",
+            "alt+v",
+            "win+z",
+            "ctrl+b",
+            "ctrl+f1",
+        ] {
+            assert!(Binding::parse(token).is_ok(), "{token}");
+        }
+        assert_eq!(EDITING_SHORTCUTS.len(), 13);
     }
 
     #[test]

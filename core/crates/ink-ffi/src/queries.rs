@@ -1493,7 +1493,7 @@ mod tests {
             r#"{"cmd":"consent.allow","feature":"polish","to":"on_device","key":"fn"}"#,
             r#"{"cmd":"consent.allow","feature":"edit","to":"on_device"}"#,
             r#"{"cmd":"consent.allow","feature":"edit","to":"on_device","key":"off"}"#,
-            r#"{"cmd":"consent.allow","feature":"edit","to":"on_device","key":"left_shift"}"#,
+            r#"{"cmd":"consent.allow","feature":"edit","to":"on_device","key":"caps_lock"}"#,
             r#"{"cmd":"permissions.check","deep":true}"#,
             r#"{"cmd":"permission.request","permission":"camera"}"#,
             r#"{"cmd":"permission.request"}"#,

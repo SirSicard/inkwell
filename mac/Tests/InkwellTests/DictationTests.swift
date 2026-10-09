@@ -470,11 +470,12 @@ final class DictationCoreContractTests: XCTestCase {
             }
             XCTAssertEqual(checked?.canonical, token, "\(token): \(checked?.reason ?? "no answer")")
         }
-        // And the modifiers alone it names: the right-hand ones and fn held, the rest refused with
-        // the core's reason.
+        // And the modifiers alone it names: both hands' and fn held (a left-hand one waits a moment),
+        // the rest refused with the core's reason, as is an editing shortcut every app shares.
         for (token, watched) in [("fn", true), ("right_option", true), ("right_command", true), ("right_control", true),
-                                 ("right_shift", true), ("left_option", false), ("left_command", false),
-                                 ("left_control", false), ("left_shift", false), ("caps_lock", false), ("ctrl+shift", false)] {
+                                 ("right_shift", true), ("left_option", true), ("left_command", true),
+                                 ("left_control", true), ("left_shift", true), ("caps_lock", false), ("ctrl+shift", false),
+                                 ("cmd+v", false)] {
             let checked = try answer(.hotkeyCheck(binding: token, ref: "hotkey:\(token)")) { event -> HotkeyChecked? in
                 if case .hotkeyChecked(let c) = event, c.ref == "hotkey:\(token)" { c } else { nil }
             }

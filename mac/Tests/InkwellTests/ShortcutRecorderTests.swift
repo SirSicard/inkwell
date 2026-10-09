@@ -277,12 +277,52 @@ final class ShortcutRecorderTests: XCTestCase {
             } else if outcome == "failed", case .hotkeyCheck(_, let ref) = sent.commands.last {
                 screens.apply([event("{\"type\":\"command.failed\",\"command\":\"hotkey.check\",\"id\":\"\(ref)\",\"message\":\"failed\"}")])
             }
-            XCTAssertFalse(recorder.busy)
             XCTAssertTrue(recorder.message(for: .dictation)?.isProblem ?? false)
-            XCTAssertFalse(screens.dictation.suspendedForRecording)
-            XCTAssertEqual(sent.commands.last, .meetingsShortcutSuspend(suspended: false, ref: nil))
             XCTAssertFalse(sent.commands.contains { if case .settingSet = $0 { true } else { false } })
+            if outcome == "failed" {
+                XCTAssertFalse(recorder.busy)
+                XCTAssertFalse(screens.dictation.suspendedForRecording)
+                XCTAssertEqual(sent.commands.last, .meetingsShortcutSuspend(suspended: false, ref: nil))
+            } else {
+                // A refused or unknown key: still listening, both still paused, until Escape.
+                XCTAssertEqual(recorder.recording, .dictation, outcome)
+                XCTAssertTrue(screens.dictation.suspendedForRecording, outcome)
+                XCTAssertFalse(sent.commands.contains(.meetingsShortcutSuspend(suspended: false, ref: nil)), outcome)
+                recorder.cancel()
+                XCTAssertFalse(screens.dictation.suspendedForRecording, outcome)
+            }
         }
+    }
+
+    /// The Windows 1.0 report, on the Mac too: a refused key ended the recording and left its line,
+    /// so the next key reached no recorder and read as refused. Now the next key is the next try.
+    func testAfterARefusalTheNextKeyIsTheNextTry() {
+        let sent = Sent(); let screens = live(sent); let recorder = screens.shortcuts
+        var said: [String] = []
+        recorder.announce = { said.append($0) }
+        recorder.start(.dictation); acknowledge(screens, sent)
+        // Cmd+V, refused by the core once every key is up.
+        _ = recorder.feed(.flagsChanged(keyCode: 0x37, flags: F.command | 0x8))
+        _ = recorder.feed(.keyDown(keyCode: 0x09, flags: F.command | 0x8, isRepeat: false))
+        guard case .hotkeyCheck("cmd+v", let ref) = sent.commands.last else { return XCTFail("no check of cmd+v") }
+        screens.apply([event("{\"type\":\"hotkey.checked\",\"binding\":\"cmd+v\",\"ok\":false,\"reason\":\"that's Paste, and using it for Inkwell would stop Paste working in every app; pick another key\",\"ref\":\"\(ref)\"}")])
+        _ = recorder.feed(.keyUp(keyCode: 0x09, flags: F.command | 0x8))
+        _ = recorder.feed(.flagsChanged(keyCode: 0x37, flags: 0))
+        let refusal = "Can\u{2019}t use \u{2318}V: that's Paste, and using it for Inkwell would stop Paste working in every app; pick another key."
+        XCTAssertEqual(recorder.message(for: .dictation)?.text, refusal)
+        XCTAssertEqual(said.last, "\(refusal) Press another key, or Escape to cancel.")
+        XCTAssertEqual(recorder.recording, .dictation)
+        XCTAssertTrue(screens.dictation.suspendedForRecording)
+
+        // F13, the next try: checked, saved, and both shortcuts back.
+        XCTAssertTrue(recorder.feed(.keyDown(keyCode: 0x69, flags: 0, isRepeat: false)))
+        guard case .hotkeyCheck("f13", _) = sent.commands.last else { return XCTFail("no check of f13") }
+        answer(screens, sent)
+        _ = recorder.feed(.keyUp(keyCode: 0x69, flags: 0))
+        XCTAssertTrue(sent.commands.contains(.settingSet(.dictationKey, "f13")))
+        XCTAssertFalse(recorder.busy)
+        XCTAssertFalse(screens.dictation.suspendedForRecording)
+        XCTAssertEqual(sent.commands.last, .meetingsShortcutSuspend(suspended: false, ref: nil))
     }
 
     func testEscapeFocusLossAndCheckCancellationAreIdempotent() {

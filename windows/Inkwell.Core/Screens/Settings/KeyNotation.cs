@@ -87,9 +87,9 @@ public static class KeyNotation
     public static Key? ForVk(uint vk) => ByVk.GetValueOrDefault(vk);
 
     /// <summary>
-    /// The core's tokens for modifiers held on their own, and the left-hand and Caps Lock tokens the
-    /// recorder makes (the core refuses those, and says why); the Mac's names where a library came
-    /// from one.
+    /// The core's tokens for modifiers held on their own (a left-hand one waits a moment before its
+    /// hold starts), and the Caps Lock token the recorder makes (the core refuses it, and says why);
+    /// the Mac's names where a library came from one.
     /// </summary>
     private static readonly Dictionary<string, (string Name, string Cap)> ModifiersAlone = new(StringComparer.Ordinal)
     {

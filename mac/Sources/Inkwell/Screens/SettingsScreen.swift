@@ -465,6 +465,7 @@ private struct DictationSection: View {
                     RecordShortcutButton(recorder: shortcuts, target: .dictation, what: "the dictation key")
                 }
                 KeyHint(text: "hold, speak, let go")
+                KeyHint(text: "A left-hand modifier on its own waits a moment before dictation starts, so its shortcuts keep working.")
                 ShortcutMessage(recorder: shortcuts, target: .dictation)
             }
             VStack(alignment: .leading, spacing: 4) {
@@ -555,7 +556,7 @@ struct RecordShortcutButton: View {
             ? "Recording a shortcut for \(what)"
             : isChecking ? "Cancel checking the shortcut for \(what)" : "Record a shortcut for \(what)")
         .accessibilityHint(isRecording
-            ? "Press the keys you want: a right-hand modifier alone, a function key, or modifiers and a key. Escape on its own cancels."
+            ? "Press the keys you want: a modifier alone, a function key, or modifiers and a key. Escape on its own cancels."
             : isChecking ? "" : "Then press the keys you want to use.")
     }
 }
