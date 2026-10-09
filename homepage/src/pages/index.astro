@@ -1,8 +1,13 @@
 ---
 // The homepage for Inkwell 1.0, in Glow: a dark hero (the app's orb, the product and the download),
-// then the page in the visitor's theme, with the Meetings band always dark. Ordered by the jobs:
-// dictation, meetings, the library, stats, models, privacy, consent, download. Every fact comes from
-// the 1.0 README; see ../lib/constants.ts.
+// then the page in the visitor's theme, with night bands where the content earns them. Ordered by the
+// jobs: dictation, meetings, the library, stats, models, privacy, consent, download. Every fact comes
+// from the 1.0 README; see ../lib/constants.ts.
+//
+// The grounds alternate in both themes, no two neighbours alike (the tokens are in base.css):
+//   Hero night (orb) · Dictation paper · Meetings night (you and them) · Library paper · Models tint ·
+//   Privacy night (the statement) · Consent paper · Download night (the orb again) · Code signing
+//   paper · Colophon tint. Moving a section means checking its neighbours' grounds.
 import Base from '../layouts/Base.astro';
 import Hero from '../components/Hero.astro';
 import Dictation from '../components/Dictation.astro';
