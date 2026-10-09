@@ -261,8 +261,8 @@ marked latest has no appcast, and every installed 1.x app would stop finding upd
 
 ### Release day: 1.0.0 (once)
 
-What the first 1.x release needs beyond the chain above, in order. The 0.2 app stays on `main`
-until this day and is not touched before it (invariant I6 in [ARCHITECTURE.md](ARCHITECTURE.md)).
+What the first 1.x release needs beyond the chain above, in order. The 0.2 app stayed on `main`
+until this day, untouched (invariant I6 in [ARCHITECTURE.md](ARCHITECTURE.md), which ended with it).
 
 1.0 is one release on the Mac and on Windows together: the tag waits until the Windows app is
 ready too. Windows ships unsigned at first, with the homepage explaining how to install it past
@@ -281,7 +281,7 @@ Before the tag:
       `Notices.cs`). `mac/scripts/notices-verified.sh` and
       `windows/scripts/release-version.sh tag v1.0.0` (the same check with the Windows list) must
       pass: each platform's tag refuses to build until its check does.
-- [ ] The 0.2 app removed from `main` in its own pull request (`legacy/0.2` keeps it): `src/`,
+- [x] The 0.2 app removed from `main` in its own pull request (`legacy/0.2` keeps it): `src/`,
       `src-tauri/`, `public/`, `index.html`, `package.json`, `package-lock.json`,
       `vite.config.ts`, `eslint.config.js` and the three `tsconfig*.json`. With them, what points
       at them: `.github/dependabot.yml`'s npm entry for `/` and cargo entry for `/src-tauri`;
@@ -492,7 +492,7 @@ there is a dedicated step that uploads the bundles as artifacts instead. So this
 builds all four platforms, notarises the macOS dmgs, and publishes nothing:
 
 ```bash
-gh workflow run build.yml --ref main
+gh workflow run build.yml --ref legacy/0.2
 gh run watch "$(gh run list --workflow build.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
 ```
 

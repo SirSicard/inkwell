@@ -1,9 +1,9 @@
 # Inkwell: agent rules
 
-Inkwell is a public MIT project: a local voice app for dictation and meeting notes. `main` holds the
-Inkwell 1.0 rebuild in `core/` (Rust) alongside the 0.2 Tauri app (`src/`, `src-tauri/`), which is
-frozen on the `legacy/0.2` branch. Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) before a
-structural change.
+Inkwell is a public MIT project: a local voice app for dictation and meeting notes. `main` holds
+Inkwell 1.x: the Rust core in `core/` with native shells in `mac/` (Swift) and `windows/` (C#). The
+0.2 Tauri app lives only on the `legacy/0.2` branch. Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+before a structural change.
 
 ## Architecture rules (the short form)
 
@@ -57,5 +57,5 @@ messages.
   `cargo clippy --workspace --all-targets -- -D warnings` must pass in `core/` before a PR.
 - CI has no models, GPU or audio devices: use the mock engine and replay fixtures. Tests that need
   real models are `#[ignore]` and read `$INK_BENCH_DIR`.
-- Don't touch `src/` or `src-tauri/` on `main`: the 0.2 app changes only on `legacy/0.2`.
+- The 0.2 app changes only on `legacy/0.2`, never on `main`.
 - Downloads of models or datasets need the maintainer's OK first.
