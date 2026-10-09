@@ -55,8 +55,9 @@ pub(crate) enum TapInput {
         /// The key.
         keycode: u16,
     },
-    /// A mouse button went down (`kCGEventLeftMouseDown`, `RightMouseDown`, `OtherMouseDown`):
-    /// a modifier held with it is a click (Cmd+click), not a dictation.
+    /// A mouse button went down (`kCGEventLeftMouseDown`, `RightMouseDown`, `OtherMouseDown`), or
+    /// the wheel turned (`kCGEventScrollWheel`): a modifier held with it is a click or a zoom
+    /// (Cmd+click, Ctrl+scroll), not a dictation.
     PointerDown,
     /// `kCGEventTapDisabledByTimeout` or `kCGEventTapDisabledByUserInput`: the OS switched the
     /// tap off, and events may have been missed.
@@ -136,12 +137,18 @@ impl HoldMachine {
     }
 
     /// The wait [`Verdict::arm`] asked for has ended: a lone left-hand modifier still down alone
-    /// starts its hold (stamped by the tap thread at its press). Anything else changes nothing.
-    pub(crate) fn on_timer(&mut self) -> Verdict {
+    /// starts its hold (stamped by the tap thread at its press). `interrupted`: the session's state
+    /// says otherwise (the key reads up, its release missed; another modifier or a mouse button is
+    /// down, pressed before the key). Anything else changes nothing.
+    pub(crate) fn on_timer(&mut self, interrupted: bool) -> Verdict {
         if !self.waiting {
             return Verdict::default();
         }
         self.waiting = false;
+        if interrupted {
+            self.vetoed = true;
+            return Verdict::default();
+        }
         self.held = true;
         Verdict {
             edge: Some(Edge::Pressed),
@@ -631,7 +638,7 @@ mod tests {
         assert!(m.is_waiting());
         assert!(!m.is_held());
         assert_eq!(
-            m.on_timer(),
+            m.on_timer(false),
             Verdict {
                 swallow: false,
                 edge: Some(Edge::Pressed),
@@ -640,7 +647,7 @@ mod tests {
             }
         );
         assert!(m.is_held());
-        assert_eq!(m.on_timer(), PASS, "one press");
+        assert_eq!(m.on_timer(false), PASS, "one press");
         assert_eq!(
             m.on(TapInput::KeyDown {
                 keycode: 0x02,
@@ -683,7 +690,7 @@ mod tests {
             assert_eq!(m.on(left_cmd(true, 0)), ARMED);
             assert_eq!(m.on(other), PASS, "{other:?} is the app's");
             assert!(!m.is_waiting());
-            assert_eq!(m.on_timer(), PASS, "{other:?}: no hold");
+            assert_eq!(m.on_timer(false), PASS, "{other:?}: no hold");
             assert!(!m.is_held());
             assert_eq!(m.on(left_cmd(false, 0)), PASS, "nothing to release");
             assert_eq!(
@@ -692,6 +699,19 @@ mod tests {
                 "pressed alone again, it waits"
             );
         }
+    }
+
+    /// The session says the key is up, or something else is down, when the wait ends: no hold.
+    #[test]
+    fn a_lone_left_modifier_interrupted_out_of_sight_starts_nothing() {
+        let mut m = machine("left_command");
+        assert_eq!(m.on(left_cmd(true, 0)), ARMED);
+        assert_eq!(m.on_timer(true), PASS);
+        assert!(!m.is_held());
+        assert_eq!(m.on(TapInput::Disabled).edge, None, "nothing held");
+        assert_eq!(m.on(left_cmd(true, 0)), ARMED, "a fresh press waits");
+        m.reset();
+        assert_eq!(m.on_timer(false), PASS, "a reset ends the wait");
     }
 
     /// Let go of before the wait ends: nothing, and the late wake starts nothing.
@@ -708,7 +728,7 @@ mod tests {
         };
         assert_eq!(m.on(option(true)), ARMED);
         assert_eq!(m.on(option(false)), PASS);
-        assert_eq!(m.on_timer(), PASS);
+        assert_eq!(m.on_timer(false), PASS);
         assert!(!m.is_held());
     }
 
@@ -717,7 +737,7 @@ mod tests {
     fn a_lone_left_modifier_pressed_with_another_down_is_a_shortcut() {
         let mut m = machine("left_command");
         assert_eq!(m.on(left_cmd(true, flag::DEVICE_RIGHT_COMMAND)), PASS);
-        assert_eq!(m.on_timer(), PASS);
+        assert_eq!(m.on_timer(false), PASS);
         assert_eq!(
             m.on(left_cmd(false, flag::COMMAND | flag::DEVICE_RIGHT_COMMAND)),
             PASS
@@ -739,7 +759,7 @@ mod tests {
         assert!(!m.is_waiting());
         m.on(left_cmd(false, 0));
         m.on(left_cmd(true, 0));
-        m.on_timer();
+        m.on_timer(false);
         assert_eq!(
             m.on(left_cmd(true, 0)),
             Verdict {

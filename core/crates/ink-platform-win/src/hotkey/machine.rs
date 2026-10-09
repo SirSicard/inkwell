@@ -52,8 +52,9 @@
 //! ([`Verdict::arm_ms`]: the hook thread sets a timer, [`HoldMachine::on_timer`]). Held alone for
 //! [`LONE_MODIFIER_DELAY_MS`], the hold starts there, stamped at the key's press so nothing said
 //! since is lost, and asks for the mask key so its release opens no menu and no Start. Any other
-//! key going down first (its repeats too), another modifier already down at its press, or a mouse
-//! button down when the wait ends (Ctrl+click, Shift+drag) means a shortcut: no hold until the key
+//! key going down first (its repeats too), another modifier already down at its press (the same
+//! modifier's other key too), or the mouse (a button down when the wait ends, or a click or the
+//! wheel during it: Ctrl+click, Shift+drag, Ctrl+wheel) means a shortcut: no hold until the key
 //! comes up and is pressed again. Let go of before the wait ends, it did nothing. Once the hold has
 //! started, other keys pass and the hold goes on, as a right-hand modifier's does.
 #![cfg(windows)]
@@ -67,7 +68,9 @@ pub(crate) enum HookInput {
     KeyDown {
         /// The virtual key.
         vk: u32,
-        /// The chord modifiers down at the time ([`super::binding::modifier`] bits).
+        /// The chord modifiers down at the time ([`super::binding::modifier`] bits). For a lone
+        /// left-hand modifier's own key, the others only: its sibling (right Shift for left Shift)
+        /// counts, the key itself does not.
         modifiers: u8,
         /// The key state reads the key as down already: a repeat of a key the OS saw (one the
         /// hook passed on). A swallowed key reads as up at its repeats too. Read for the hotkey's
@@ -176,6 +179,19 @@ impl HoldMachine {
         self.held
     }
 
+    /// The binding is a lone left-hand modifier: its press waits (the module's rules).
+    pub(crate) const fn waits(&self) -> bool {
+        matches!(self.binding, Binding::LeftModifier(_))
+    }
+
+    /// The wait could not be timed (no timer): it ends as a shortcut would, with no hold until
+    /// the key comes up and is pressed again, rather than a key that never starts and never says.
+    pub(crate) fn abandon_wait(&mut self) {
+        if self.pending_since_ms.take().is_some() {
+            self.vetoed = true;
+        }
+    }
+
     /// A key pressed before this hook existed must be released before it can start a hold.
     pub(crate) fn wait_for_initial_release(&mut self, down: bool) {
         self.initial_release = down;
@@ -209,11 +225,13 @@ impl HoldMachine {
         self.held = false;
     }
 
-    /// The wait [`Verdict::arm_ms`] asked for has ended, at tick `now_ms`; `pointer_down`: a mouse
-    /// button is down now (the modifier is held for a click or a drag). Starts the hold of a lone
-    /// left-hand modifier held alone long enough, or waits on if the timer came early. Anything
-    /// else (the key came up, or met another key, meanwhile) changes nothing.
-    pub(crate) fn on_timer(&mut self, now_ms: u32, pointer_down: bool) -> Verdict {
+    /// The wait [`Verdict::arm_ms`] asked for has ended, at tick `now_ms`. `interrupted`: what the
+    /// keyboard hook cannot see says this was no lone hold (a mouse button down now, or pressed or
+    /// wheeled during the wait: Ctrl+click, Ctrl+wheel; or the key itself reads up, its key-up
+    /// lost). Starts the hold of a lone left-hand modifier held alone long enough, or waits on if
+    /// the timer came early. Anything else (the key came up, or met another key, meanwhile)
+    /// changes nothing.
+    pub(crate) fn on_timer(&mut self, now_ms: u32, interrupted: bool) -> Verdict {
         let Some(since_ms) = self.pending_since_ms else {
             return Verdict::default();
         };
@@ -225,7 +243,7 @@ impl HoldMachine {
             };
         }
         self.pending_since_ms = None;
-        if pointer_down {
+        if interrupted {
             self.vetoed = true;
             return Verdict::default();
         }
@@ -321,9 +339,9 @@ impl HoldMachine {
                 // ends here, and this press is judged on its own.
                 let lost = self.held;
                 self.held = false;
-                // The hook runs before the key state takes the press in, so the key's own bit
-                // reads up: any bit is another modifier, and a modifier with another is a shortcut.
-                let alone = modifiers & !key.bit() == 0;
+                // The hook gives the other modifiers down (its sibling included): a modifier
+                // pressed with another is a shortcut.
+                let alone = modifiers == 0;
                 self.vetoed = !alone;
                 self.pending_since_ms = alone.then_some(at_ms);
                 Verdict {
@@ -1064,6 +1082,14 @@ mod tests {
     /// a mouse button down when the wait ends (Ctrl+click, Shift+drag): a shortcut, no hold.
     #[test]
     fn a_lone_left_modifier_with_another_modifier_or_a_click_is_a_shortcut() {
+        let mut sibling = machine("left_shift");
+        assert_eq!(
+            sibling.on(down(vk::LSHIFT, modifier::SHIFT)),
+            PASS,
+            "right Shift was down"
+        );
+        assert!(!sibling.is_held());
+
         let mut m = machine("left_alt");
         assert_eq!(m.on(down(vk::LMENU, modifier::CTRL)), PASS, "Ctrl was down");
         assert_eq!(m.on(down_seen_after(600, vk::LMENU, modifier::ALT)), PASS);
@@ -1086,10 +1112,18 @@ mod tests {
         assert_eq!(
             click.on_timer(pressed_at + LONE_MODIFIER_DELAY_MS, true),
             Verdict::default(),
-            "a button is down"
+            "a button is down, or was used, or the key reads up"
         );
         assert!(!click.is_held());
         assert_eq!(click.on(up(vk::LCONTROL)), PASS);
+
+        // No timer to be had: the wait ends as a shortcut, and the next press waits afresh.
+        let mut untimed = machine("left_control");
+        assert_eq!(untimed.on(down(vk::LCONTROL, 0)), ARMED);
+        untimed.abandon_wait();
+        assert_eq!(untimed.on_timer(now() + 1_000, false), Verdict::default());
+        assert_eq!(untimed.on(up(vk::LCONTROL)), PASS);
+        assert_eq!(untimed.on(down(vk::LCONTROL, 0)), ARMED);
     }
 
     /// Once the hold has started, other keys pass and the hold goes on, as a right-hand

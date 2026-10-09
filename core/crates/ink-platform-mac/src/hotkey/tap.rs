@@ -17,11 +17,11 @@ use objc2_core_foundation::{
     kCFRunLoopDefaultMode,
 };
 use objc2_core_graphics::{
-    CGEvent, CGEventField, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement,
-    CGEventTapProxy, CGEventType,
+    CGEvent, CGEventField, CGEventSource, CGEventSourceStateID, CGEventTapLocation,
+    CGEventTapOptions, CGEventTapPlacement, CGEventTapProxy, CGEventType, CGMouseButton,
 };
 
-use super::binding::{Binding, LONE_MODIFIER_DELAY_NS};
+use super::binding::{Binding, LONE_MODIFIER_DELAY_NS, ModifierKey};
 use super::machine::{Edge, HoldMachine, TapInput, Verdict};
 use super::{SYNTHETIC_EVENT_MARK, event_time_ns};
 use crate::ax;
@@ -201,13 +201,14 @@ impl Hold {
     }
 
     /// The tap thread's loop woke at `now_ns`: a wait that has ended starts the hold, stamped at
-    /// the key's press. Early, it does nothing.
-    fn wait_ended(&self, now_ns: u64) {
+    /// the key's press, unless `interrupted` (asked only then) says otherwise. Early, it does
+    /// nothing.
+    fn wait_ended(&self, now_ns: u64, interrupted: impl FnOnce() -> bool) {
         if self.deadline_ns().is_none_or(|deadline| now_ns < deadline) {
             return;
         }
         let mut machine = self.machine.get();
-        let verdict = machine.on_timer();
+        let verdict = machine.on_timer(interrupted());
         self.machine.set(machine);
         if let Some(edge) = verdict.edge {
             self.report(edge, || self.waiting_since_ns.get());
@@ -291,6 +292,22 @@ impl Context {
     }
 }
 
+/// Whether the session's state says a lone modifier's wait was no lone hold: the key reads up (its
+/// release missed), or another modifier or a mouse button is down (pressed before the key, where
+/// the tap saw no event during the wait). Read in the loop, outside the callback.
+fn interrupted(key: ModifierKey) -> bool {
+    let state = CGEventSourceStateID::CombinedSessionState;
+    let flags = CGEventSource::flags_state(state).0;
+    let button = [
+        CGMouseButton::Left,
+        CGMouseButton::Right,
+        CGMouseButton::Center,
+    ]
+    .into_iter()
+    .any(|b| CGEventSource::button_state(state, b));
+    flags & key.down_mask() == 0 || !key.alone_in(flags) || button
+}
+
 /// Reduces a tap event to what the decision needs. `None` for anything the hotkey ignores,
 /// including events this crate posted itself.
 fn decode(event_type: CGEventType, event: &CGEvent) -> Option<TapInput> {
@@ -301,7 +318,8 @@ fn decode(event_type: CGEventType, event: &CGEvent) -> Option<TapInput> {
     }
     let pointer = event_type == CGEventType::LeftMouseDown
         || event_type == CGEventType::RightMouseDown
-        || event_type == CGEventType::OtherMouseDown;
+        || event_type == CGEventType::OtherMouseDown
+        || event_type == CGEventType::ScrollWheel;
     if !pointer
         && event_type != CGEventType::FlagsChanged
         && event_type != CGEventType::KeyDown
@@ -438,7 +456,12 @@ fn run(
             invalidated_by_system = !stop.load(Ordering::Acquire);
             break;
         }
-        context.hold.wait_ended(clock.now_ns());
+        if stop.load(Ordering::Acquire) {
+            break;
+        }
+        if let Binding::Modifier(key) = binding {
+            context.hold.wait_ended(clock.now_ns(), || interrupted(key));
+        }
     }
     port.invalidate();
     run_loop.remove_source(Some(&source), common);
@@ -617,9 +640,9 @@ mod tests {
         let press_ns = 1_000_000_000;
         assert!(!hold.on(left_cmd(true), || press_ns).swallow, "the app's");
         assert_eq!(hold.deadline_ns(), Some(press_ns + LONE_MODIFIER_DELAY_NS));
-        hold.wait_ended(press_ns + LONE_MODIFIER_DELAY_NS - 1);
+        hold.wait_ended(press_ns + LONE_MODIFIER_DELAY_NS - 1, || false);
         assert!(got.lock().expect("unpoisoned").is_empty(), "too early");
-        hold.wait_ended(press_ns + LONE_MODIFIER_DELAY_NS);
+        hold.wait_ended(press_ns + LONE_MODIFIER_DELAY_NS, || false);
         assert_eq!(hold.deadline_ns(), None);
         assert!(hold.is_held());
         assert!(
@@ -646,11 +669,11 @@ mod tests {
         };
         assert!(!hold.on(c, AT).swallow, "Cmd+C copies");
         assert_eq!(hold.deadline_ns(), None);
-        hold.wait_ended(u64::MAX);
+        hold.wait_ended(u64::MAX, || false);
         hold.on(left_cmd(false), AT);
         hold.on(left_cmd(true), AT);
         hold.on(left_cmd(false), AT);
-        hold.wait_ended(u64::MAX);
+        hold.wait_ended(u64::MAX, || false);
         assert!(
             got.lock().expect("unpoisoned").is_empty(),
             "a shortcut and a tap"

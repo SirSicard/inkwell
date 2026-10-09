@@ -143,16 +143,6 @@ impl LeftModifier {
             Self::Win => vk::LWIN,
         }
     }
-
-    /// Its own [`modifier`] bit: down with it, so not "another modifier".
-    pub(crate) const fn bit(self) -> u8 {
-        match self {
-            Self::Control => modifier::CTRL,
-            Self::Alt => modifier::ALT,
-            Self::Shift => modifier::SHIFT,
-            Self::Win => modifier::WIN,
-        }
-    }
 }
 
 /// Modifiers plus one key.
@@ -250,7 +240,8 @@ macro_rules! editing {
 /// Ctrl and a letter that every app gives the same meaning: held as a hotkey, the hook would take
 /// it from every app (holding Ctrl+V to dictate would stop paste working everywhere), so they are
 /// refused, not warned about. (virtual key, reason). Letters are layout-mapped virtual keys, as
-/// shortcuts are: Ctrl+Z is Undo wherever the layout puts Z.
+/// shortcuts are: Ctrl+Z is Undo wherever the layout puts Z. Deliberately the ones nearly every
+/// app shares, not every Ctrl and letter: the rest mean different things in different apps.
 pub(crate) const EDITING_SHORTCUTS: &[(u32, &str)] = &[
     (0x43, editing!("Copy")),
     (0x56, editing!("Paste")),

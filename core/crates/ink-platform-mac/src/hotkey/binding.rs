@@ -138,6 +138,8 @@ pub(crate) mod event_type {
     pub const RIGHT_MOUSE_DOWN: u32 = 3;
     /// `kCGEventOtherMouseDown`.
     pub const OTHER_MOUSE_DOWN: u32 = 25;
+    /// `kCGEventScrollWheel`.
+    pub const SCROLL_WHEEL: u32 = 22;
 }
 
 /// How long a left-hand modifier must be held alone before its hold starts: long enough that the
@@ -298,13 +300,15 @@ impl Binding {
     pub(crate) fn event_mask(self) -> u64 {
         let keys = (1 << event_type::KEY_DOWN) | (1 << event_type::KEY_UP);
         match self {
-            // A left-hand modifier also hears what ends its wait: a key, or a click.
+            // A left-hand modifier also hears what ends its wait: a key, a click or the wheel
+            // (Cmd+click, Ctrl+scroll zoom).
             Self::Modifier(key) if key.waits() => {
                 (1 << event_type::FLAGS_CHANGED)
                     | (1 << event_type::KEY_DOWN)
                     | (1 << event_type::LEFT_MOUSE_DOWN)
                     | (1 << event_type::RIGHT_MOUSE_DOWN)
                     | (1 << event_type::OTHER_MOUSE_DOWN)
+                    | (1 << event_type::SCROLL_WHEEL)
             }
             Self::Modifier(_) => 1 << event_type::FLAGS_CHANGED,
             Self::Chord(Chord { modifiers: 0, .. }) => keys,
@@ -358,6 +362,7 @@ macro_rules! editing {
 /// Command and a key that every app (or macOS) gives the same meaning: held as a hotkey, the tap
 /// would take it from every app (holding Cmd+V to dictate would stop paste working everywhere), so
 /// they are refused, not warned about. (keycode, reason); letters by ANSI position, as every token.
+/// Deliberately the ones nearly every app shares, not every Command and letter.
 pub(crate) const EDITING_SHORTCUTS: &[(u16, &str)] = &[
     (0x08, editing!("Copy")),
     (keycode::ANSI_V, editing!("Paste")),
@@ -788,6 +793,7 @@ mod tests {
         assert_eq!(event_type::LEFT_MOUSE_DOWN, T::LeftMouseDown.0);
         assert_eq!(event_type::RIGHT_MOUSE_DOWN, T::RightMouseDown.0);
         assert_eq!(event_type::OTHER_MOUSE_DOWN, T::OtherMouseDown.0);
+        assert_eq!(event_type::SCROLL_WHEEL, T::ScrollWheel.0);
         assert_eq!(event_type::KEY_DOWN, T::KeyDown.0);
         assert_eq!(event_type::KEY_UP, T::KeyUp.0);
         assert_eq!(event_type::FLAGS_CHANGED, T::FlagsChanged.0);
@@ -1112,8 +1118,8 @@ mod tests {
     fn the_tap_only_sees_the_events_its_binding_needs() {
         assert_eq!(
             Binding::parse("left_command").map(Binding::event_mask),
-            Ok((1 << 12) | (1 << 10) | (1 << 1) | (1 << 3) | (1 << 25)),
-            "a left-hand modifier hears the key or click that ends its wait"
+            Ok((1 << 12) | (1 << 10) | (1 << 1) | (1 << 3) | (1 << 25) | (1 << 22)),
+            "a left-hand modifier hears the key, click or wheel that ends its wait"
         );
         assert_eq!(Binding::parse("fn").map(Binding::event_mask), Ok(1 << 12));
         assert_eq!(
