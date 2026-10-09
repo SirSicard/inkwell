@@ -13,7 +13,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
-- **Windows: after a key was refused while recording a shortcut, every later key seemed refused too.** The recording had stopped at the refusal and left its line on screen. Now it listens for the next key until one is saved or Escape is pressed.
+- **After a key was refused while recording a shortcut, every later key seemed refused too** (reported on Windows; the Mac did the same). The recording had stopped at the refusal and left its line on screen. Now it listens for the next key until one is saved or Escape is pressed.
 
 ## [1.0.0] - 2026-10-09
 

@@ -26,7 +26,13 @@
 //! there, stamped at the key's press so nothing said since is lost. A key or a click first,
 //! another modifier going down or already down at its press, means a shortcut: no hold until the
 //! key comes up and is pressed again. Let go of before the wait ends, it did nothing. Once the
-//! hold has started, other keys pass and the hold goes on, as a right-hand modifier's does.
+//! hold has started, other keys pass and the hold goes on, as a right-hand modifier's does. In
+//! toggle mode both the start and the stop are such a hold (decided: a tap is a shortcut's, never
+//! a toggle).
+//!
+//! **Accepted edge (decided).** A non-modifier key already held before the modifier's press, whose
+//! auto-repeat is off or slower than the wait, is not seen as "another key": the hold may start.
+//! When the wait ends the session's modifiers and mouse buttons are read back, not every key.
 #![cfg(target_os = "macos")]
 
 use super::binding::{Binding, ModifierKey};

@@ -56,7 +56,14 @@
 //! modifier's other key too), or the mouse (a button down when the wait ends, or a click or the
 //! wheel during it: Ctrl+click, Shift+drag, Ctrl+wheel) means a shortcut: no hold until the key
 //! comes up and is pressed again. Let go of before the wait ends, it did nothing. Once the hold has
-//! started, other keys pass and the hold goes on, as a right-hand modifier's does.
+//! started, other keys pass and the hold goes on, as a right-hand modifier's does. In toggle mode
+//! both the start and the stop are such a hold (decided: a tap is a shortcut's, never a toggle).
+//!
+//! **Accepted edge (decided).** A key already held before the modifier's press and never repeated
+//! (some keys do not auto-repeat, or the hook missed its press) is not seen as "another key": the
+//! hold may start. When the wait ends only the mouse and the key itself are read back; scanning
+//! every key's state there would also block the modifier for good behind a key whose release
+//! Windows lost (one let go of in an elevated window), which is worse.
 #![cfg(windows)]
 
 use super::binding::{Binding, LONE_MODIFIER_DELAY_MS};
