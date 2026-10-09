@@ -98,6 +98,14 @@ enum LibraryFormat {
         return parts.joined(separator: " · ")
     }
 
+    /// A search match's heading: the record's title, else the matched words (a dictation has no
+    /// title), never "Untitled record".
+    static func hitTitle(_ hit: SearchHit) -> String {
+        if let title = hit.title, !title.trimmingCharacters(in: .whitespaces).isEmpty { return title }
+        let words = hit.snippet.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        return words.isEmpty ? "Dictation" : words
+    }
+
     /// A record's heading line: `Today 14:02 · 42 min · Zoom · You, Alex, Robin`.
     static func headerLine(
         _ record: RecordRow, people: [String], now: Date, calendar: Calendar, apps: any AppDirectory = WorkspaceApps()

@@ -428,4 +428,15 @@ public class LibraryModelTests
         Assert.Equal("Nothing said matches “plan”.", library.SearchStatus);
         Assert.Equal("0 matches", library.CountLabel);
     }
+
+    [Fact]
+    public void AMatchInADictationIsCalledByItsWordsNeverUntitled()
+    {
+        var dictation = new SearchHit { Record = "d", Snippet = "the launch  moves to\nTuesday", StartMs = 0, StartedAtUnixMs = 0 };
+        Assert.Equal("the launch moves to Tuesday", LibraryModel.HitTitle(dictation));
+        Assert.Equal("", LibraryModel.HitSnippet(dictation));
+        var meeting = dictation with { Title = "Launch sync" };
+        Assert.Equal("Launch sync", LibraryModel.HitTitle(meeting));
+        Assert.Equal(meeting.Snippet, LibraryModel.HitSnippet(meeting));
+    }
 }

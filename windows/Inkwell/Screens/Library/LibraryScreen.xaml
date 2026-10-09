@@ -130,7 +130,8 @@
                                 Style="{StaticResource InkReadingStyle}"
                                 Foreground="{ThemeResource InkSecondaryTextBrush}"
                                 Text="{x:Bind Snippet}"
-                                TextTrimming="CharacterEllipsis" />
+                                TextTrimming="CharacterEllipsis"
+                                Visibility="{x:Bind HasSnippet}" />
                             <TextBlock Style="{StaticResource InkTimestampStyle}" Text="{x:Bind Meta}" />
                         </StackPanel>
                     </DataTemplate>

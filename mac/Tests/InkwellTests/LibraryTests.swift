@@ -189,6 +189,14 @@ final class LibraryFormatTests: XCTestCase {
         XCTAssertEqual(header("com.example.Recorder"), "Today 14:00 · 42 min · Recorder")
     }
 
+    /// A search match in a dictation (no title) is called by its words, never "Untitled record".
+    func testAMatchInADictationIsCalledByItsWords() throws {
+        let dictation = try JSONDecoder().decode(SearchHit.self, from: Data(#"{"record":"d","snippet":"the launch  moves to\nTuesday","start_ms":0,"started_at_unix_ms":0}"#.utf8))
+        XCTAssertEqual(LibraryFormat.hitTitle(dictation), "the launch moves to Tuesday")
+        let meeting = try JSONDecoder().decode(SearchHit.self, from: Data(#"{"record":"m","snippet":"x","start_ms":0,"started_at_unix_ms":0,"title":"Launch sync"}"#.utf8))
+        XCTAssertEqual(LibraryFormat.hitTitle(meeting), "Launch sync")
+    }
+
     private struct NoApps: AppDirectory {
         func app(bundleID: String) -> (name: String, icon: NSImage)? { nil }
     }
