@@ -16,8 +16,8 @@
 # Developer ID, and the checksum tells you it is the exact build this cask was
 # written against. They answer different questions.
 cask "inkwell" do
-  version "0.2.9"
-  sha256 "320dc539a120ad3afac1da69d5c61182040687d55cbf66aadc86d967ccc854c2"
+  version "0.2.10"
+  sha256 "fafb5eba77de7690a05669d5d7d41238d572dfc278804f5440245e1bce259b1d"
 
   # No `verified:` here: it is only for urls whose domain differs from the
   # homepage, and brew audit rejects it as redundant when they match.
