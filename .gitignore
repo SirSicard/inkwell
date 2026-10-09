@@ -16,11 +16,8 @@ build
 
 # Rust build artifacts
 target/
-src-tauri/target/
 
-# Tauri generated + signing material (NEVER commit)
-src-tauri/gen/
-src-tauri/.tauri-private.key
+# Tauri signing material (NEVER commit)
 *.tauri-private.key
 *.key.pub.bak
 .tauri/

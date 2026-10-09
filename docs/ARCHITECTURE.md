@@ -6,8 +6,8 @@ final pass, and a record with a summary and commitments). It is native on each O
 AppKit on the Mac and WinUI 3 on Windows, over one Rust core. Everything runs on the machine unless
 the user brings an API key.
 
-Status: being built. `main` still ships the Tauri app (0.2.x) until 1.0 replaces it; 0.2 is frozen
-on the `legacy/0.2` branch, and its architecture is in [legacy/ARCHITECTURE-0.2.md](legacy/ARCHITECTURE-0.2.md).
+Status: `main` is Inkwell 1.x. The Tauri app (0.2.x) it replaces lives only on the `legacy/0.2`
+branch, and its architecture is in [legacy/ARCHITECTURE-0.2.md](legacy/ARCHITECTURE-0.2.md).
 
 ```
             Mac shell (Swift)                         Windows shell (C#)
@@ -596,5 +596,5 @@ Checked after every change once the step that introduces them has landed:
 | I3 | No private data in the repo | a local pre-push check |
 | I4 | Realtime callbacks allocation-free | a thread-scoped guard around every audio callback |
 | I5 | No transcripts in logs | a privacy lint test |
-| I6 | The legacy app is untouched until 1.0 | no commits to `src/` or `src-tauri/` |
+| I6 | Ended at 1.0, when the 0.2 app left `main` (it lives on `legacy/0.2`) | none |
 | I7 | Shell budget as shipped | idle: 0 frames and < 0.1 % CPU over 2 min; live at 60 fps: ≤ 6 % p50 and ≤ 10 % p95 of one core; memory ≤ 150 MB plus the model |
