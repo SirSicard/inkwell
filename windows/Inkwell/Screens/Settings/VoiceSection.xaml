@@ -57,6 +57,7 @@
                         </Grid>
                     </local:WrapPanel>
                     <TextBlock Style="{StaticResource InkCaptionStyle}" Text="hold, speak, let go" />
+                    <TextBlock Style="{StaticResource InkCaptionStyle}" TextWrapping="Wrap" Text="A left-hand modifier on its own waits a moment before dictation starts, so its shortcuts keep working." />
                     <TextBlock x:Name="KeyMessage" TextWrapping="Wrap" Style="{StaticResource InkCaptionStyle}" />
                 </StackPanel>
             </local:SettingColumnsPanel>

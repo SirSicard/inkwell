@@ -226,8 +226,82 @@ public class ShortcutRecorderTests
             new ShortcutMessage("Can't use A: that key on its own would stop working everywhere else; add Ctrl, Alt or Win.", true),
             rig.Recorder.Message(ShortcutTarget.Dictation));
         Assert.Empty(rig.Sent.Commands.OfType<CoreCommand.SettingSet>());
+        // Still listening, dictation still paused, until a key is saved or Escape.
+        Assert.Equal(ShortcutTarget.Dictation, rig.Recorder.Recording);
+        Assert.True(rig.Dictation.SuspendedForRecording);
+        Assert.Equal($"{rig.Recorder.Message(ShortcutTarget.Dictation)!.Text} Press another key, or Escape to cancel.", rig.Announced[^1]);
+        rig.Press(Down(CapturedKey.Escape));
+        Assert.Null(rig.Recorder.Recording);
         Assert.IsType<CoreCommand.DictationEnable>(rig.Sent.Commands[^1]);
-        Assert.Equal(rig.Recorder.Message(ShortcutTarget.Dictation)!.Text, rig.Announced[^1]);
+    }
+
+    private const uint F1 = 0x70;
+    private const uint V = 0x56;
+
+    /// <summary>
+    /// The 1.0 report: Left Alt pressed alone was refused, and after that F1, and every key, "got
+    /// the same message". The recording ended at the refusal, its line stayed, and every later
+    /// press reached no recorder. Now the recorder goes on listening, and F1 is the next try.
+    /// </summary>
+    [Fact]
+    public void AfterARefusalTheNextKeyIsTheNextTry()
+    {
+        var rig = new Rig(key: "ctrl+v");
+        rig.Recorder.Start(ShortcutTarget.Dictation);
+        rig.Press(Down("left_alt"), Up("left_alt"));
+        Assert.Equal("left_alt", rig.Check.Binding);
+        // 1.0's words for it.
+        rig.Answer("", "a left-hand modifier on its own would start dictation with every shortcut that uses it; use a right-hand one, or add a key");
+        var refusal = "Can't use Left Alt: a left-hand modifier on its own would start dictation with every shortcut that uses it; use a right-hand one, or add a key.";
+        Assert.Equal(new ShortcutMessage(refusal, true), rig.Recorder.Message(ShortcutTarget.Dictation));
+        Assert.Equal(ShortcutTarget.Dictation, rig.Recorder.Recording);
+        Assert.Equal("Press the keys… (Esc cancels)", rig.Recorder.ButtonTitle(ShortcutTarget.Dictation));
+        Assert.Empty(rig.Sent.Commands.OfType<CoreCommand.DictationEnable>());
+
+        Assert.True(rig.Recorder.Feed(Down(F1)));
+        rig.Press(Up(F1));
+        Assert.Equal("f1", rig.Check.Binding);
+        Assert.Equal(new ShortcutMessage("Checking F1…", false), rig.Recorder.Message(ShortcutTarget.Dictation));
+        rig.Answer("f1");
+        Assert.Equal("f1", rig.Sent.Commands.OfType<CoreCommand.SettingSet>().Single().Value);
+        Assert.IsType<CoreCommand.DictationEnable>(rig.Sent.Commands[^1]);
+        Assert.Null(rig.Recorder.Recording);
+        Assert.Equal("Dictation key set to F1.", rig.Announced[^1]);
+    }
+
+    /// <summary>
+    /// Ctrl+V refused while Ctrl and V are still down: Ctrl's repeats and its release are that
+    /// try's, not Left Ctrl pressed alone. Pressed afresh, alone, it is the next try.
+    /// </summary>
+    [Fact]
+    public void KeysStillHeldFromARefusedTryAreNotTheNextOne()
+    {
+        var rig = new Rig();
+        rig.Recorder.Start(ShortcutTarget.Dictation);
+        rig.Press(Down("left_control"), Down(V));
+        Assert.Equal("ctrl+v", rig.Check.Binding);
+        rig.Answer("", "that's Paste, and using it for Inkwell would stop Paste working in every app; pick another key");
+        Assert.Equal(
+            "Can't use Ctrl+V: that's Paste, and using it for Inkwell would stop Paste working in every app; pick another key.",
+            rig.Recorder.Message(ShortcutTarget.Dictation)!.Text);
+        rig.Press(Down("left_control", repeat: true), Down(V, repeat: true), Up(V), Up("left_control"));
+        Assert.Single(rig.Sent.Commands.OfType<CoreCommand.HotkeyCheck>());
+        Assert.Equal(ShortcutTarget.Dictation, rig.Recorder.Recording);
+        rig.Press(Down("left_control"), Up("left_control"));
+        Assert.Equal("left_control", rig.Check.Binding);
+    }
+
+    /// <summary>A key the recorder has no name for says so, and the next press is the next try.</summary>
+    [Fact]
+    public void AnUnknownKeySaysSoAndListensOn()
+    {
+        var rig = new Rig();
+        rig.Recorder.Start(ShortcutTarget.Dictation);
+        rig.Press(Down(0x60), Up(0x60));
+        Assert.Equal("Inkwell doesn't know that key (keypad and media keys, for one). Try another.", rig.Recorder.Message(ShortcutTarget.Dictation)!.Text);
+        Assert.Equal(ShortcutTarget.Dictation, rig.Recorder.Recording);
+        rig.Press(Down(F13));
+        Assert.Equal("f13", rig.Check.Binding);
     }
 
     [Fact]
