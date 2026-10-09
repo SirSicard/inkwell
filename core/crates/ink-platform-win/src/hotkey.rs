@@ -28,6 +28,11 @@
 //!
 //! **Timestamps** are host time on the [`WinClock`] timebase: the hook's `time` (milliseconds on
 //! the tick counter) gives the event's age, which is taken off the clock's `now_ns`.
+//!
+//! **A lone left-hand modifier's wait** (`machine`) is a thread timer on the hook thread: the
+//! callback only posts [`WM_INK_ARM`] (as it posts the mask key's message), and the message loop
+//! sets the timer and, when it fires, asks the machine whether the hold starts. The loop then
+//! injects the mask key and reports the press, stamped at the key's press.
 #![cfg(windows)]
 
 pub(crate) mod binding;
@@ -96,6 +101,10 @@ pub(crate) const MASK_VK: u16 = 0xE8;
 /// The hook thread's message asking it to inject the mask key (posted from the hook callback,
 /// which does not inject from inside itself).
 const WM_INK_MASK: u32 = WM_APP + 2;
+
+/// The hook thread's message asking it to end a lone modifier's wait in `wParam` milliseconds
+/// (posted from the hook callback, which sets no timer itself). A newer one replaces it.
+const WM_INK_ARM: u32 = WM_APP + 3;
 
 /// How long `start` waits for the hook to be installed.
 const START_TIMEOUT: Duration = Duration::from_secs(5);
@@ -203,6 +212,21 @@ fn modifiers_down() -> u8 {
     bits
 }
 
+/// Whether a mouse button is down now: a modifier held with it is a click or a drag (Ctrl+click,
+/// Shift+drag), not a dictation. Reads key state only. **Hook thread.**
+fn pointer_down() -> bool {
+    [
+        vk::LBUTTON,
+        vk::RBUTTON,
+        vk::MBUTTON,
+        vk::XBUTTON1,
+        vk::XBUTTON2,
+    ]
+    .into_iter()
+    // SAFETY: GetAsyncKeyState takes any virtual key and only reads state.
+    .any(|key| unsafe { GetAsyncKeyState(key as i32) } < 0)
+}
+
 /// What the hook callback needs, kept on the hook thread.
 struct HookContext {
     sink: EventSink<HotkeyEvent>,
@@ -292,30 +316,68 @@ fn decide(event: &KBDLLHOOKSTRUCT, message: u32) -> bool {
         let _ =
             unsafe { PostThreadMessageW(GetCurrentThreadId(), WM_INK_MASK, WPARAM(0), LPARAM(0)) };
     }
+    if let Some(ms) = verdict.arm_ms {
+        // SAFETY: posts to this thread's own queue; the loop sets the timer after the callback.
+        let _ = unsafe {
+            PostThreadMessageW(
+                GetCurrentThreadId(),
+                WM_INK_ARM,
+                WPARAM(ms as usize),
+                LPARAM(0),
+            )
+        };
+    }
     if let Some(edge) = verdict.edge {
-        CONTEXT.with(|c| {
-            if let Some(context) = c.borrow().as_ref() {
-                // SAFETY: no arguments; reads the tick counter.
-                let now_tick = unsafe { GetTickCount() };
-                let at_ns = event_time_ns(context.clock.now_ns(), now_tick, event.time);
-                match edge {
-                    Edge::Pressed => {
+        report(edge, verdict.at_ms.unwrap_or(event.time));
+    }
+    verdict.swallow
+}
+
+/// Reports an edge that happened at `at_tick_ms` on the tick counter. **Hook thread**, in the
+/// callback or the loop.
+fn report(edge: Edge, at_tick_ms: u32) {
+    CONTEXT.with(|c| {
+        if let Some(context) = c.borrow().as_ref() {
+            // SAFETY: no arguments; reads the tick counter.
+            let now_tick = unsafe { GetTickCount() };
+            let at_ns = event_time_ns(context.clock.now_ns(), now_tick, at_tick_ms);
+            match edge {
+                Edge::Pressed => {
+                    emit(context, HotkeyEvent::Pressed { at_ns });
+                }
+                Edge::Released => {
+                    emit(context, HotkeyEvent::Released { at_ns });
+                }
+                Edge::ReleasedThenPressed => {
+                    // If the release panicked, the key now trails (`emit`): no press after it.
+                    if emit(context, HotkeyEvent::Released { at_ns }) {
                         emit(context, HotkeyEvent::Pressed { at_ns });
-                    }
-                    Edge::Released => {
-                        emit(context, HotkeyEvent::Released { at_ns });
-                    }
-                    Edge::ReleasedThenPressed => {
-                        // If the release panicked, the key now trails (`emit`): no press after it.
-                        if emit(context, HotkeyEvent::Released { at_ns }) {
-                            emit(context, HotkeyEvent::Pressed { at_ns });
-                        }
                     }
                 }
             }
-        });
+        }
+    });
+}
+
+/// A lone modifier's wait ended (its timer fired): the machine decides, the mask key goes in
+/// while the modifier is still down, then the press is reported. Returns a further wait, if the
+/// timer fired early. **Hook thread**, in the loop.
+fn wait_ended() -> Option<u32> {
+    // SAFETY: no arguments; reads the tick counter.
+    let now = unsafe { GetTickCount() };
+    let verdict = MACHINE.with(|m| {
+        let mut machine = m.get()?;
+        let verdict = machine.on_timer(now, pointer_down());
+        m.set(Some(machine));
+        Some(verdict)
+    })?;
+    if verdict.mask {
+        crate::insert::send_mask_key();
     }
-    verdict.swallow
+    if let Some(edge) = verdict.edge {
+        report(edge, verdict.at_ms.unwrap_or(now));
+    }
+    verdict.arm_ms
 }
 
 /// The hook thread: install, pump, uninstall. A hold in progress at the end is `Cancelled`.
@@ -413,6 +475,8 @@ fn pump(mut hook: HHOOK) -> (HHOOK, bool) {
     // SAFETY: a thread timer (no window, no callback); it posts WM_TIMER to this thread.
     let tick_timer = unsafe { SetTimer(None, 0, heartbeat::INTERVAL_MS, None) };
     let mut check_timer = 0usize;
+    // A lone modifier's wait: one at a time, a newer press replacing it.
+    let mut wait_timer = 0usize;
     let lost = loop {
         // SAFETY: a live MSG; any window of this thread.
         let got = unsafe { GetMessageW(&mut msg, None, 0, 0) };
@@ -423,6 +487,15 @@ fn pump(mut hook: HHOOK) -> (HHOOK, bool) {
         }
         match msg.message {
             WM_INK_MASK => crate::insert::send_mask_key(),
+            WM_INK_ARM => arm(&mut wait_timer, msg.wParam.0 as u32),
+            WM_TIMER if wait_timer != 0 && msg.wParam.0 == wait_timer => {
+                // SAFETY: the timer made above on this thread.
+                let _ = unsafe { KillTimer(None, wait_timer) };
+                wait_timer = 0;
+                if let Some(ms) = wait_ended() {
+                    arm(&mut wait_timer, ms);
+                }
+            }
             WM_TIMER if tick_timer != 0 && msg.wParam.0 == tick_timer => {
                 // The keyboard settings may have changed (FilterKeys switched on, say).
                 let gap = repeat_gap_now();
@@ -478,13 +551,24 @@ fn pump(mut hook: HHOOK) -> (HHOOK, bool) {
             _ => {}
         }
     };
-    for timer in [tick_timer, check_timer] {
+    for timer in [tick_timer, check_timer, wait_timer] {
         if timer != 0 {
             // SAFETY: timers made on this thread.
             let _ = unsafe { KillTimer(None, timer) };
         }
     }
     (hook, lost)
+}
+
+/// Sets the lone modifier's wait timer to `ms`, replacing the one in `timer`. **Hook thread**, in
+/// the loop.
+fn arm(timer: &mut usize, ms: u32) {
+    if *timer != 0 {
+        // SAFETY: a timer this thread made.
+        let _ = unsafe { KillTimer(None, *timer) };
+    }
+    // SAFETY: a one-shot thread timer, killed when it fires or is replaced.
+    *timer = unsafe { SetTimer(None, 0, ms, None) };
 }
 
 /// After a reinstall: counted. A hold in progress is kept, because the miss may have been false

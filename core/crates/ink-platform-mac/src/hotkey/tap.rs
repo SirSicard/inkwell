@@ -21,7 +21,7 @@ use objc2_core_graphics::{
     CGEventTapProxy, CGEventType,
 };
 
-use super::binding::Binding;
+use super::binding::{Binding, LONE_MODIFIER_DELAY_NS};
 use super::machine::{Edge, HoldMachine, TapInput, Verdict};
 use super::{SYNTHETIC_EVENT_MARK, event_time_ns};
 use crate::ax;
@@ -149,6 +149,8 @@ struct Hold {
     sink: EventSink<HotkeyEvent>,
     panics: Arc<AtomicU64>,
     lost: Cell<bool>,
+    /// When a lone left-hand modifier's wait began: its press, in host ns.
+    waiting_since_ns: Cell<u64>,
 }
 
 impl Hold {
@@ -158,6 +160,7 @@ impl Hold {
             sink,
             panics,
             lost: Cell::new(false),
+            waiting_since_ns: Cell::new(0),
         }
     }
 
@@ -166,19 +169,49 @@ impl Hold {
         let mut machine = self.machine.get();
         let verdict = machine.on(input);
         self.machine.set(machine);
+        if verdict.arm {
+            self.waiting_since_ns.set(at_ns());
+        }
         if let Some(edge) = verdict.edge {
-            let event = match edge {
-                Edge::Pressed => HotkeyEvent::Pressed { at_ns: at_ns() },
-                Edge::Released => HotkeyEvent::Released { at_ns: at_ns() },
-                Edge::Cancelled => HotkeyEvent::Cancelled,
-            };
-            // A failed cancel is counted and left there: the hold is already reset, and trying
-            // again would only panic again.
-            if !deliver(&self.sink, &self.panics, event) && edge != Edge::Cancelled {
-                self.start_over();
-            }
+            self.report(edge, at_ns);
         }
         verdict
+    }
+
+    fn report(&self, edge: Edge, at_ns: impl Fn() -> u64) {
+        let event = match edge {
+            Edge::Pressed => HotkeyEvent::Pressed { at_ns: at_ns() },
+            Edge::Released => HotkeyEvent::Released { at_ns: at_ns() },
+            Edge::Cancelled => HotkeyEvent::Cancelled,
+        };
+        // A failed cancel is counted and left there: the hold is already reset, and trying
+        // again would only panic again.
+        if !deliver(&self.sink, &self.panics, event) && edge != Edge::Cancelled {
+            self.start_over();
+        }
+    }
+
+    /// When a lone left-hand modifier's wait ends, in host ns, if one is on.
+    fn deadline_ns(&self) -> Option<u64> {
+        self.machine.get().is_waiting().then(|| {
+            self.waiting_since_ns
+                .get()
+                .saturating_add(LONE_MODIFIER_DELAY_NS)
+        })
+    }
+
+    /// The tap thread's loop woke at `now_ns`: a wait that has ended starts the hold, stamped at
+    /// the key's press. Early, it does nothing.
+    fn wait_ended(&self, now_ns: u64) {
+        if self.deadline_ns().is_none_or(|deadline| now_ns < deadline) {
+            return;
+        }
+        let mut machine = self.machine.get();
+        let verdict = machine.on_timer();
+        self.machine.set(machine);
+        if let Some(edge) = verdict.edge {
+            self.report(edge, || self.waiting_since_ns.get());
+        }
     }
 
     /// The OS took the hotkey away: reset and report `Lost`, once.
@@ -266,7 +299,11 @@ fn decode(event_type: CGEventType, event: &CGEvent) -> Option<TapInput> {
     {
         return Some(TapInput::Disabled);
     }
-    if event_type != CGEventType::FlagsChanged
+    let pointer = event_type == CGEventType::LeftMouseDown
+        || event_type == CGEventType::RightMouseDown
+        || event_type == CGEventType::OtherMouseDown;
+    if !pointer
+        && event_type != CGEventType::FlagsChanged
         && event_type != CGEventType::KeyDown
         && event_type != CGEventType::KeyUp
     {
@@ -275,6 +312,9 @@ fn decode(event_type: CGEventType, event: &CGEvent) -> Option<TapInput> {
     let field = |f| CGEvent::integer_value_field(Some(event), f);
     if field(CGEventField::EventSourceUserData) == SYNTHETIC_EVENT_MARK {
         return None;
+    }
+    if pointer {
+        return Some(TapInput::PointerDown);
     }
     // Keycodes are 16-bit; anything else matches no binding.
     let keycode = u16::try_from(field(CGEventField::KeyboardEventKeycode)).unwrap_or(u16::MAX);
@@ -382,14 +422,23 @@ fn run(
         stop.store(true, Ordering::Release);
     }
 
+    // A lone left-hand modifier's wait is kept here, outside the callback: the loop returns after
+    // each event the tap handles, and while a wait is on it runs only until the wait ends. The
+    // callback sets no timer and allocates nothing for it. Other bindings run as before.
+    let waits = matches!(binding, Binding::Modifier(key) if key.waits());
     let mut invalidated_by_system = false;
     while !stop.load(Ordering::Acquire) && !context.hold.is_lost() {
-        // Blocks until the run loop is stopped or its only source is gone. Finished means the
-        // port was invalidated: by `shutdown` (the flag is set first), or by the system.
-        if CFRunLoop::run_in_mode(default, 1.0e10, false) == CFRunLoopRunResult::Finished {
+        let seconds = context.hold.deadline_ns().map_or(1.0e10, |deadline| {
+            deadline.saturating_sub(clock.now_ns()) as f64 / 1.0e9
+        });
+        // Blocks until the run loop is stopped or its only source is gone (or, for a binding that
+        // waits, an event was handled or the wait is up). Finished means the port was
+        // invalidated: by `shutdown` (the flag is set first), or by the system.
+        if CFRunLoop::run_in_mode(default, seconds, waits) == CFRunLoopRunResult::Finished {
             invalidated_by_system = !stop.load(Ordering::Acquire);
             break;
         }
+        context.hold.wait_ended(clock.now_ns());
     }
     port.invalidate();
     run_loop.remove_source(Some(&source), common);
@@ -546,6 +595,65 @@ mod tests {
                 HotkeyEvent::Pressed { at_ns: 42 },
                 HotkeyEvent::Released { at_ns: 42 }
             ]
+        );
+    }
+
+    /// A lone left-hand modifier through the hold, as the core hears it: nothing until the loop
+    /// wakes at the wait's end, then one press stamped at the key's press; early wakes do nothing.
+    /// Another key while it waits, or a quick tap, and the core hears nothing at all.
+    #[test]
+    fn a_lone_left_modifier_reaches_the_core_once_its_wait_ends() {
+        let left_cmd = |down| TapInput::FlagsChanged {
+            keycode: keycode::LEFT_COMMAND,
+            flags: if down {
+                flag::COMMAND | flag::DEVICE_LEFT_COMMAND
+            } else {
+                0
+            },
+        };
+        let (sink, got) = sink(|_| false);
+        let binding = Binding::parse("left_command").expect("valid");
+        let hold = Hold::new(binding, sink, Arc::new(AtomicU64::new(0)));
+        let press_ns = 1_000_000_000;
+        assert!(!hold.on(left_cmd(true), || press_ns).swallow, "the app's");
+        assert_eq!(hold.deadline_ns(), Some(press_ns + LONE_MODIFIER_DELAY_NS));
+        hold.wait_ended(press_ns + LONE_MODIFIER_DELAY_NS - 1);
+        assert!(got.lock().expect("unpoisoned").is_empty(), "too early");
+        hold.wait_ended(press_ns + LONE_MODIFIER_DELAY_NS);
+        assert_eq!(hold.deadline_ns(), None);
+        assert!(hold.is_held());
+        assert!(
+            !hold
+                .on(left_cmd(false), || press_ns + 2_000_000_000)
+                .swallow
+        );
+        assert_eq!(
+            *got.lock().expect("unpoisoned"),
+            [
+                HotkeyEvent::Pressed { at_ns: press_ns },
+                HotkeyEvent::Released {
+                    at_ns: press_ns + 2_000_000_000
+                }
+            ]
+        );
+
+        got.lock().expect("unpoisoned").clear();
+        hold.on(left_cmd(true), AT);
+        let c = TapInput::KeyDown {
+            keycode: 0x08,
+            flags: flag::COMMAND,
+            autorepeat: false,
+        };
+        assert!(!hold.on(c, AT).swallow, "Cmd+C copies");
+        assert_eq!(hold.deadline_ns(), None);
+        hold.wait_ended(u64::MAX);
+        hold.on(left_cmd(false), AT);
+        hold.on(left_cmd(true), AT);
+        hold.on(left_cmd(false), AT);
+        hold.wait_ended(u64::MAX);
+        assert!(
+            got.lock().expect("unpoisoned").is_empty(),
+            "a shortcut and a tap"
         );
     }
 

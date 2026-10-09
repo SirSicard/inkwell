@@ -2,15 +2,19 @@
 //!
 //! Two shapes:
 //! - **A modifier held on its own:** `"fn"`, `"right_option"`, `"right_command"`,
-//!   `"right_control"`, `"right_shift"`. These arrive as `flagsChanged` events only, and the
-//!   right-hand keys are told apart from the left by the device-dependent flag bits, because the
-//!   public Command (or Option...) flag is set for either side. Left-hand modifiers alone are not
-//!   offered: watching left Command would start a hold on every Cmd+C in every app.
+//!   `"right_control"`, `"right_shift"`, and the left-hand ones, `"left_option"`,
+//!   `"left_command"`, `"left_control"`, `"left_shift"` (the names without a side mean the left
+//!   key). These arrive as `flagsChanged` events only, and each side is told apart by the
+//!   device-dependent flag bits, because the public Command (or Option...) flag is set for either
+//!   side. A left-hand modifier carries the shortcuts every app uses (Cmd+C), so its hold starts
+//!   only once it has been held alone for [`LONE_MODIFIER_DELAY_NS`], and never if another key, a
+//!   modifier or a click came first (see `machine`).
 //! - **A chord:** modifiers and one key, `"ctrl+shift+space"`, `"cmd+option+d"`, or a function
 //!   key alone, `"f13"`. Any other key needs a modifier, or the tap would swallow it everywhere;
 //!   Shift alone counts only with a function key (with any other it already types or selects),
 //!   and a chord naming Fn takes no key the keyboard sets Fn on by itself (the function row, the
-//!   arrows), where the tap could not tell Fn from no Fn.
+//!   arrows), where the tap could not tell Fn from no Fn. The editing shortcuts every app shares
+//!   (Cmd+C, Cmd+V..., [`EDITING_SHORTCUTS`]) are refused: the tap would take them from every app.
 //!
 //! The user may choose any binding of those shapes. [`check_token`] is the one judge: it gives a
 //! binding's canonical spelling, or a [`refusal`] in plain words, and a binding parses exactly
@@ -40,6 +44,14 @@ pub(crate) mod keycode {
     pub const RIGHT_CONTROL: u16 = 0x3E;
     /// `kVK_RightShift`.
     pub const RIGHT_SHIFT: u16 = 0x3C;
+    /// `kVK_Option`: left Option.
+    pub const LEFT_OPTION: u16 = 0x3A;
+    /// `kVK_Command`: left Command.
+    pub const LEFT_COMMAND: u16 = 0x37;
+    /// `kVK_Control`: left Control.
+    pub const LEFT_CONTROL: u16 = 0x3B;
+    /// `kVK_Shift`: left Shift.
+    pub const LEFT_SHIFT: u16 = 0x38;
     /// `kVK_Space`.
     pub const SPACE: u16 = 0x31;
     /// `kVK_Return`.
@@ -89,6 +101,23 @@ pub(crate) mod flag {
     pub const DEVICE_RIGHT_OPTION: u64 = 0x0000_0040;
     /// `NX_DEVICERCTLKEYMASK`.
     pub const DEVICE_RIGHT_CONTROL: u64 = 0x0000_2000;
+    /// `NX_DEVICELCTLKEYMASK`.
+    pub const DEVICE_LEFT_CONTROL: u64 = 0x0000_0001;
+    /// `NX_DEVICELSHIFTKEYMASK`.
+    pub const DEVICE_LEFT_SHIFT: u64 = 0x0000_0002;
+    /// `NX_DEVICELCMDKEYMASK`.
+    pub const DEVICE_LEFT_COMMAND: u64 = 0x0000_0008;
+    /// `NX_DEVICELALTKEYMASK`.
+    pub const DEVICE_LEFT_OPTION: u64 = 0x0000_0020;
+    /// Every side of every modifier, by its device bit.
+    pub const DEVICE_MODIFIERS: u64 = DEVICE_LEFT_CONTROL
+        | DEVICE_LEFT_SHIFT
+        | DEVICE_RIGHT_SHIFT
+        | DEVICE_LEFT_COMMAND
+        | DEVICE_RIGHT_COMMAND
+        | DEVICE_LEFT_OPTION
+        | DEVICE_RIGHT_OPTION
+        | DEVICE_RIGHT_CONTROL;
 
     /// The modifiers a chord compares. Caps Lock, the numeric-pad bit and Fn are left out unless
     /// the chord names Fn: laptops set the Fn bit on arrows and function keys by themselves.
@@ -103,7 +132,17 @@ pub(crate) mod event_type {
     pub const KEY_UP: u32 = 11;
     /// `kCGEventFlagsChanged`.
     pub const FLAGS_CHANGED: u32 = 12;
+    /// `kCGEventLeftMouseDown`.
+    pub const LEFT_MOUSE_DOWN: u32 = 1;
+    /// `kCGEventRightMouseDown`.
+    pub const RIGHT_MOUSE_DOWN: u32 = 3;
+    /// `kCGEventOtherMouseDown`.
+    pub const OTHER_MOUSE_DOWN: u32 = 25;
 }
+
+/// How long a left-hand modifier must be held alone before its hold starts: long enough that the
+/// modifier of a typed shortcut (Cmd+C) has met its key, short enough to talk at once.
+pub(crate) const LONE_MODIFIER_DELAY_NS: u64 = 300_000_000;
 
 /// A modifier key held on its own.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -118,6 +157,14 @@ pub(crate) enum ModifierKey {
     RightControl,
     /// Right Shift.
     RightShift,
+    /// Left Option, held alone past [`LONE_MODIFIER_DELAY_NS`].
+    LeftOption,
+    /// Left Command, likewise.
+    LeftCommand,
+    /// Left Control, likewise.
+    LeftControl,
+    /// Left Shift, likewise.
+    LeftShift,
 }
 
 impl ModifierKey {
@@ -129,6 +176,10 @@ impl ModifierKey {
             Self::RightCommand => "right_command",
             Self::RightControl => "right_control",
             Self::RightShift => "right_shift",
+            Self::LeftOption => "left_option",
+            Self::LeftCommand => "left_command",
+            Self::LeftControl => "left_control",
+            Self::LeftShift => "left_shift",
         }
     }
 
@@ -140,6 +191,10 @@ impl ModifierKey {
             Self::RightCommand => keycode::RIGHT_COMMAND,
             Self::RightControl => keycode::RIGHT_CONTROL,
             Self::RightShift => keycode::RIGHT_SHIFT,
+            Self::LeftOption => keycode::LEFT_OPTION,
+            Self::LeftCommand => keycode::LEFT_COMMAND,
+            Self::LeftControl => keycode::LEFT_CONTROL,
+            Self::LeftShift => keycode::LEFT_SHIFT,
         }
     }
 
@@ -152,7 +207,33 @@ impl ModifierKey {
             Self::RightCommand => flag::DEVICE_RIGHT_COMMAND,
             Self::RightControl => flag::DEVICE_RIGHT_CONTROL,
             Self::RightShift => flag::DEVICE_RIGHT_SHIFT,
+            Self::LeftOption => flag::DEVICE_LEFT_OPTION,
+            Self::LeftCommand => flag::DEVICE_LEFT_COMMAND,
+            Self::LeftControl => flag::DEVICE_LEFT_CONTROL,
+            Self::LeftShift => flag::DEVICE_LEFT_SHIFT,
         }
+    }
+
+    /// A left-hand modifier: it waits to be held alone, and its events are the app's.
+    pub(crate) const fn waits(self) -> bool {
+        matches!(
+            self,
+            Self::LeftOption | Self::LeftCommand | Self::LeftControl | Self::LeftShift
+        )
+    }
+
+    /// Whether `flags`, at this key's press, hold no modifier but this key: no other key's device
+    /// bit, and no public flag but its own (Fn included).
+    pub(crate) const fn alone_in(self, flags: u64) -> bool {
+        let public = match self {
+            Self::Fn => flag::SECONDARY_FN,
+            Self::RightOption | Self::LeftOption => flag::OPTION,
+            Self::RightCommand | Self::LeftCommand => flag::COMMAND,
+            Self::RightControl | Self::LeftControl => flag::CONTROL,
+            Self::RightShift | Self::LeftShift => flag::SHIFT,
+        };
+        let others = flag::CHORD_MODIFIERS | flag::SECONDARY_FN;
+        flags & others & !public == 0 && flags & flag::DEVICE_MODIFIERS & !self.down_mask() == 0
     }
 }
 
@@ -217,6 +298,14 @@ impl Binding {
     pub(crate) fn event_mask(self) -> u64 {
         let keys = (1 << event_type::KEY_DOWN) | (1 << event_type::KEY_UP);
         match self {
+            // A left-hand modifier also hears what ends its wait: a key, or a click.
+            Self::Modifier(key) if key.waits() => {
+                (1 << event_type::FLAGS_CHANGED)
+                    | (1 << event_type::KEY_DOWN)
+                    | (1 << event_type::LEFT_MOUSE_DOWN)
+                    | (1 << event_type::RIGHT_MOUSE_DOWN)
+                    | (1 << event_type::OTHER_MOUSE_DOWN)
+            }
             Self::Modifier(_) => 1 << event_type::FLAGS_CHANGED,
             Self::Chord(Chord { modifiers: 0, .. }) => keys,
             Self::Chord(_) => keys | (1 << event_type::FLAGS_CHANGED),
@@ -243,15 +332,59 @@ pub(crate) mod refusal {
     /// The keyboard sets Fn on the function row and the arrows by itself, so Fn named with one of
     /// them cannot be told from the key alone.
     pub const FN_ALREADY: &str = "the keyboard sets Fn on that key by itself, so Fn with it can't be told from the key alone; leave Fn out";
-    /// Watching left Command would start a hold on every Cmd+C in every app.
-    pub const LEFT_MODIFIER_ALONE: &str = "a left-hand modifier on its own would start dictation with every shortcut that uses it; use a right-hand one, or add a key";
-    pub const MODIFIERS_ONLY: &str = "modifiers together need a key with them; hold one right-hand modifier on its own, or add a key";
+    pub const MODIFIERS_ONLY: &str =
+        "modifiers together need a key with them; hold one modifier on its own, or add a key";
     /// Caps Lock reports a switch, not a hold.
     pub const CAPS_LOCK: &str = "Caps Lock switches on and off instead of being held";
     pub const UNKNOWN_KEY: &str = "Inkwell doesn't know that key";
     pub const UNKNOWN_MODIFIER: &str = "one of the modifiers isn't one Inkwell knows";
     pub const REPEATED_MODIFIER: &str = "a modifier is named twice";
     pub const EMPTY_PART: &str = "a part of the shortcut is empty";
+}
+
+/// The reason for one of [`EDITING_SHORTCUTS`], in the words [`refusal`] uses.
+macro_rules! editing {
+    ($what:literal) => {
+        concat!(
+            "that's ",
+            $what,
+            ", and using it for Inkwell would stop ",
+            $what,
+            " working in every app; pick another key"
+        )
+    };
+}
+
+/// Command and a key that every app (or macOS) gives the same meaning: held as a hotkey, the tap
+/// would take it from every app (holding Cmd+V to dictate would stop paste working everywhere), so
+/// they are refused, not warned about. (keycode, reason); letters by ANSI position, as every token.
+pub(crate) const EDITING_SHORTCUTS: &[(u16, &str)] = &[
+    (0x08, editing!("Copy")),
+    (keycode::ANSI_V, editing!("Paste")),
+    (0x07, editing!("Cut")),
+    (0x06, editing!("Undo")),
+    (0x00, editing!("Select All")),
+    (0x01, editing!("Save")),
+    (0x03, editing!("Find")),
+    (0x23, editing!("Print")),
+    (0x0D, editing!("Close")),
+    (0x11, editing!("New Tab")),
+    (0x2D, editing!("New")),
+    (0x0C, editing!("Quit")),
+    (keycode::TAB, editing!("the app switcher")),
+    (keycode::SPACE, editing!("Spotlight")),
+];
+
+/// Why `modifiers`+`code` is refused as an editing shortcut, if it is one: exactly Command and the
+/// key (Shift+Cmd+V, say, is not on the list).
+fn editing_shortcut(modifiers: u64, code: u16) -> Option<&'static str> {
+    if modifiers != flag::COMMAND {
+        return None;
+    }
+    EDITING_SHORTCUTS
+        .iter()
+        .find(|(key, _)| *key == code)
+        .map(|(_, why)| *why)
 }
 
 fn parse_token(token: &str) -> Result<Binding, &'static str> {
@@ -269,9 +402,7 @@ fn parse_token(token: &str) -> Result<Binding, &'static str> {
                 keycode: code,
             }));
         }
-        return Err(if is_modifier_name(&token) {
-            refusal::LEFT_MODIFIER_ALONE
-        } else if token == "caps_lock" || token == "capslock" {
+        return Err(if token == "caps_lock" || token == "capslock" {
             refusal::CAPS_LOCK
         } else if key_code(&token).is_some() {
             refusal::KEY_ALONE
@@ -309,6 +440,9 @@ fn parse_token(token: &str) -> Result<Binding, &'static str> {
     if bits & flag::SECONDARY_FN != 0 && sets_fn(code) {
         return Err(refusal::FN_ALREADY);
     }
+    if let Some(why) = editing_shortcut(bits, code) {
+        return Err(why);
+    }
     Ok(Binding::Chord(Chord {
         modifiers: bits,
         keycode: code,
@@ -322,6 +456,13 @@ fn modifier_key(token: &str) -> Option<ModifierKey> {
         "right_command" | "right_cmd" => ModifierKey::RightCommand,
         "right_control" | "right_ctrl" => ModifierKey::RightControl,
         "right_shift" => ModifierKey::RightShift,
+        // A modifier's name without a side is its left-hand key, the one most keyboards have.
+        "left_option" | "left_opt" | "left_alt" | "option" | "opt" | "alt" => {
+            ModifierKey::LeftOption
+        }
+        "left_command" | "left_cmd" | "command" | "cmd" => ModifierKey::LeftCommand,
+        "left_control" | "left_ctrl" | "control" | "ctrl" => ModifierKey::LeftControl,
+        "left_shift" | "shift" => ModifierKey::LeftShift,
         _ => return None,
     })
 }
@@ -346,8 +487,7 @@ fn chord_modifier(name: &str) -> Option<u64> {
     })
 }
 
-/// A modifier named without a side, or by its left-hand key: never watched on its own, and never
-/// a chord's key.
+/// A modifier named without a side, or by its left-hand key: never a chord's key.
 fn is_modifier_name(name: &str) -> bool {
     let side = name.strip_prefix("left_").unwrap_or(name);
     chord_modifier(side).is_some_and(|bit| bit != flag::SECONDARY_FN)
@@ -577,9 +717,7 @@ mod tests {
             "",
             "   ",
             "hyper",
-            "left_option",
-            "option",
-            "cmd",
+            "left_fn",
             "right_fn",
             "a",
             "space",
@@ -647,6 +785,9 @@ mod tests {
     #[test]
     fn event_types_match_core_graphics() {
         use objc2_core_graphics::CGEventType as T;
+        assert_eq!(event_type::LEFT_MOUSE_DOWN, T::LeftMouseDown.0);
+        assert_eq!(event_type::RIGHT_MOUSE_DOWN, T::RightMouseDown.0);
+        assert_eq!(event_type::OTHER_MOUSE_DOWN, T::OtherMouseDown.0);
         assert_eq!(event_type::KEY_DOWN, T::KeyDown.0);
         assert_eq!(event_type::KEY_UP, T::KeyUp.0);
         assert_eq!(event_type::FLAGS_CHANGED, T::FlagsChanged.0);
@@ -655,9 +796,9 @@ mod tests {
     #[test]
     fn letters_are_the_ansi_positions_not_the_alphabet() {
         // V is the paste key; the Unicode fallback types on A.
-        assert_eq!(chord("cmd+v").keycode, keycode::ANSI_V);
-        assert_eq!(chord("cmd+a").keycode, 0x00);
-        assert_eq!(chord("cmd+s").keycode, 0x01);
+        assert_eq!(chord("ctrl+v").keycode, keycode::ANSI_V);
+        assert_eq!(chord("ctrl+a").keycode, 0x00);
+        assert_eq!(chord("ctrl+s").keycode, 0x01);
     }
 
     #[test]
@@ -802,12 +943,7 @@ mod tests {
             ("fn+left", refusal::FN_ALREADY),
             ("fn+ctrl+home", refusal::FN_ALREADY),
             ("fn+forward_delete", refusal::FN_ALREADY),
-            ("left_option", refusal::LEFT_MODIFIER_ALONE),
-            ("option", refusal::LEFT_MODIFIER_ALONE),
-            ("cmd", refusal::LEFT_MODIFIER_ALONE),
-            ("left_command", refusal::LEFT_MODIFIER_ALONE),
-            ("left_shift", refusal::LEFT_MODIFIER_ALONE),
-            ("ctrl", refusal::LEFT_MODIFIER_ALONE),
+            ("cmd+v", editing!("Paste")),
             ("ctrl+shift", refusal::MODIFIERS_ONLY),
             ("fn+right_option", refusal::MODIFIERS_ONLY),
             ("cmd+right_option", refusal::MODIFIERS_ONLY),
@@ -860,8 +996,125 @@ mod tests {
         }
     }
 
+    /// A left-hand modifier on its own binds (its hold waits, in `machine`), by its own name or the
+    /// modifier's name alone, and reads back as the left key's token.
+    #[test]
+    fn a_left_hand_modifier_alone_binds() {
+        let cases = [
+            ("left_option", ModifierKey::LeftOption),
+            ("option", ModifierKey::LeftOption),
+            ("alt", ModifierKey::LeftOption),
+            ("left_command", ModifierKey::LeftCommand),
+            ("cmd", ModifierKey::LeftCommand),
+            ("left_control", ModifierKey::LeftControl),
+            ("ctrl", ModifierKey::LeftControl),
+            ("left_shift", ModifierKey::LeftShift),
+            (" Shift ", ModifierKey::LeftShift),
+        ];
+        for (token, key) in cases {
+            assert_eq!(
+                Binding::parse(token),
+                Ok(Binding::Modifier(key)),
+                "{token:?}"
+            );
+            assert_eq!(check_token(token), Ok(key.token().to_owned()), "{token:?}");
+            assert!(key.waits(), "{token:?}");
+        }
+        for key in [
+            ModifierKey::Fn,
+            ModifierKey::RightOption,
+            ModifierKey::RightCommand,
+            ModifierKey::RightControl,
+            ModifierKey::RightShift,
+        ] {
+            assert!(!key.waits(), "{key:?} starts at its press, as in 1.0");
+        }
+        // Values from `HIToolbox/Events.h` and `IOLLEvent.h`, pinned as the right-hand ones are.
+        assert_eq!(ModifierKey::LeftOption.keycode(), 58);
+        assert_eq!(ModifierKey::LeftCommand.keycode(), 55);
+        assert_eq!(ModifierKey::LeftControl.keycode(), 59);
+        assert_eq!(ModifierKey::LeftShift.keycode(), 56);
+        assert_eq!(ModifierKey::LeftControl.down_mask(), 0x0000_0001);
+        assert_eq!(ModifierKey::LeftShift.down_mask(), 0x0000_0002);
+        assert_eq!(ModifierKey::LeftCommand.down_mask(), 0x0000_0008);
+        assert_eq!(ModifierKey::LeftOption.down_mask(), 0x0000_0020);
+        // Still never a chord's key.
+        assert_eq!(check_token("cmd+left_option"), Err(refusal::MODIFIERS_ONLY));
+    }
+
+    /// A key is alone when nothing but its own device bit and public flag is set at its press.
+    #[test]
+    fn a_left_modifier_is_alone_only_without_another_modifier() {
+        let key = ModifierKey::LeftCommand;
+        assert!(key.alone_in(flag::COMMAND | flag::DEVICE_LEFT_COMMAND | 0x100));
+        assert!(
+            key.alone_in(flag::COMMAND | flag::DEVICE_LEFT_COMMAND | 0x0001_0000),
+            "Caps Lock is a switch, not a modifier held"
+        );
+        assert!(
+            !key.alone_in(flag::COMMAND | flag::DEVICE_LEFT_COMMAND | flag::DEVICE_RIGHT_COMMAND)
+        );
+        assert!(!key.alone_in(
+            flag::COMMAND | flag::DEVICE_LEFT_COMMAND | flag::SHIFT | flag::DEVICE_LEFT_SHIFT
+        ));
+        assert!(!key.alone_in(flag::COMMAND | flag::DEVICE_LEFT_COMMAND | flag::SECONDARY_FN));
+    }
+
+    /// Command and an editing key every app (or macOS) shares is refused with what it does, in
+    /// plain words: the tap would take it from every app. Exactly Command: with others it is fine.
+    #[test]
+    fn the_editing_shortcuts_every_app_shares_are_refused() {
+        let cases = [
+            ("cmd+c", "Copy"),
+            ("cmd+v", "Paste"),
+            ("cmd+x", "Cut"),
+            ("cmd+z", "Undo"),
+            ("cmd+a", "Select All"),
+            ("cmd+s", "Save"),
+            ("cmd+f", "Find"),
+            ("cmd+p", "Print"),
+            ("cmd+w", "Close"),
+            ("cmd+t", "New Tab"),
+            ("cmd+n", "New"),
+            ("cmd+q", "Quit"),
+            ("cmd+tab", "the app switcher"),
+            ("cmd+space", "Spotlight"),
+            ("Command+V", "Paste"),
+        ];
+        for (token, what) in cases {
+            let why = check_token(token).expect_err(token);
+            assert!(
+                why.starts_with(&format!("that's {what}, ")),
+                "{token}: {why}"
+            );
+            assert!(why.ends_with("; pick another key"), "{token}: {why}");
+        }
+        assert_eq!(
+            check_token("cmd+v"),
+            Err(
+                "that's Paste, and using it for Inkwell would stop Paste working in every app; pick another key"
+            )
+        );
+        for token in [
+            "shift+cmd+v",
+            "option+cmd+c",
+            "ctrl+v",
+            "ctrl+space",
+            "cmd+b",
+            "cmd+f1",
+        ] {
+            assert!(check_token(token).is_ok(), "{token}");
+        }
+        assert_eq!(EDITING_SHORTCUTS.len(), 14);
+    }
+
     #[test]
     fn the_tap_only_sees_the_events_its_binding_needs() {
+        assert_eq!(
+            Binding::parse("left_command").map(Binding::event_mask),
+            Ok((1 << 12) | (1 << 10) | (1 << 1) | (1 << 3) | (1 << 25)),
+            "a left-hand modifier hears the key or click that ends its wait"
+        );
         assert_eq!(Binding::parse("fn").map(Binding::event_mask), Ok(1 << 12));
         assert_eq!(
             Binding::parse("ctrl+shift+space").map(Binding::event_mask),
