@@ -21,12 +21,15 @@ import { createOrbCanvas, withShellStrength, hexToRgb, InkMotion, OrbWander, pal
 // ShellInk's opacity behind text is the strength itself. 100 % left the lead under the glow below
 // 3:1; 85 % keeps it readable and still glows.
 const STRENGTH = 0.85;
-const HOLD = 6; // seconds the big orb holds between legs
+const HOLD = 1.5; // seconds the big orb holds between legs (livelier than the app's, on purpose)
 const DROP_BG = hexToRgb('#17161e'); // the Drop's background in base.css (.drop)
 const W = WANDER_MAC.x[1] - WANDER_MAC.x[0];
-// The Mac's region, the same size, centred across the hero and raised by 0.06 so the orb's centre
-// stays behind the headline rather than the lead.
-const BOUNDS = { x: [0.5 - W / 2, 0.5 + W / 2], y: [WANDER_MAC.y[0] - 0.06, WANDER_MAC.y[1] - 0.06] } as const;
+// The Mac's region widened to 1.8 times, centred across the hero and raised by 0.06 so the orb's
+// centre stays behind the headline rather than the lead. The page's orb roams more than the app's.
+const BOUNDS = {
+  x: [0.5 - (W * 1.8) / 2, 0.5 + (W * 1.8) / 2],
+  y: [WANDER_MAC.y[0] - 0.1, WANDER_MAC.y[1] - 0.02],
+} as const;
 
 // The loop, in seconds.
 const T_DOWN = 1.0, T_UP = 5.4, FADE_IN = 0.25, FADE_OUT = 0.35, T_TYPE = 5.9, PER_CHAR = 0.028, LOOP = 11;
@@ -47,6 +50,8 @@ export function startHero(root: HTMLElement) {
   let orb: OrbCanvas | null = null;
   const motion = new InkMotion();
   const wander = new OrbWander(BOUNDS, [ORB.drop.x, (BOUNDS.y[0] + BOUNDS.y[1]) / 2]);
+  wander.cruise = OrbWander.cruise * 4; // about four times the app's pace
+  wander.shortestLeg = 4;
   let nextLeg = 1.5; // the first leg starts soon after the page settles
   let clock = 0; // seconds the loop has run
   let orbTime = 0; // the shader's time: advances only on frames that draw, so a hold never jumps

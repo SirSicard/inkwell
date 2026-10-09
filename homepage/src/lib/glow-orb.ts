@@ -393,6 +393,9 @@ export class OrbWander {
   static shortestLeg = 12;
   static minimumHop = 1 / 3;
   readonly bounds: Bounds;
+  /** This orb's mean leg speed and shortest leg: the app's unless a page asks for livelier. */
+  cruise = OrbWander.cruise;
+  shortestLeg = OrbWander.shortestLeg;
   private random: () => number;
   private from: V2;
   private to: V2;
@@ -433,7 +436,7 @@ export class OrbWander {
     this.from = from;
     this.to = to;
     this.start = t;
-    this.duration = Math.max(OrbWander.shortestLeg, distance / OrbWander.cruise);
+    this.duration = Math.max(this.shortestLeg, distance / this.cruise);
   }
 
   /** The first of eight random spots at least minimumHop of the diagonal away, else the farthest. */
