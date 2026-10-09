@@ -341,8 +341,8 @@ mod tests {
     #[test]
     fn a_parse_error_names_its_line() {
         let broken = INK_WGSL.replacen(
-            "let soft = mix(0.24, 0.012, blot);",
-            "let soft = mix(0.24, 0.012, blot)",
+            "let soft = mix(0.24, 0.025, blot);",
+            "let soft = mix(0.24, 0.025, blot)",
             1,
         );
         assert_ne!(broken, INK_WGSL, "the line to break is in the shader");

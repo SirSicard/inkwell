@@ -1,63 +1,59 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Settings > Modes: each mode with how it writes and the apps it is picked for, each app by its
-     name and icon (never its exe name). As the Mac's ModesSection and the design's board: name,
-     chips, then the apps' tiles and names. -->
+<!-- Settings > Modes: each mode with how it writes, the apps it is picked for (each by its name and
+     icon, never its exe name) and what stops its polish, with Edit…, Delete and (for its own model)
+     Confirm… or Allow…, then "Add a mode". As the Mac's ModesSection. The rows are built in code
+     (ModesSection.xaml.cs): each row's name sits beside its controls, or above them where the card
+     is narrow (SettingColumnsPanel). The editor is a dialog (ModeEditorDialog). -->
 <UserControl
     x:Class="Inkwell.Screens.ModesSection"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:core="using:Inkwell.Core.Screens"
-    xmlns:local="using:Inkwell.Screens"
-    Loaded="OnLoaded">
-    <StackPanel Spacing="10">
-        <StackPanel Orientation="Horizontal" Spacing="10">
+    xmlns:local="using:Inkwell.Screens">
+    <UserControl.Resources>
+        <!-- A trait or Polish's chip, and Polish's when it is wanted and off: quieter, outlined. -->
+        <Style x:Key="ModeChipStyle" TargetType="Border">
+            <Setter Property="Padding" Value="8,2" />
+            <Setter Property="CornerRadius" Value="10" />
+            <Setter Property="Background" Value="{ThemeResource InkChipBrush}" />
+        </Style>
+        <Style x:Key="ModeMutedChipStyle" TargetType="Border">
+            <Setter Property="Padding" Value="8,2" />
+            <Setter Property="CornerRadius" Value="10" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="BorderBrush" Value="{ThemeResource InkBorderBrush}" />
+        </Style>
+        <Style x:Key="ModeChipTextStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Foreground" Value="{ThemeResource InkTextBrush}" />
+        </Style>
+        <Style x:Key="ModeMutedChipTextStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Foreground" Value="{ThemeResource InkSecondaryTextBrush}" />
+        </Style>
+        <Style x:Key="ModeRowStyle" TargetType="Border">
+            <Setter Property="Padding" Value="0,10" />
+            <Setter Property="BorderThickness" Value="0,0,0,1" />
+            <Setter Property="BorderBrush" Value="{ThemeResource InkSeparatorBrush}" />
+        </Style>
+    </UserControl.Resources>
+    <StackPanel Spacing="14">
+        <!-- The heading and its line; the line under it where they don't fit side by side. -->
+        <local:LineOrStackPanel Fill="1" FillMinimum="150" Spacing="10" StackSpacing="2">
             <TextBlock AutomationProperties.HeadingLevel="Level2" Style="{StaticResource InkHeadingStyle}" Text="Modes" />
-            <TextBlock VerticalAlignment="Bottom" Margin="0,0,0,2" Style="{StaticResource InkCaptionStyle}" Text="Picked by the app you&#x2019;re typing in" />
+            <TextBlock VerticalAlignment="Bottom" Margin="0,0,0,2" Style="{StaticResource InkCaptionStyle}" Text="Picked by the app you&#x2019;re typing in" TextWrapping="Wrap" />
+        </local:LineOrStackPanel>
+        <StackPanel x:Name="Failure" Spacing="6" Visibility="Collapsed">
+            <TextBlock Style="{StaticResource InkAlertTextStyle}" Text="{x:Bind local:ModesSection.FailedText}" />
+            <Button x:Name="TryAgainButton" Content="Try again" Click="OnTryAgain" />
         </StackPanel>
-        <TextBlock Style="{StaticResource InkAlertTextStyle}" FontSize="14" Text="{x:Bind local:ModesSection.FailedText}" Visibility="{x:Bind Model.Failed, Mode=OneWay}" />
-        <ItemsRepeater x:Name="Rows">
-            <ItemsRepeater.ItemTemplate>
-                <DataTemplate x:DataType="local:ModeRowItem">
-                    <Grid
-                        Padding="0,10"
-                        BorderBrush="{ThemeResource InkSeparatorBrush}"
-                        BorderThickness="0,0,0,1"
-                        ColumnSpacing="12">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="150" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Style="{StaticResource InkBodyStyle}" FontWeight="SemiBold" Text="{x:Bind Title}" />
-                        <StackPanel Grid.Column="1" Spacing="8">
-                            <ItemsRepeater ItemsSource="{x:Bind Traits}">
-                                <ItemsRepeater.Layout>
-                                    <StackLayout Orientation="Horizontal" Spacing="6" />
-                                </ItemsRepeater.Layout>
-                                <ItemsRepeater.ItemTemplate>
-                                    <DataTemplate x:DataType="x:String">
-                                        <Border Padding="8,2" Background="{ThemeResource InkChipBrush}" CornerRadius="10">
-                                            <TextBlock FontSize="12" Foreground="{ThemeResource InkTextBrush}" Text="{x:Bind}" />
-                                        </Border>
-                                    </DataTemplate>
-                                </ItemsRepeater.ItemTemplate>
-                            </ItemsRepeater>
-                            <StackPanel Orientation="Horizontal" Spacing="6">
-                                <ItemsRepeater ItemsSource="{x:Bind Apps}" Visibility="{x:Bind HasApps}">
-                                    <ItemsRepeater.Layout>
-                                        <StackLayout Orientation="Horizontal" Spacing="6" />
-                                    </ItemsRepeater.Layout>
-                                    <ItemsRepeater.ItemTemplate>
-                                        <DataTemplate x:DataType="core:AppLabel">
-                                            <local:AppIconTile App="{x:Bind}" />
-                                        </DataTemplate>
-                                    </ItemsRepeater.ItemTemplate>
-                                </ItemsRepeater>
-                                <TextBlock VerticalAlignment="Center" MaxLines="2" Style="{StaticResource InkCaptionStyle}" Text="{x:Bind AppsText}" />
-                            </StackPanel>
-                        </StackPanel>
-                    </Grid>
-                </DataTemplate>
-            </ItemsRepeater.ItemTemplate>
-        </ItemsRepeater>
+        <TextBlock x:Name="ProblemText" AutomationProperties.LiveSetting="Assertive" Style="{StaticResource InkAlertTextStyle}" Visibility="Collapsed" />
+        <Button
+            x:Name="StartOverButton"
+            AutomationProperties.HelpText="Your stored modes can&#x2019;t be read. This replaces them with the default mode."
+            Click="OnStartOver"
+            Content="Start over (replaces the damaged modes)&#x2026;"
+            Visibility="Collapsed" />
+        <StackPanel x:Name="Rows" />
+        <Button x:Name="AddButton" AutomationProperties.HelpText="Opens the mode editor" Click="OnAdd" Content="Add a mode" />
     </StackPanel>
 </UserControl>

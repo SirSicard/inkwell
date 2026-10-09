@@ -52,7 +52,7 @@ fn without_consent_the_switch_and_a_polish_mode_send_nothing() {
         .settings(|s| {
             s.modes = polishing_mode();
             s.polish_wish = true;
-            s.polish_consent = None;
+            s.polish_consents = Vec::new();
         })
         .build();
     rig.dictate_fixture("as said", 1.5, -25.0);
@@ -69,7 +69,7 @@ fn with_on_device_consent_an_on_device_model_polishes() {
         .llm(llm.clone())
         .settings(|s| {
             s.modes = polishing_mode();
-            s.polish_consent = Some(LlmConsent::OnDevice);
+            s.polish_consents = vec![LlmConsent::OnDevice];
         })
         .build();
     rig.dictate_fixture("as said", 1.5, -25.0);
@@ -124,7 +124,7 @@ fn a_model_moved_to_the_cloud_gets_nothing_until_the_user_agrees_again() {
         .llm(llm.clone())
         .settings(|s| {
             s.modes = polishing_mode();
-            s.polish_consent = Some(LlmConsent::OnDevice);
+            s.polish_consents = vec![LlmConsent::OnDevice];
         })
         .build();
     rig.answer_anything("as said");
@@ -157,10 +157,10 @@ fn consent_for_one_provider_does_not_cover_another() {
         .llm(llm.clone())
         .settings(|s| {
             s.modes = polishing_mode();
-            s.polish_consent = Some(LlmConsent::Cloud {
+            s.polish_consents = vec![LlmConsent::Cloud {
                 endpoint: "shell engine cloud-a".into(),
                 name: "Cloud A".into(),
-            });
+            }];
         })
         .build();
     rig.dictate_fixture("as said", 1.5, -25.0);
@@ -220,7 +220,7 @@ fn the_consent_is_checked_on_the_model_the_call_reaches() {
         .llm(llm.clone())
         .settings(|s| {
             s.modes = polishing_mode();
-            s.polish_consent = Some(LlmConsent::OnDevice);
+            s.polish_consents = vec![LlmConsent::OnDevice];
         })
         .build();
     rig.dictate_fixture("as said", 1.5, -25.0);
@@ -243,7 +243,7 @@ fn a_voice_command_turns_polish_on_only_where_the_user_agreed() {
             .settings(|s| {
                 s.commands.enabled = true;
                 s.polish_wish = false;
-                s.polish_consent = consent.clone();
+                s.polish_consents = consent.clone().into_iter().collect();
             })
             .build();
         let command = speech_48k(1.0, -30.0, 41);
@@ -312,7 +312,7 @@ fn polish_consent_is_not_edit_consent_nor_the_reverse() {
         .llm(llm.clone())
         .settings(|s| {
             s.modes = polishing_mode();
-            s.polish_consent = Some(LlmConsent::OnDevice);
+            s.polish_consents = vec![LlmConsent::OnDevice];
             s.edit_consent = None;
         })
         .build();
@@ -325,7 +325,7 @@ fn polish_consent_is_not_edit_consent_nor_the_reverse() {
         .llm(llm.clone())
         .settings(|s| {
             s.modes = polishing_mode();
-            s.polish_consent = None;
+            s.polish_consents = Vec::new();
             s.edit_consent = Some(LlmConsent::OnDevice);
         })
         .build();

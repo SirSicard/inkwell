@@ -33,6 +33,12 @@ const BLOCK: usize = 480;
 /// its grace, 550 ms after the release on the mock clock). See [`VoiceRig::release_take`].
 const TAIL_ROOM: f64 = 0.4;
 
+/// Right Option in this platform's one spelling: `right_option` on the Mac, the same key's
+/// `right_alt` on Windows (`ink_ffi::hotkey`).
+fn right_option() -> String {
+    ink_ffi::hotkey::spelling("right_option")
+}
+
 struct VoiceRig {
     core: Option<Core>,
     events: Arc<Recorder>,
@@ -86,13 +92,59 @@ impl VoiceRig {
         store: Arc<dyn ink_core::Store>,
         rows: Vec<EngineRow>,
     ) -> Self {
+        Self::build_full(
+            label,
+            with_platform,
+            store,
+            rows,
+            Vec::new(),
+            Default::default(),
+            "hello world",
+        )
+    }
+
+    /// A rig whose registry also lists `installed`, installed, with `local` for the core's own
+    /// language model, and whose speech engine hears `heard` in every take.
+    fn with_local(
+        label: &str,
+        installed: Vec<EngineRow>,
+        local: ink_ffi::runtime::LocalParts,
+        heard: &str,
+    ) -> Self {
+        let sqlite = Arc::new(ink_store::SqliteStore::open_in_memory().unwrap());
+        let mut rig = Self::build_full(
+            label,
+            true,
+            sqlite.clone(),
+            Vec::new(),
+            installed,
+            local,
+            heard,
+        );
+        rig.sqlite = Some(sqlite);
+        rig
+    }
+
+    fn build_full(
+        label: &str,
+        with_platform: bool,
+        store: Arc<dyn ink_core::Store>,
+        rows: Vec<EngineRow>,
+        installed: Vec<EngineRow>,
+        local: ink_ffi::runtime::LocalParts,
+        heard: &str,
+    ) -> Self {
         let dir = TempDir::new(label);
         let platform = Arc::new(MockPlatform::new());
         let edit = Arc::new(MockPlatform::new());
         let row = test_row("test-asr");
         let models = ModelDir::new(dir.path().join("models"));
         install(&models, &row);
-        let loader = MockLoader::new(Behaviour::Say("hello world".into()));
+        for r in &installed {
+            install(&models, r);
+        }
+        let rows = [rows, installed].concat();
+        let loader = MockLoader::new(Behaviour::Say(heard.into()));
         let parts = Parts {
             store,
             clock: platform.clock(),
@@ -106,6 +158,7 @@ impl VoiceRig {
             }),
             data_dir: dir.path().to_owned(),
             permissions: Arc::new(ink_ffi::queries::NoPermissionProbe),
+            local,
             meetings: Default::default(),
         };
         let events = Recorder::new();
@@ -410,13 +463,13 @@ fn changing_the_key_setting_rebinds_it_at_once() {
     let ready = rig
         .events
         .wait_for(WAIT, |v| {
-            v["type"] == "dictation.ready" && v["key"] == "right_option"
+            v["type"] == "dictation.ready" && v["key"] == right_option()
         })
         .expect("rebound");
     assert!(ready.get("ref").is_none());
     assert_eq!(
         rig.platform.hotkey_binding().map(|b| b.0).as_deref(),
-        Some("right_option")
+        Some(right_option().as_str())
     );
     // A key the platform cannot hold is refused before it is stored.
     assert!(
@@ -467,25 +520,163 @@ fn the_edit_key_is_held_on_its_own_and_never_the_dictation_key() {
         rig.edit.hotkey_binding().map(|b| b.0).as_deref(),
         Some("right_command")
     );
-    // The dictation key itself as the edit key: refused, and said so.
+    // The conflicting write is refused before it can replace the saved key or either hook.
     rig.command(&format!(
-        r#"{{"cmd":"setting.set","key":"dictation.edit_key","value":"{DEFAULT_KEY}"}}"#
+        r#"{{"cmd":"setting.set","key":"dictation.edit_key","value":"{DEFAULT_KEY}","id":"same-edit-key"}}"#
     ));
-    let same = rig
+    let failed = rig
         .events
         .wait_for(WAIT, |v| {
-            v["type"] == "dictation.ready" && v.get("edit_key_error").is_some()
+            v["type"] == "command.failed" && v["id"] == "same-edit-key"
         })
-        .expect("refused");
-    assert!(same.get("edit_key").is_none());
-    assert!(rig.edit.hotkey_binding().is_none());
-    // Off: let go of.
+        .expect("conflicting write refused");
+    assert!(failed["message"].as_str().unwrap().contains("dictation"));
+    assert_eq!(
+        rig.setting("dictation.edit_key").as_deref(),
+        Some("right_command")
+    );
+    assert_eq!(
+        rig.edit.hotkey_binding().map(|b| b.0).as_deref(),
+        Some("right_command")
+    );
+    assert_eq!(
+        rig.platform.hotkey_binding().map(|b| b.0).as_deref(),
+        Some(DEFAULT_KEY)
+    );
+    // Off remains a valid distinct edit-key choice and releases its hook.
     rig.command(r#"{"cmd":"setting.set","key":"dictation.edit_key","value":"off"}"#);
-    assert!(rig.events.wait_count("dictation.ready", 4, WAIT));
+    assert!(rig.events.wait_count("dictation.ready", 3, WAIT));
     assert!(rig.edit.hotkey_binding().is_none());
 }
 
-/// Taking the edit key as the dictation key lets go of the edit key first: one key, one tap.
+/// Any key the Mac can watch is a dictation key: a chord is stored in its one spelling, bound,
+/// and named so in dictation.ready. One it cannot watch is refused with the reason, and the key
+/// before stays.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_chord_is_a_dictation_key_stored_in_its_one_spelling() {
+    let rig = VoiceRig::new("chord-key");
+    rig.enable();
+    rig.command(r#"{"cmd":"setting.set","key":"dictation.key","value":"Shift+Ctrl+Space"}"#);
+    let value = rig
+        .events
+        .wait_for(WAIT, |v| {
+            v["type"] == "setting.value" && v["key"] == "dictation.key"
+        })
+        .expect("stored");
+    assert_eq!(value["value"], "ctrl+shift+space");
+    rig.events
+        .wait_for(WAIT, |v| {
+            v["type"] == "dictation.ready" && v["key"] == "ctrl+shift+space"
+        })
+        .expect("rebound");
+    assert_eq!(
+        rig.platform.hotkey_binding().map(|b| b.0).as_deref(),
+        Some("ctrl+shift+space")
+    );
+    let refused = rig
+        .core()
+        .command(r#"{"cmd":"setting.set","key":"dictation.key","value":"shift+a"}"#)
+        .expect_err("a capital is typing");
+    assert!(refused.contains("capital"), "{refused}");
+    assert_eq!(
+        rig.setting("dictation.key").as_deref(),
+        Some("ctrl+shift+space")
+    );
+    // A take on the chord, as on any key: the hold machinery past the tap does not care.
+    let inserted = rig.dictate(1.0, 5);
+    assert_eq!(inserted["type"], "dictation.inserted", "{inserted}");
+}
+
+/// The edit key takes the same shapes; the dictation key under another spelling is still the
+/// dictation key.
+#[cfg(target_os = "macos")]
+#[test]
+fn the_edit_key_may_be_a_chord_but_never_the_dictation_key_respelt() {
+    let rig = VoiceRig::new("chord-edit-key");
+    rig.enable();
+    rig.command(r#"{"cmd":"setting.set","key":"dictation.key","value":"ctrl+shift+space"}"#);
+    rig.events
+        .wait_for(WAIT, |v| v["key"] == "ctrl+shift+space")
+        .expect("rebound");
+    rig.command(r#"{"cmd":"setting.set","key":"dictation.edit_key","value":"cmd+option+e"}"#);
+    rig.events
+        .wait_for(WAIT, |v| {
+            v["type"] == "dictation.ready" && v["edit_key"] == "option+cmd+e"
+        })
+        .expect("edit chord bound");
+    assert_eq!(
+        rig.edit.hotkey_binding().map(|b| b.0).as_deref(),
+        Some("option+cmd+e")
+    );
+    rig.command(r#"{"cmd":"setting.set","key":"dictation.edit_key","value":"shift+ctrl+space","id":"respelt-edit-key"}"#);
+    let failed = rig
+        .events
+        .wait_for(WAIT, |v| {
+            v["type"] == "command.failed" && v["id"] == "respelt-edit-key"
+        })
+        .expect("canonical conflict refused before storage");
+    assert!(failed["message"].as_str().unwrap().contains("dictation"));
+    assert_eq!(
+        rig.setting("dictation.edit_key").as_deref(),
+        Some("option+cmd+e")
+    );
+    assert_eq!(
+        rig.edit.hotkey_binding().map(|b| b.0).as_deref(),
+        Some("option+cmd+e")
+    );
+    // A distinct shortcut can still be saved and rebound after the rejected write.
+    rig.command(r#"{"cmd":"setting.set","key":"dictation.edit_key","value":"f13"}"#);
+    rig.events
+        .wait_for(WAIT, |v| {
+            v["type"] == "dictation.ready" && v["edit_key"] == "f13"
+        })
+        .expect("distinct key rebound");
+    assert_eq!(rig.setting("dictation.edit_key").as_deref(), Some("f13"));
+}
+
+/// consent.allow turns voice edit on with a chord, stored in its one spelling.
+#[cfg(target_os = "macos")]
+#[test]
+fn edit_consent_takes_a_chord_for_its_key() {
+    let rig = VoiceRig::new("chord-edit-consent");
+    rig.register_local();
+    let state = rig.ask(
+        r#"{"cmd":"consent.allow","feature":"edit","to":"on_device","key":"Option+Cmd+E","id":"c1"}"#,
+        "c1",
+    );
+    assert_eq!(state["on"], true, "{state}");
+    assert_eq!(
+        rig.setting("dictation.edit_key").as_deref(),
+        Some("option+cmd+e")
+    );
+    assert!(
+        rig.core()
+            .command(r#"{"cmd":"consent.allow","feature":"edit","to":"on_device","key":"e"}"#)
+            .is_err(),
+        "a key the Mac cannot watch"
+    );
+}
+
+/// A key stored outside setting.set (an older build, an import) reaches the platform as it is,
+/// never quietly swapped for the default: the platform holds it, or refuses it by name.
+#[test]
+fn a_stored_key_reaches_the_platform_as_it_is() {
+    let rig = VoiceRig::new("stored-key");
+    rig.core()
+        .shared()
+        .store
+        .set_setting("dictation.key", "f13")
+        .unwrap();
+    let ready = rig.enable();
+    assert_eq!(ready["key"], "f13", "{ready}");
+    assert_eq!(
+        rig.platform.hotkey_binding().map(|b| b.0).as_deref(),
+        Some("f13")
+    );
+}
+
+/// Taking the edit key for dictation requires explicitly turning edit off first: one key, one tap.
 #[test]
 fn the_edit_keys_key_taken_for_dictation_is_let_go_of_as_the_edit_key() {
     let rig = VoiceRig::new("swap-keys");
@@ -494,15 +685,43 @@ fn the_edit_keys_key_taken_for_dictation_is_let_go_of_as_the_edit_key() {
     rig.events
         .wait_for(WAIT, |v| v["edit_key"] == "right_command")
         .expect("edit key bound");
+    rig.command(
+        r#"{"cmd":"setting.set","key":"dictation.key","value":"right_command","id":"swap-clash"}"#,
+    );
+    rig.events
+        .wait_for(WAIT, |v| {
+            v["type"] == "command.failed" && v["id"] == "swap-clash"
+        })
+        .expect("conflicting dictation write refused");
+    assert_eq!(rig.setting("dictation.key"), None);
+    assert_eq!(
+        rig.setting("dictation.edit_key").as_deref(),
+        Some("right_command")
+    );
+    assert_eq!(
+        rig.edit.hotkey_binding().map(|b| b.0).as_deref(),
+        Some("right_command")
+    );
+    assert_eq!(
+        rig.platform.hotkey_binding().map(|b| b.0).as_deref(),
+        Some(DEFAULT_KEY)
+    );
+    // An explicit Off frees the edit key before transferring it to dictation.
+    rig.command(r#"{"cmd":"setting.set","key":"dictation.edit_key","value":"off"}"#);
+    rig.events
+        .wait_for(WAIT, |v| {
+            v["type"] == "dictation.ready" && v.get("edit_key").is_none()
+        })
+        .expect("edit disabled");
     rig.command(r#"{"cmd":"setting.set","key":"dictation.key","value":"right_command"}"#);
     let ready = rig
         .events
         .wait_for(WAIT, |v| {
             v["type"] == "dictation.ready" && v["key"] == "right_command"
         })
-        .expect("rebound");
+        .expect("distinct dictation key rebound");
     assert!(ready.get("edit_key").is_none(), "{ready}");
-    assert!(ready.get("edit_key_error").is_some(), "{ready}");
+    assert!(ready.get("edit_key_error").is_none(), "{ready}");
     assert!(rig.edit.hotkey_binding().is_none());
     assert_eq!(
         rig.platform.hotkey_binding().map(|b| b.0).as_deref(),
@@ -659,6 +878,429 @@ fn modes_listed_and_dictation_agree_on_the_default_mode_polishing() {
     assert_eq!(listed["modes"][0]["polish"], true, "{listed}");
 }
 
+// --- Modes edited in Settings (feat/core-modes-edit) ------------------------------------------
+
+impl VoiceRig {
+    /// Sends a `modes.save` or `modes.delete` (with id `id`) while dictation runs, and waits for
+    /// its answer and for the running dictation to take the change.
+    fn change_modes(&self, json: &str, id: &str) -> Value {
+        let ready = self.events.count("dictation.ready");
+        let answer = self.ask(json, id);
+        assert_eq!(answer["type"], "modes.listed", "{answer}");
+        assert!(
+            self.events.wait_count("dictation.ready", ready + 1, WAIT),
+            "the running dictation never took the change"
+        );
+        answer
+    }
+
+    /// The default mode on `model` (a `polish_model` id), while dictation runs.
+    fn default_on(&self, model: &str, id: &str) -> Value {
+        self.change_modes(
+            &format!(
+                r#"{{"cmd":"modes.save","mode":{{"id":"default","polish_model":"{model}"}},"id":"{id}"}}"#
+            ),
+            id,
+        )
+    }
+
+    /// Turns local-only mode on or off, as Settings > AI does, and waits for it to be said.
+    fn local_only(&self, on: bool) {
+        let value = if on { "on" } else { "off" };
+        let said = self.events.count("setting.value");
+        self.command(&format!(
+            r#"{{"cmd":"setting.set","key":"llm.local_only","value":"{value}"}}"#
+        ));
+        assert!(
+            self.events.wait_count("setting.value", said + 1, WAIT),
+            "local-only never changed"
+        );
+    }
+
+    fn focus_on(&self, app: &str) {
+        self.platform.set_focus(ink_core::FocusInfo {
+            app: Some(ink_core::AppRef {
+                id: app.into(),
+                pid: Some(1),
+                name: "An app".into(),
+            }),
+            secure_input: false,
+        });
+    }
+}
+
+/// A mode saved in Settings writes the next take in the app it names; deleted, its app goes back
+/// to the default mode. The first save writes 1.0's own document.
+#[test]
+fn a_saved_mode_reaches_a_running_dictation_at_once() {
+    let rig = VoiceRig::new("modes-save");
+    rig.enable();
+    rig.focus_on("com.example.chat");
+    assert_eq!(rig.dictate(1.0, 61)["text"], "Hello world.");
+    let listed = rig.change_modes(
+        r#"{"cmd":"modes.save","mode":{"name":"Chat","style":"relaxed","apps":["com.example.chat"]},"id":"s1"}"#,
+        "s1",
+    );
+    let chat = listed["modes"][1]["id"].as_str().unwrap().to_owned();
+    assert_eq!(
+        listed["saved"],
+        chat.as_str(),
+        "the new mode's id, for the editor"
+    );
+    assert!(rig.setting(ink_ffi::queries::MODES_KEY).is_some());
+    assert_eq!(rig.dictate(1.0, 62)["text"], "hello world");
+    rig.change_modes(
+        &format!(r#"{{"cmd":"modes.delete","mode":"{chat}","id":"d1"}}"#),
+        "d1",
+    );
+    assert_eq!(rig.dictate(1.0, 63)["text"], "Hello world.");
+    rig.events.assert_valid();
+}
+
+/// A mode polishes on its own model, found at each take: one on this machine, under on-device
+/// consent; a cloud one that consent does not cover gets nothing; one let go of gets nothing and
+/// the take says so. The AI setting's model is never used in a mode's place. The listing names
+/// every model a mode can pick, where it sends and whether the consent covers it.
+#[test]
+fn a_mode_polishes_on_its_own_model_only_where_the_consent_covers_it() {
+    let rig = VoiceRig::new("modes-model");
+    let setting = rig.register_local();
+    let own = rig.register_model("other-llm", "other", true, "Hello world, mode!");
+    let remote = rig.register_remote();
+    rig.allow_on_device("c1");
+
+    let listed = rig.ask(r#"{"cmd":"modes.list","id":"l1"}"#, "l1");
+    assert_eq!(
+        listed["setting_polish_model"], "engine:local-llm",
+        "{listed}"
+    );
+    let models = listed["polish_models"].as_array().unwrap();
+    let ids: Vec<&str> = models.iter().map(|m| m["id"].as_str().unwrap()).collect();
+    assert_eq!(
+        ids,
+        ["engine:local-llm", "engine:other-llm", "engine:remote-llm"]
+    );
+    assert_eq!(models[1]["to"], "on_device");
+    assert_eq!(models[1]["allowed"], true);
+    assert_eq!(models[2]["to"], "cloud");
+    assert_eq!(models[2]["name"], "remote");
+    assert_eq!(
+        models[2]["allowed"], false,
+        "on-device consent does not cover it"
+    );
+
+    rig.enable();
+    let unknown = rig.fails(
+        r#"{"cmd":"modes.save","mode":{"id":"default","polish_model":"engine:nope"},"id":"u1"}"#,
+        "u1",
+    );
+    assert_eq!(unknown["code"], "model_unknown");
+
+    rig.default_on("engine:other-llm", "s1");
+    assert_eq!(rig.dictate(1.0, 64)["text"], "Hello world, mode!");
+    assert_eq!(own.calls.load(Ordering::SeqCst), 1);
+
+    rig.default_on("engine:remote-llm", "s2");
+    // The consent's refusal, not local-only mode's (which is asked first).
+    rig.local_only(false);
+    assert_eq!(rig.dictate(1.0, 65)["text"], "Hello world.");
+    assert_eq!(remote.calls.load(Ordering::SeqCst), 0, "nothing sent");
+    let refused = rig.warnings("polish_not_allowed");
+    assert_eq!(refused.len(), 1);
+    assert_eq!(
+        refused[0]["message"], "remote",
+        "names the model's destination"
+    );
+
+    rig.default_on("engine:other-llm", "s3");
+    rig.unregister("other-llm");
+    assert_eq!(rig.dictate(1.0, 66)["text"], "Hello world.");
+    assert_eq!(rig.warnings("polish_model_missing").len(), 1);
+    assert_eq!(own.calls.load(Ordering::SeqCst), 1, "let go of: not called");
+    assert_eq!(
+        setting.calls.load(Ordering::SeqCst),
+        0,
+        "never the AI setting's model in a mode's place"
+    );
+    // The mode still names it, and the listing no longer lists it.
+    let after = rig.ask(r#"{"cmd":"modes.list","id":"l2"}"#, "l2");
+    assert_eq!(after["modes"][0]["polish_model"], "engine:other-llm");
+    assert_eq!(after["polish_models"].as_array().unwrap().len(), 2);
+    rig.events.assert_valid();
+}
+
+/// A mode's own model goes through local-only mode like every call: a cloud model the user did
+/// agree to is still refused while local-only is on.
+#[test]
+fn a_mode_s_cloud_model_is_refused_while_local_only_is_on() {
+    let rig = VoiceRig::new("modes-local-only");
+    let remote = rig.register_remote();
+    let state = rig.ask(
+        r#"{"cmd":"consent.allow","feature":"polish","to":"cloud","endpoint":"shell engine remote-llm","id":"a1"}"#,
+        "a1",
+    );
+    assert_eq!(state["allowed"], true, "{state}");
+    rig.enable();
+    rig.default_on("engine:remote-llm", "s1");
+    assert_eq!(rig.dictate(1.0, 67)["text"], "Hello world.");
+    assert_eq!(remote.calls.load(Ordering::SeqCst), 0, "never called");
+    let failed = rig.warnings("polish_failed");
+    assert!(
+        failed
+            .last()
+            .and_then(|w| w["message"].as_str())
+            .is_some_and(|m| m.contains("local-only")),
+        "{failed:?}"
+    );
+    rig.events.assert_valid();
+}
+
+/// The stored modes cannot be read: dictation goes on in the built-in default mode and polishes
+/// nothing, even with polish on and its consent given, since the user's modes may send each to a
+/// model of its own (or to none) and which cannot be known. `dictation.ready` names the modes.
+#[test]
+fn unreadable_modes_polish_nothing_at_dictation_time() {
+    let rig = VoiceRig::new("modes-unreadable");
+    let model = rig.register_local();
+    rig.allow_on_device("c1");
+    rig.core()
+        .shared()
+        .store
+        .set_setting(ink_ffi::queries::MODES_KEY, "{not json")
+        .unwrap();
+    let ready = rig.enable();
+    assert!(
+        ready["settings_error"]
+            .as_str()
+            .is_some_and(|e| e.contains("the modes")),
+        "{ready}"
+    );
+    assert_eq!(rig.dictate(1.0, 68)["text"], "Hello world.");
+    assert_eq!(model.calls.load(Ordering::SeqCst), 0, "nothing sent");
+    rig.events.assert_valid();
+}
+
+/// The owner's decision (2026-10-05): one polish consent per destination. The AI setting's model
+/// on this machine and a Chat mode on a cloud model each polish under their own consent; revoking
+/// one stops only the modes on it; revoking the last turns polish off. `consent.state` lists them.
+#[test]
+fn two_modes_on_two_destinations_polish_each_under_its_own_consent() {
+    let rig = VoiceRig::new("consent-per-destination");
+    let local = rig.register_local();
+    let cloud = rig.register_model("remote-llm", "remote", false, "Hello world, cloud!");
+    rig.local_only(false);
+    rig.allow_on_device("c1");
+    // Not the AI setting's model (that is local-llm): one a mode can pick, so it can be agreed to.
+    let state = rig.ask(
+        r#"{"cmd":"consent.allow","feature":"polish","to":"cloud","endpoint":"shell engine remote-llm","id":"c2"}"#,
+        "c2",
+    );
+    assert_eq!(state["type"], "consent.state", "{state}");
+    assert_eq!(
+        state["allowed"], true,
+        "the AI setting's model is still covered"
+    );
+    let consents = state["consents"].as_array().unwrap();
+    assert_eq!(consents.len(), 2, "{state}");
+    assert_eq!(consents[0]["to"], "on_device");
+    assert_eq!(consents[1]["to"], "cloud");
+    assert_eq!(consents[1]["endpoint"], "shell engine remote-llm");
+    assert_eq!(consents[1]["name"], "remote");
+    let stored: Value = serde_json::from_str(&rig.setting("llm.consent.polish").unwrap()).unwrap();
+    assert_eq!(stored.as_array().map(Vec::len), Some(2), "{stored}");
+
+    rig.enable();
+    let listed = rig.change_modes(
+        r#"{"cmd":"modes.save","mode":{"name":"Chat","polish":true,"apps":["com.example.chat"],"polish_model":"engine:remote-llm"},"id":"s1"}"#,
+        "s1",
+    );
+    assert_eq!(
+        listed["modes"][1]["polish_model_state"], "ready",
+        "{listed}"
+    );
+    let models = listed["polish_models"].as_array().unwrap();
+    assert!(models.iter().all(|m| m["allowed"] == true), "{listed}");
+
+    let dictate_in = |app: &str, seed: u64| {
+        rig.focus_on(app);
+        rig.dictate(1.0, seed)["text"].as_str().unwrap().to_owned()
+    };
+    assert_eq!(dictate_in("com.example.chat", 81), "Hello world, cloud!");
+    assert_eq!(dictate_in("com.example.mail", 82), "Hello, world!");
+    assert_eq!(
+        (
+            cloud.calls.load(Ordering::SeqCst),
+            local.calls.load(Ordering::SeqCst)
+        ),
+        (1, 1)
+    );
+
+    // The cloud consent revoked: Chat goes in as said and asks for it; the rest still polishes.
+    let ready = rig.events.count("dictation.ready");
+    let state = rig.ask(
+        r#"{"cmd":"consent.revoke","feature":"polish","to":"cloud","endpoint":"shell engine remote-llm","id":"r1"}"#,
+        "r1",
+    );
+    assert_eq!(state["consents"].as_array().unwrap().len(), 1, "{state}");
+    assert_eq!(state["on"], true);
+    assert!(rig.events.wait_count("dictation.ready", ready + 1, WAIT));
+    assert_eq!(dictate_in("com.example.chat", 83), "Hello world.");
+    assert_eq!(rig.warnings("polish_not_allowed").len(), 1);
+    assert_eq!(dictate_in("com.example.mail", 84), "Hello, world!");
+    assert_eq!(
+        cloud.calls.load(Ordering::SeqCst),
+        1,
+        "nothing more sent there"
+    );
+    let listed = rig.ask(r#"{"cmd":"modes.list","id":"l1"}"#, "l1");
+    let remote = listed["polish_models"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|m| m["id"] == "engine:remote-llm")
+        .unwrap()
+        .clone();
+    assert_eq!(remote["allowed"], false, "{remote}");
+    // Revoking it again changes nothing, and is no failure.
+    let again = rig.ask(
+        r#"{"cmd":"consent.revoke","feature":"polish","to":"cloud","endpoint":"shell engine remote-llm","id":"r2"}"#,
+        "r2",
+    );
+    assert_eq!(again["type"], "consent.state");
+
+    // The last one revoked: polish is off with it.
+    let state = rig.ask(
+        r#"{"cmd":"consent.revoke","feature":"polish","to":"on_device","id":"r3"}"#,
+        "r3",
+    );
+    assert_eq!(state["on"], false, "{state}");
+    assert_eq!(state["consents"].as_array().map(Vec::len), Some(0));
+    assert_eq!(rig.setting("dictation.polish").as_deref(), Some("off"));
+    assert_eq!(rig.setting("llm.consent.polish").as_deref(), Some("none"));
+    let refused = rig.fails(
+        r#"{"cmd":"consent.revoke","feature":"edit","to":"on_device","id":"r4"}"#,
+        "r4",
+    );
+    assert!(
+        refused["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("one consent"))
+    );
+    rig.events.assert_valid();
+}
+
+/// The single polish consent a build before consents per destination stored reads as one, so
+/// nothing is asked again; the next consent is added beside it, and the list is what is stored.
+#[test]
+fn the_single_polish_consent_an_older_build_stored_is_kept() {
+    let rig = VoiceRig::new("consent-migration");
+    let local = rig.register_local();
+    rig.register_model("remote-llm", "remote", false, "Hello world, cloud!");
+    let store = &rig.core().shared().store;
+    store.set_setting("dictation.polish", "on").unwrap();
+    store
+        .set_setting("llm.consent.polish", r#"{"to":"on_device"}"#)
+        .unwrap();
+    let state = rig.polish_state("g1");
+    assert_eq!(state["allowed"], true, "{state}");
+    assert_eq!(state["consents"].as_array().map(Vec::len), Some(1));
+    // Agreed again for the same destination: the old object becomes a list of one.
+    rig.allow_on_device("a0");
+    assert_eq!(
+        rig.setting("llm.consent.polish").as_deref(),
+        Some(r#"[{"to":"on_device"}]"#)
+    );
+    rig.enable();
+    assert_eq!(rig.dictate(1.0, 85)["text"], "Hello, world!");
+    assert_eq!(local.calls.load(Ordering::SeqCst), 1);
+    rig.ask(
+        r#"{"cmd":"consent.allow","feature":"polish","to":"cloud","endpoint":"shell engine remote-llm","id":"c1"}"#,
+        "c1",
+    );
+    let stored: Value = serde_json::from_str(&rig.setting("llm.consent.polish").unwrap()).unwrap();
+    assert_eq!(stored[0]["to"], "on_device", "{stored}");
+    assert_eq!(stored[1]["endpoint"], "shell engine remote-llm", "{stored}");
+    rig.events.assert_valid();
+}
+
+/// `modes.listed` says truly whether polish may use each model: a cloud model the user agreed to
+/// is not allowed while local-only mode is on, and says that is why.
+#[test]
+fn a_model_local_only_refuses_is_listed_as_not_allowed() {
+    let rig = VoiceRig::new("modes-listed-local-only");
+    rig.register_remote();
+    let state = rig.ask(
+        r#"{"cmd":"consent.allow","feature":"polish","to":"cloud","endpoint":"shell engine remote-llm","id":"a1"}"#,
+        "a1",
+    );
+    assert_eq!(state["type"], "consent.state", "{state}");
+    let listed = rig.ask(r#"{"cmd":"modes.list","id":"l1"}"#, "l1");
+    let model = &listed["polish_models"][0];
+    assert_eq!(model["allowed"], false, "{listed}");
+    assert_eq!(model["blocked_local_only"], true);
+    assert_eq!(model["model"], "remote");
+    rig.local_only(false);
+    let listed = rig.ask(r#"{"cmd":"modes.list","id":"l2"}"#, "l2");
+    assert_eq!(listed["polish_models"][0]["allowed"], true, "{listed}");
+    assert_eq!(listed["polish_models"][0]["blocked_local_only"], false);
+    rig.events.assert_valid();
+}
+
+/// Over polish consents that cannot be read, a revoke fails and writes nothing: the user could
+/// not see what they would be revoking.
+#[test]
+fn a_revoke_over_unreadable_consents_fails_and_writes_nothing() {
+    let rig = VoiceRig::new("consent-revoke-unreadable");
+    rig.register_local();
+    let store = &rig.core().shared().store;
+    store.set_setting("dictation.polish", "on").unwrap();
+    store
+        .set_setting("llm.consent.polish", "[{not json")
+        .unwrap();
+    let failed = rig.fails(
+        r#"{"cmd":"consent.revoke","feature":"polish","to":"on_device","id":"r1"}"#,
+        "r1",
+    );
+    assert!(
+        failed["message"]
+            .as_str()
+            .is_some_and(|m| m.starts_with("couldn't read")),
+        "{failed}"
+    );
+    assert_eq!(
+        rig.setting("llm.consent.polish").as_deref(),
+        Some("[{not json")
+    );
+    assert_eq!(rig.setting("dictation.polish").as_deref(), Some("on"));
+    rig.events.assert_valid();
+}
+
+/// Local-only mode is asked before the consent: the AI setting's cloud model, with a consent that
+/// covers it, is refused as local-only (polish_failed), never as a consent the user could give.
+#[test]
+fn local_only_refuses_a_consented_cloud_model_as_local_only() {
+    let rig = VoiceRig::new("local-only-first");
+    let remote = rig.register_remote();
+    let state = rig.ask(
+        r#"{"cmd":"consent.allow","feature":"polish","to":"cloud","endpoint":"shell engine remote-llm","id":"a1"}"#,
+        "a1",
+    );
+    assert_eq!(state["allowed"], true, "{state}");
+    rig.enable();
+    assert_eq!(rig.dictate(1.0, 86)["text"], "Hello world.");
+    assert_eq!(remote.calls.load(Ordering::SeqCst), 0);
+    assert!(rig.warnings("polish_not_allowed").is_empty());
+    assert!(
+        rig.warnings("polish_failed")
+            .last()
+            .and_then(|w| w["message"].as_str())
+            .is_some_and(|m| m.contains("local-only")),
+        "{:?}",
+        rig.warnings("polish_failed")
+    );
+    rig.events.assert_valid();
+}
+
 /// A mic that changes format mid-stream once `flip` is set (a USB mic unplugged and replaced by
 /// the built-in one, a Bluetooth headset switching profile): the mic path cannot go on with it.
 struct FlakyCapture {
@@ -725,6 +1367,21 @@ impl CaptureControl for FlakyCapture {
     }
     fn open_far_end(&self, target: &FarEndTarget) -> Result<Box<dyn AudioSource>, PlatformError> {
         self.inner.open_far_end(target)
+    }
+    fn output_devices(&self) -> Result<Vec<DeviceInfo>, PlatformError> {
+        self.inner.output_devices()
+    }
+    fn automatic_input(&self) -> Result<Option<ink_core::AutoInput>, PlatformError> {
+        self.inner.automatic_input()
+    }
+    fn watch_devices(
+        &self,
+        on_change: ink_core::EventSink<ink_core::DeviceChange>,
+    ) -> Result<(), PlatformError> {
+        self.inner.watch_devices(on_change)
+    }
+    fn unwatch_devices(&self) {
+        self.inner.unwatch_devices();
     }
 }
 
@@ -827,9 +1484,10 @@ impl VoiceRig {
         )
     }
 
-    /// Registers a model on this machine, as the Mac registers Apple's on-device model.
+    /// Registers a model on this machine, as the Mac registers Apple's on-device model. Its answer
+    /// is a cleanup of what the rig dictates ("hello world"), as polish's answer must be.
     fn register_local(&self) -> &'static RemoteModel {
-        self.register_model("local-llm", "on-device", true, "Polished on this machine.")
+        self.register_model("local-llm", "on-device", true, "Hello, world!")
     }
 
     fn register_model(
@@ -1036,7 +1694,7 @@ fn polish_allow_records_the_consent_and_turns_polish_on() {
     assert_eq!(rig.setting("dictation.polish").as_deref(), Some("on"));
     assert_eq!(
         rig.setting("llm.consent.polish").as_deref(),
-        Some(r#"{"to":"on_device"}"#)
+        Some(r#"[{"to":"on_device"}]"#)
     );
     rig.enable();
     rig.dictate(1.0, 51);
@@ -1045,7 +1703,7 @@ fn polish_allow_records_the_consent_and_turns_polish_on() {
         rig.platform
             .inserted()
             .last()
-            .is_some_and(|s| s.contains("Polished on this machine")),
+            .is_some_and(|s| s.contains("Hello, world!")),
         "{:?}",
         rig.platform.inserted()
     );
@@ -1120,6 +1778,20 @@ fn a_model_that_moves_to_the_cloud_gets_nothing_until_the_user_agrees_again() {
     assert_eq!(state["endpoint"], "shell engine remote-llm", "{state}");
     assert_eq!(state["allowed_to"], "on_device", "{state}");
 
+    // Local-only mode (on by default) refuses it first, and says so: no consent would let it.
+    rig.dictate(1.0, 51);
+    assert_eq!(remote.calls.load(Ordering::SeqCst), 0, "nothing sent");
+    assert!(rig.warnings("polish_not_allowed").is_empty());
+    assert!(
+        rig.warnings("polish_failed")
+            .last()
+            .and_then(|w| w["message"].as_str())
+            .is_some_and(|m| m.contains("local-only")),
+        "{:?}",
+        rig.warnings("polish_failed")
+    );
+
+    rig.local_only(false);
     rig.dictate(1.0, 52);
     assert_eq!(remote.calls.load(Ordering::SeqCst), 0, "nothing sent");
     assert!(
@@ -1257,7 +1929,7 @@ fn the_switch_and_the_consent_are_saved_together_or_not_at_all() {
     assert_eq!(rig.setting("dictation.polish").as_deref(), Some("on"));
     assert_eq!(
         rig.setting("llm.consent.polish").as_deref(),
-        Some(r#"{"to":"on_device"}"#),
+        Some(r#"[{"to":"on_device"}]"#),
         "both as they were"
     );
     store.heal();
@@ -1404,7 +2076,7 @@ fn turning_voice_edit_off_withdraws_its_consent_or_changes_nothing() {
     );
     assert_eq!(
         rig.setting("dictation.edit_key").as_deref(),
-        Some("right_option")
+        Some(right_option().as_str())
     );
     assert_eq!(
         rig.setting("llm.consent.edit").as_deref(),
@@ -1439,6 +2111,8 @@ fn an_edit_model_that_moves_to_the_cloud_gets_nothing() {
         .expect("bound");
     rig.unregister("local-llm");
     let remote = rig.register_remote();
+    // The consent's refusal, not local-only mode's (which is asked first).
+    rig.local_only(false);
     let state = rig.edit_state("m2");
     assert_eq!(state["on"], true);
     assert_eq!(state["allowed"], false);
@@ -1482,11 +2156,11 @@ fn an_imported_modifier_hotkey_is_the_key_held_and_imported_snippets_expand() {
         ],
     );
     let ready = rig.enable();
-    assert_eq!(ready["key"], "right_option", "{ready}");
+    assert_eq!(ready["key"], right_option(), "{ready}");
     assert!(ready.get("settings_error").is_none(), "{ready}");
     assert_eq!(
         rig.platform.hotkey_binding().map(|b| b.0).as_deref(),
-        Some("right_option")
+        Some(right_option().as_str())
     );
     // The mock engine hears "hello world"; the imported snippet expands "hello".
     let inserted = rig.dictate(1.2, 1);
@@ -1605,10 +2279,10 @@ fn an_import_from_the_screens_reaches_a_running_dictation_at_once() {
         .into_iter()
         .rfind(|v| v["type"] == "dictation.ready")
         .unwrap();
-    assert_eq!(ready["key"], "right_option", "{ready}");
+    assert_eq!(ready["key"], right_option(), "{ready}");
     assert_eq!(
         rig.platform.hotkey_binding().map(|b| b.0).as_deref(),
-        Some("right_option")
+        Some(right_option().as_str())
     );
     assert_eq!(rig.dictate(1.2, 1)["text"], "Greetings world.");
     rig.events.assert_valid();
@@ -1638,5 +2312,124 @@ fn a_snippet_saved_in_settings_reaches_a_running_dictation_at_once() {
     assert!(refused.is_err());
     let listed = rig.ask(r#"{"cmd":"snippets.list","id":"l2"}"#, "l2");
     assert_eq!(listed["snippets"][0]["expansion"], "Hi there");
+    rig.events.assert_valid();
+}
+
+// --- The core's own language model (Windows' Qwen3; feat/core-local-llm) -----------------------
+//
+// Once one is downloaded it is the AI setting's model while no provider is chosen, under the
+// on-device consent like Apple's model on the Mac: one tap, and the core fails closed without it.
+
+fn chat_row() -> EngineRow {
+    language_row("test-chat", "Test Chat")
+}
+
+impl VoiceRig {
+    /// Press, speak, release, and room for the tail; waits for the take to end however it ends.
+    fn take(&self, seconds: f64, seed: u64) {
+        let ended = |r: &Self| {
+            [
+                "dictation.inserted",
+                "dictation.discarded",
+                "dictation.failed",
+            ]
+            .iter()
+            .map(|t| r.events.count(t))
+            .sum::<usize>()
+        };
+        let before = ended(self);
+        let started = self.events.count("dictation.started");
+        assert!(self.platform.press());
+        self.feed(&Self::speech(seconds, seed));
+        self.release_take(&self.platform, started);
+        let until = Instant::now() + WAIT;
+        while ended(self) == before {
+            assert!(
+                Instant::now() < until,
+                "the take never ended: {}",
+                self.said()
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+}
+
+#[test]
+fn the_downloaded_model_polishes_only_under_the_on_device_consent() {
+    let local = MockLocalLoader::new("Hello, world!");
+    let rig = VoiceRig::with_local(
+        "local-polish",
+        vec![chat_row()],
+        local.parts(None),
+        "hello world",
+    );
+    let state = rig.polish_state("p1");
+    assert_eq!(state["to"], "on_device", "{state}");
+    assert_eq!(state["name"], "Test Chat", "{state}");
+    assert_eq!(state["allowed"], false);
+    rig.enable();
+    // Without the consent, polish is off: nothing is loaded or sent.
+    assert_eq!(rig.dictate(1.0, 81)["text"], "Hello world.");
+    assert_eq!((local.loads(), local.calls()), (0, 0));
+
+    // One tap: the on-device consent, which turns polish on.
+    let allowed = rig.allow_on_device("a1");
+    assert_eq!(allowed["allowed_to"], "on_device", "{allowed}");
+    assert_eq!(rig.dictate(1.0, 82)["text"], "Hello, world!");
+    assert_eq!(local.calls(), 1);
+
+    // A consent for somewhere else only (an earlier cloud provider's) does not cover it: the
+    // take goes in as said, and nothing is sent.
+    store_polish_consents(
+        rig.core(),
+        &[ink_pipeline::consent::LlmConsent::Cloud {
+            endpoint: "https://api.example.com/v1".into(),
+            name: "Example".into(),
+        }],
+    );
+    assert_eq!(rig.dictate(1.0, 83)["text"], "Hello world.");
+    assert_eq!(local.calls(), 1, "nothing sent");
+    assert_eq!(rig.warnings("polish_not_allowed").len(), 1);
+    rig.events.assert_valid();
+}
+
+#[test]
+fn a_take_that_will_polish_on_the_downloaded_model_warms_it_at_its_start() {
+    let local = MockLocalLoader::new("Hello, world!");
+    // The speech engine hears nothing, so no take has text to polish: only a warm-up loads it.
+    let rig = VoiceRig::with_local("local-warm", vec![chat_row()], local.parts(None), "");
+    rig.enable();
+    rig.take(1.0, 91);
+    assert_eq!(local.loads(), 0, "polish off: not warmed");
+
+    rig.allow_on_device("a1");
+    rig.take(1.0, 92);
+    let until = Instant::now() + WAIT;
+    while local.loads() == 0 {
+        assert!(Instant::now() < until, "never warmed");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(
+        (local.loads(), local.calls()),
+        (1, 0),
+        "loaded, never called"
+    );
+    assert_eq!(
+        rig.core().shared().local.resident(),
+        ["test-chat".to_owned()],
+        "it stays loaded for the next take"
+    );
+
+    // Unloaded, then a take in a mode that does not polish: nothing loads it again.
+    rig.core().shared().local.unload("test-chat").unwrap();
+    rig.change_modes(
+        r#"{"cmd":"modes.save","mode":{"id":"default","polish":false},"id":"m1"}"#,
+        "m1",
+    );
+    rig.take(1.0, 93);
+    // The warm-up is decided on its own thread: give it the time the first one took.
+    std::thread::sleep(Duration::from_millis(200));
+    assert_eq!(local.loads(), 1, "not warmed for a take it will not polish");
+    assert!(rig.core().shared().local.resident().is_empty());
     rig.events.assert_valid();
 }

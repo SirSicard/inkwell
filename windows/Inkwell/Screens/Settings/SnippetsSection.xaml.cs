@@ -48,7 +48,7 @@ public sealed partial class SnippetsSection : UserControl
         RowFocus.Restore(Rows, focus, item => ((SnippetDraft)item).Id);
     }
 
-    private static SnippetDraft? RowOf(object sender) => (sender as FrameworkElement)?.DataContext as SnippetDraft;
+    private SnippetDraft? RowOf(object sender) => RowTag.Of(sender) is string id ? Model.Rows.FirstOrDefault(r => r.Id == id) : null;
 
     private void OnToggled(object sender, RoutedEventArgs e)
     {
@@ -79,6 +79,8 @@ public sealed partial class SnippetsSection : UserControl
         var dialog = new ContentDialog
         {
             XamlRoot = XamlRoot,
+            // A dialog does not take the window's theme: the appearance shown now (as ConsentDialog).
+            RequestedTheme = ActualTheme,
             Title = "Edit snippet",
             Content = new StackPanel { Spacing = 10, MinWidth = 360, Children = { trigger, expansion, category } },
             PrimaryButtonText = "Save",

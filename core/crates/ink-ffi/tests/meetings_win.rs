@@ -28,8 +28,8 @@ use ink_core::{
 };
 use ink_engines::{ModelDir, Registry};
 use ink_ffi::capture::{FarHears, WinDevices, WinMeetingCapture};
+use ink_ffi::devices::{InputChoice, MicReason, OutputChoice, Picked};
 use ink_ffi::runtime::{Core, MeetingPlatform, Parts};
-use ink_platform_win::capture::{Endpoint, MicRouteReason};
 
 const WAIT: Duration = Duration::from_secs(30);
 
@@ -75,22 +75,22 @@ impl ReplayDevices {
 struct Devices(Arc<ReplayDevices>);
 
 impl WinDevices for Devices {
-    fn route_mic(
-        &self,
-        headset_mic: bool,
-    ) -> Result<Option<(Endpoint, MicRouteReason)>, PlatformError> {
-        self.0.ask(format!("headset {headset_mic}"));
-        let usb = Endpoint {
-            info: DeviceInfo {
+    fn pick_mic(&self, choice: &InputChoice) -> Result<Picked, String> {
+        let what = match choice {
+            InputChoice::Auto => "auto",
+            InputChoice::Device(_) => "a device",
+        };
+        self.0.ask(format!("pick {what}"));
+        Ok(Picked {
+            device: DeviceInfo {
                 id: DeviceId("{0.0.1.00000000}.{usb-mic}".into()),
                 name: "Microphone (USB Audio)".into(),
                 transport: Transport::Usb,
                 is_default: true,
             },
-            container: None,
-            rate: Some(48_000),
-        };
-        Ok(Some((usb, MicRouteReason::DefaultInput)))
+            reason: MicReason::Auto(ink_core::AutoReason::DefaultInput),
+            wanted: None,
+        })
     }
 
     fn open_mic(&self, device: &DeviceId) -> Result<Box<dyn AudioSource>, PlatformError> {
@@ -98,9 +98,15 @@ impl WinDevices for Devices {
         self.0.replay(&self.0.mic, Channel::Mic)
     }
 
+    /// No output is chosen in these tests: the default.
+    fn pinned_output(&self, _: &OutputChoice) -> Result<Option<String>, PlatformError> {
+        Ok(None)
+    }
+
     fn open_far(
         &self,
         target: &FarEndTarget,
+        _pinned: Option<&str>,
     ) -> Result<(Box<dyn AudioSource>, FarHears), PlatformError> {
         let far = || self.0.replay(&self.0.far, Channel::Far);
         match target {
@@ -126,7 +132,12 @@ impl WinDevices for Devices {
         }
     }
 
-    fn far_moved(&self, _: &FarEndTarget, endpoint: &str) -> Result<bool, PlatformError> {
+    fn far_moved(
+        &self,
+        _: &FarEndTarget,
+        endpoint: &str,
+        _pinned: Option<&str>,
+    ) -> Result<bool, PlatformError> {
         self.0.moves_asked.lock().unwrap().push(endpoint.to_owned());
         Ok(self.0.moved.swap(false, Ordering::Relaxed))
     }
@@ -208,9 +219,11 @@ fn rig(label: &str, seconds: f64) -> Rig {
         }),
         data_dir: dir.path().to_owned(),
         permissions: Arc::new(ink_ffi::queries::NoPermissionProbe),
+        local: Default::default(),
         meetings: MeetingPlatform {
             capture: Arc::new(WinMeetingCapture::new(Devices(devices.clone()))),
             detector: Some(detector.clone()),
+            keys: None,
         },
     };
     let (core, events) = start_parts(parts);
@@ -282,7 +295,7 @@ fn a_teams_call_is_offered_recorded_and_blotted_into_a_record() {
     assert_eq!(
         r.asked(),
         [
-            "headset false",
+            "pick auto",
             "mic {0.0.1.00000000}.{usb-mic}",
             // The offer's own process reached the plan.
             "far: ms-teams.exe (pid Some(300))",
@@ -347,7 +360,8 @@ fn zoom_is_heard_alone_and_a_zoom_that_is_gone_falls_back_and_says_so() {
         .unwrap();
     assert!(r.events.wait_count("meeting.started", 2, WAIT));
     let fallback = r.events.wait_type("meeting.far_end_fallback", WAIT);
-    assert_eq!(fallback["app"], "Zoom.exe");
+    // The identity as the core keeps it on Windows: lowercased where it came in.
+    assert_eq!(fallback["app"], "zoom.exe");
     assert!(
         fallback["message"]
             .as_str()
@@ -365,7 +379,7 @@ fn zoom_is_heard_alone_and_a_zoom_that_is_gone_falls_back_and_says_so() {
     assert_eq!(second["far_end"], "everything");
     assert_eq!(
         r.asked()[r.asked().len() - 2..],
-        ["far: Zoom.exe (pid Some(211))", "far: the default output"]
+        ["far: zoom.exe (pid Some(211))", "far: the default output"]
     );
     std::thread::sleep(Duration::from_millis(500));
     r.core.command(r#"{"cmd":"meeting.stop"}"#).unwrap();
@@ -420,6 +434,41 @@ fn a_teams_call_whose_output_changes_is_followed() {
         "{:?}",
         r.events.types()
     );
+    r.events.assert_valid();
+    r.core.shutdown();
+}
+
+/// The shell may name an app in any case: meeting.dismiss and meeting.start find the offer by the
+/// identity as the core keeps it on Windows (lowercased), and every event says it so; the name is
+/// the one detection gave.
+#[test]
+fn an_offered_app_is_answered_whatever_case_the_shell_names_it_in() {
+    let r = rig("win-case", 60.0);
+    let offered = r.offered(exe("Zoom.exe", 210), 1);
+    assert_eq!(offered["app"], "zoom.exe");
+    assert_eq!(offered["app_name"], "Zoom");
+    r.core
+        .command(r#"{"cmd":"meeting.dismiss","app":"ZOOM.EXE","id":"d"}"#)
+        .unwrap();
+    let ended = r.events.wait_type("meeting.detection_ended", WAIT);
+    assert_eq!(ended["app"], "zoom.exe");
+    assert_eq!(ended["dismissed"], true, "{ended}");
+
+    // The next call, started (meeting.start) in yet another case.
+    r.signal(MeetingSignal::MicReleased {
+        app: exe("Zoom.exe", 210),
+    });
+    r.offered(exe("Zoom.exe", 211), 2);
+    r.core
+        .command(r#"{"cmd":"meeting.start","app":"ZOOM.exe"}"#)
+        .unwrap();
+    let started = r.events.wait_type("meeting.started", WAIT);
+    assert_eq!(started["app"], "zoom.exe");
+    assert_eq!(started["app_name"], "Zoom", "the offer's own: it was found");
+    assert_eq!(started["far_end"], "app");
+    std::thread::sleep(Duration::from_millis(500));
+    r.core.command(r#"{"cmd":"meeting.stop"}"#).unwrap();
+    r.events.wait_type("meeting.finished", WAIT);
     r.events.assert_valid();
     r.core.shutdown();
 }

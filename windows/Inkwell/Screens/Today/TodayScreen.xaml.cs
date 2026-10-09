@@ -39,6 +39,7 @@ public sealed partial class TodayScreen : UserControl
     private readonly LiveModel live;
     private readonly DispatcherQueueTimer minute;
     private readonly DispatcherQueueTimer second;
+    private readonly CatalogueModel catalogue;
     private bool showAllNeeds;
     private IReadOnlyList<NeedsYouItem>? shownNeeds;
     private bool loaded;
@@ -49,6 +50,7 @@ public sealed partial class TodayScreen : UserControl
     /// <param name="controls">The dictation key the core bound (the hero's status line).</param>
     /// <param name="meetings">Record now and Stop, and their failures.</param>
     /// <param name="live">The live meeting's clock (the live card's line).</param>
+    /// <param name="catalogue">Whether a speech model is installed, and the recommended set's download.</param>
     public TodayScreen(
         CoreStore store,
         LibraryModel library,
@@ -60,8 +62,12 @@ public sealed partial class TodayScreen : UserControl
         Action<string, long?, bool> openRecord,
         RecordControlsModel controls,
         MeetingModel meetings,
-        LiveModel live)
+        LiveModel live,
+        CatalogueModel catalogue,
+        MeetingShortcutModel shortcut)
     {
+        ArgumentNullException.ThrowIfNull(catalogue);
+        this.catalogue = catalogue;
         ArgumentNullException.ThrowIfNull(controls);
         ArgumentNullException.ThrowIfNull(meetings);
         ArgumentNullException.ThrowIfNull(live);
@@ -85,6 +91,13 @@ public sealed partial class TodayScreen : UserControl
         this.open = open;
         this.openRecord = openRecord;
         InitializeComponent();
+        void ShortcutChanged()
+        {
+            AutomationProperties.SetAcceleratorKey(RecordNow, shortcut.ShortcutLabel);
+            AutomationProperties.SetAcceleratorKey(LiveStop, shortcut.ShortcutLabel);
+        }
+        shortcut.PropertyChanged += (_, _) => ShortcutChanged();
+        ShortcutChanged();
         minute = DispatcherQueue.GetForCurrentThread().CreateTimer();
         minute.IsRepeating = false;
         minute.Tick += (_, _) => MinuteTick();
@@ -143,7 +156,7 @@ public sealed partial class TodayScreen : UserControl
         second.Stop();
     }
 
-    private INotifyPropertyChanged[] Models() => [library, owed, permissions, upNext, presence];
+    private INotifyPropertyChanged[] Models() => [library, owed, permissions, upNext, presence, catalogue];
 
     /// <summary>What only the hero and the live card read: they redraw for it, not the whole screen (a meeting's lines change it often).</summary>
     private INotifyPropertyChanged[] LiveModels() => [controls, meetings, live];
@@ -207,7 +220,7 @@ public sealed partial class TodayScreen : UserControl
     private void RenderHero()
     {
         var recording = store.Meeting is not null;
-        StatusLine.Text = TodayText.HeroStatus(recording, store.Listening, controls.DictateText);
+        StatusLine.Text = TodayText.HeroStatus(recording, store.Listening, controls.DictateText, catalogue.HasSpeechModel == false);
         RecordNow.Visibility = Show(!recording);
         AutomationProperties.SetHelpText(RecordNow, RecordControlsModel.RecordNowHint);
         var failure = recording ? null : meetings.FailureOn(MeetingPlace.RecordNow);
@@ -249,7 +262,7 @@ public sealed partial class TodayScreen : UserControl
 
     private void RenderNeedsYou(bool force = false)
     {
-        var items = NeedsYou.Items(permissions, library, store);
+        var items = NeedsYou.Items(permissions, library, store, catalogue);
         // Unchanged (most batches): the rows stay, and so does keyboard focus on them.
         if (!force && shownNeeds is not null && shownNeeds.SequenceEqual(items))
         {
@@ -285,6 +298,11 @@ public sealed partial class TodayScreen : UserControl
         words.Children.Add(new TextBlock { Text = item.Detail, Style = StyleOf("InkCaptionStyle") });
         Grid.SetColumn(words, 1);
         row.Children.Add(words);
+        if (item.Action is not { } action)
+        {
+            // The plain fact: nothing to press.
+            return row;
+        }
         var button = new Button
         {
             Content = item.ActionTitle,
@@ -293,7 +311,7 @@ public sealed partial class TodayScreen : UserControl
             Margin = new Thickness(12, 0, 0, 0),
         };
         AutomationProperties.SetHelpText(button, item.Title);
-        button.Click += (_, _) => Perform(item.Action);
+        button.Click += (_, _) => Perform(action);
         Grid.SetColumn(button, 2);
         row.Children.Add(button);
         return row;
@@ -314,6 +332,9 @@ public sealed partial class TodayScreen : UserControl
                 break;
             case NeedsYouAction.RetryChecks:
                 library.RefreshToday();
+                break;
+            case NeedsYouAction.DownloadModels:
+                catalogue.DownloadRecommended();
                 break;
             default:
                 break;
@@ -514,6 +535,8 @@ public sealed partial class TodayScreen : UserControl
 
     private void OnOpenOwed(object sender, RoutedEventArgs e) => open(Route.Owed);
 
+    private void OnOpenStats(object sender, RoutedEventArgs e) => open(Route.Stats);
+
     // Stats
 
     private void RenderStats(LibraryCalendar calendar)
@@ -523,8 +546,12 @@ public sealed partial class TodayScreen : UserControl
             library.Today, library.TodayLoad == LibraryLoad.Failed, library.Week, library.WeekLoad == LibraryLoad.Failed, calendar.Culture);
         foreach (var line in lines)
         {
-            Stats.Children.Add(new TextBlock { Text = line, Style = StyleOf("InkTimestampStyle"), FontSize = 11.5 });
+            // The interface's face: mono is for timestamps and versions (App.xaml).
+            Stats.Children.Add(new TextBlock { Text = line, Style = StyleOf("InkCaptionStyle"), FontSize = 11.5 });
         }
+        Stats.Children.Add(new TextBlock { Text = TodayText.StatsLink, Style = StyleOf("InkCaptionStyle"), FontSize = 11.5 });
+        // Its words without the arrow, which Narrator would read out.
+        AutomationProperties.SetName(StatsLink, lines.Count == 0 ? "Stats" : string.Join(". ", lines));
     }
 
     // Layout

@@ -9,8 +9,9 @@
 // same write.
 //
 // The toggle reads "on" only when the switch is on, the consent covers the model, and the core has
-// a working language model: one registered (engine.registered, kind llm, not let go of since), or
-// an own-key provider chosen and ready (llm.providers, Settings > AI's language model). With no
+// a working language model: one registered (engine.registered, kind llm, not let go of since), a
+// provider chosen and ready (llm.providers, Settings > AI's language model: an own-key one, or this
+// PC's model), or this PC's model downloaded with none chosen, which the core then uses. With no
 // working model it reads off, cannot be switched, and says so. Windows has no Apple Intelligence:
 // which models exist is the core's to say (its engines), so the Mac's Apple-engine reasons are gone.
 //
@@ -35,7 +36,10 @@ public sealed class PolishModel : ObservableModel
     private readonly Action<CoreCommand> send;
     /// <summary>Language models the core confirmed and still holds, by id.</summary>
     private readonly HashSet<string> models = new(StringComparer.Ordinal);
-    /// <summary>An own-key provider is chosen and can be called (llm.providers' ready).</summary>
+    /// <summary>
+    /// A provider is chosen and can be called (llm.providers' ready), or none is and this PC's model
+    /// is downloaded: the core uses it then.
+    /// </summary>
     private bool cloudReady;
     private bool takeTimedOut;
 
@@ -159,6 +163,43 @@ public sealed class PolishModel : ObservableModel
 
     public void AllowConsent() => Consent.Allow();
 
+    // The first run's own key.
+
+    /// <summary>
+    /// Whether the first run's Use can ask: a provider picked, its key stored if it needs one (a
+    /// provider that cannot be called is no use to agree to), and a choice that changes something.
+    /// </summary>
+    public static bool CanUseOwnKey(CloudModel cloud)
+    {
+        ArgumentNullException.ThrowIfNull(cloud);
+        // An own key: this PC's model is the Polish step's own offer, never one of its keys.
+        return cloud.CanUse && cloud.SelectedProvider is CloudProvider provider && !provider.IsOnDevice && (!provider.NeedsKey || provider.HasKey);
+    }
+
+    /// <summary>
+    /// The first run's Use (Use Groq, or the other providers' rows in the Polish step): polish's
+    /// consent step for the provider picked, before it is chosen, so local-only mode goes off only
+    /// with the user's agreement to where the words go. Allow chooses it (turning local-only mode
+    /// off for a provider off this PC); the consent is recorded once the core names it. Cancel
+    /// sends nothing.
+    /// </summary>
+    public void UseOwnKey(CloudModel cloud)
+    {
+        ArgumentNullException.ThrowIfNull(cloud);
+        if (!CanUseOwnKey(cloud) || cloud.SelectedProvider is not CloudProvider provider || cloud.SelectedEndpoint is not string endpoint)
+        {
+            return;
+        }
+        var name = CloudModel.ProviderName(provider.Id);
+        var isCloud = cloud.SelectedIsCloud;
+        var destination = isCloud ? ConsentDestination.Cloud(endpoint, name) : ConsentDestination.OnDevice(name);
+        // Use chooses what the picker holds at Allow, only if that is still what the step named
+        // (Settings > AI shares the picker), so local-only mode never goes off for anything else.
+        Consent.Ask(destination, Screens.ConsentHost.Onboarding, () =>
+            cloud.SelectedProvider?.Id == provider.Id && cloud.SelectedEndpoint == endpoint
+            && cloud.SelectedIsCloud == isCloud && cloud.Use());
+    }
+
     public void CancelConsent() => Consent.Cancel();
 
     /// <summary>Whether this model shows <paramref name="failed"/>: its setting's read or write, and polish's consent commands.</summary>
@@ -187,7 +228,9 @@ public sealed class PolishModel : ObservableModel
                 return models.Remove(engine.Id);
             case LlmProviders providers:
                 var was = cloudReady;
-                cloudReady = providers.Ready;
+                cloudReady = providers.Ready
+                    || (providers.Chosen is null && providers.Error is null
+                        && providers.Providers.Any(p => p.Id == CloudModel.OnDeviceId && p.Installed == true));
                 return was != cloudReady;
             case CoreStopped:
                 models.Clear();

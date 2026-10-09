@@ -227,6 +227,52 @@ pub fn test_row(id: &str) -> EngineRow {
         licence: "Apache-2.0".into(),
         oses: vec![Os::MacOs, Os::Windows],
         runtime: Runtime::LlamaCpp,
+        kind: ink_engines::RowKind::Speech,
+    }
+}
+
+/// A language model row (polish, edit, summaries on this machine) with one 4-byte GGUF, on both
+/// OSes so the tests run on either (the real ones are Windows only).
+pub fn language_row(id: &str, name: &str) -> EngineRow {
+    let mut row = test_row(id);
+    row.scores.clear();
+    row.files[0].name = "chat.gguf".into();
+    row.files[0].url = row.files[0].url.replace("model.bin", "chat.gguf");
+    row.kind = ink_engines::RowKind::Language(ink_engines::LanguageRow {
+        name: name.into(),
+        chat: ink_engines::ChatQuirks::default(),
+    });
+    row
+}
+
+/// The machine's free space as a test sets it; `None` reads as the OS not saying.
+#[derive(Default)]
+pub struct FakeSystem {
+    pub free: Mutex<Option<u64>>,
+    /// The paths free space was asked for.
+    pub asked: Mutex<Vec<PathBuf>>,
+}
+
+impl FakeSystem {
+    pub fn new(free: Option<u64>) -> Arc<Self> {
+        Arc::new(Self {
+            free: Mutex::new(free),
+            asked: Mutex::default(),
+        })
+    }
+}
+
+impl ink_core::SystemInfo for FakeSystem {
+    fn free_disk_bytes(&self, path: &Path) -> Result<u64, ink_core::PlatformError> {
+        assert!(
+            path.is_dir(),
+            "free space asked of a missing path: {path:?}"
+        );
+        self.asked.lock().unwrap().push(path.to_owned());
+        self.free
+            .lock()
+            .unwrap()
+            .ok_or(ink_core::PlatformError::Unsupported("free space"))
     }
 }
 
@@ -433,6 +479,7 @@ pub fn start(
         installer,
         data_dir: dir.path().to_owned(),
         permissions: Arc::new(ink_ffi::queries::NoPermissionProbe),
+        local: Default::default(),
         meetings: Default::default(),
     };
     start_parts(parts)
@@ -547,6 +594,7 @@ impl ink_core::Store for FailingStore {
         records(query: &ink_core::RecordQuery) -> Vec<ink_core::Record>;
         set_title(id: &ink_core::RecordId, title: &str) -> ();
         finish_record(id: &ink_core::RecordId, ended_at_unix_ms: i64) -> ();
+        mark_stuck(id: &ink_core::RecordId) -> ();
         delete_record(id: &ink_core::RecordId) -> ();
         append_segments(id: &ink_core::RecordId, segments: &[ink_core::Segment]) -> ();
         segments(id: &ink_core::RecordId) -> Vec<ink_core::Segment>;
@@ -560,6 +608,7 @@ impl ink_core::Store for FailingStore {
         save_summary(id: &ink_core::RecordId, summary: &ink_core::Summary) -> ();
         summary(id: &ink_core::RecordId) -> Option<ink_core::Summary>;
         set_speaker_name(id: &ink_core::RecordId, speaker: &ink_core::SpeakerId, name: &str) -> ();
+        clear_speaker_name(id: &ink_core::RecordId, speaker: &ink_core::SpeakerId) -> ();
         speaker_names(id: &ink_core::RecordId) -> Vec<(ink_core::SpeakerId, String)>;
         add_commitments(id: &ink_core::RecordId, items: &[ink_core::NewCommitment]) -> Vec<ink_core::CommitmentId>;
         add_commitments_merged(id: &ink_core::RecordId, items: &[ink_core::NewCommitment], merges: &[(usize, usize)]) -> Vec<ink_core::CommitmentId>;
@@ -589,5 +638,116 @@ impl ink_core::Store for FailingStore {
 
     fn scrub_change(&self) -> Option<bool> {
         self.inner.scrub_change()
+    }
+}
+
+/// Stores polish's consents as the core keeps them: the chain reads them again at each call.
+#[allow(dead_code)]
+pub fn store_polish_consents(
+    core: &ink_ffi::runtime::Core,
+    consents: &[ink_pipeline::consent::LlmConsent],
+) {
+    core.shared()
+        .store
+        .set_setting(
+            ink_pipeline::consent::Feature::Polish.setting_key(),
+            &ink_pipeline::consent::consents_to_setting(consents),
+        )
+        .unwrap();
+}
+
+/// What a [`MockLocalLoader`]'s models report: loads, calls, drops.
+#[derive(Default)]
+pub struct LocalJournal {
+    pub loads: AtomicUsize,
+    pub calls: AtomicUsize,
+    pub drops: AtomicUsize,
+}
+
+/// Loads a mock language model for the core's own (`engine:local`) in place of llama.cpp: it
+/// answers `answer` to every request, after `gate` opens when one is set.
+pub struct MockLocalLoader {
+    pub answer: String,
+    pub gate: Mutex<Option<Arc<Gate>>>,
+    pub journal: Arc<LocalJournal>,
+}
+
+impl MockLocalLoader {
+    pub fn new(answer: &str) -> Arc<Self> {
+        Arc::new(Self {
+            answer: answer.into(),
+            gate: Mutex::new(None),
+            journal: Arc::default(),
+        })
+    }
+
+    pub fn loads(&self) -> usize {
+        self.journal.loads.load(Ordering::SeqCst)
+    }
+
+    pub fn calls(&self) -> usize {
+        self.journal.calls.load(Ordering::SeqCst)
+    }
+
+    /// Local parts with this loader and `system` (unknown free space when `None`).
+    pub fn parts(
+        self: &Arc<Self>,
+        system: Option<Arc<FakeSystem>>,
+    ) -> ink_ffi::runtime::LocalParts {
+        let mut parts = ink_ffi::runtime::LocalParts {
+            llm_loader: self.clone(),
+            ..Default::default()
+        };
+        if let Some(system) = system {
+            parts.system = system;
+        }
+        parts
+    }
+}
+
+struct MockLocalModel {
+    answer: String,
+    gate: Option<Arc<Gate>>,
+    journal: Arc<LocalJournal>,
+}
+
+impl ink_core::Llm for MockLocalModel {
+    fn info(&self) -> ink_core::LlmInfo {
+        ink_core::LlmInfo {
+            provider: "mock".into(),
+            model: "mock local".into(),
+            endpoint: ink_core::Endpoint::InProcess,
+        }
+    }
+
+    fn complete(
+        &self,
+        _: &ink_core::LlmRequest,
+        _: &CancelToken,
+    ) -> Result<ink_core::LlmResponse, ink_core::LlmError> {
+        self.journal.calls.fetch_add(1, Ordering::SeqCst);
+        if let Some(gate) = &self.gate {
+            gate.wait();
+        }
+        Ok(ink_core::LlmResponse {
+            text: self.answer.clone(),
+        })
+    }
+}
+
+impl Drop for MockLocalModel {
+    fn drop(&mut self) {
+        self.journal.drops.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+impl Loader<ink_ffi::local::LocalModel> for MockLocalLoader {
+    fn load(&self, _: &EngineRow) -> Result<ink_ffi::local::LocalModel, EngineError> {
+        self.journal.loads.fetch_add(1, Ordering::SeqCst);
+        Ok(Box::new(MockLocalModel {
+            answer: self.answer.clone(),
+            gate: self.gate.lock().unwrap().clone(),
+            journal: self.journal.clone(),
+        }))
     }
 }

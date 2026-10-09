@@ -12,6 +12,7 @@ enum Route: String, CaseIterable, Identifiable, Hashable, Sendable {
     case today
     case library
     case owed
+    case stats
     case live
     case settings
 
@@ -23,6 +24,7 @@ enum Route: String, CaseIterable, Identifiable, Hashable, Sendable {
         case .today: "Today"
         case .library: "Library"
         case .owed: "Owed"
+        case .stats: "Stats"
         case .live: "Live"
         case .settings: "Settings"
         }
@@ -34,6 +36,7 @@ enum Route: String, CaseIterable, Identifiable, Hashable, Sendable {
         case .today: "sun.max"
         case .library: "books.vertical"
         case .owed: "checklist"
+        case .stats: "chart.bar"
         case .live: "waveform"
         case .settings: "gearshape"
         }
@@ -41,7 +44,7 @@ enum Route: String, CaseIterable, Identifiable, Hashable, Sendable {
 
     var section: SidebarSection {
         switch self {
-        case .today, .library, .owed: .main
+        case .today, .library, .owed, .stats: .main
         case .live: .recording
         case .settings: .app
         }
@@ -87,8 +90,7 @@ final class Router {
     /// The route whose screen is shown.
     var current: Route { selection ?? .today }
 
-    /// Find was chosen: the search field (Today's or the Library's) takes the keyboard once it
-    /// shows, and clears this.
+    /// Find was chosen: the toolbar's search field takes the keyboard, and clears this.
     var searchPending = false
 
     /// Shows `route`.
@@ -96,12 +98,8 @@ final class Router {
         selection = route
     }
 
-    /// Find (⌘F): the search field, on Today or in the Library (from any other screen, the
-    /// Library's).
+    /// Find (⌘F): the search field, on the screen showing (every screen has it).
     func focusSearch() {
-        if current != .today && current != .library {
-            open(.library)
-        }
         searchPending = true
     }
 
@@ -126,6 +124,8 @@ struct RouteScreen: View {
             LibraryScreen()
         case .owed:
             OwedScreen()
+        case .stats:
+            StatsScreen()
         case .live:
             LiveScreen()
         case .settings:

@@ -198,6 +198,27 @@ impl ByokLlm {
         })
     }
 
+    /// The same provider (endpoint, key, transport and local-only switch) asked for `model`
+    /// instead: a dictation mode that pins a model at the provider. The endpoint is this one's, so
+    /// whatever consent covers this provider covers it, and nothing else changes; the provider
+    /// judges the name (one it refuses fails the call as any refusal does). Blank keeps this
+    /// one's model.
+    pub fn with_model(&self, model: &str) -> Self {
+        let model = model.trim();
+        Self {
+            provider: self.provider,
+            model: if model.is_empty() {
+                self.model.clone()
+            } else {
+                model.to_owned()
+            },
+            base: self.base.clone(),
+            keys: self.keys.clone(),
+            transport: self.transport.clone(),
+            local_only: self.local_only.clone(),
+        }
+    }
+
     /// The context a request may fill, in tokens ([`Provider::context_tokens`]).
     pub fn context_tokens(&self) -> Option<u32> {
         self.provider.context_tokens()

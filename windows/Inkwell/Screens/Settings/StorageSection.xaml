@@ -7,15 +7,11 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:local="using:Inkwell.Screens"
     Loaded="OnLoaded">
-    <StackPanel Spacing="10">
+    <StackPanel Spacing="14">
         <TextBlock AutomationProperties.HeadingLevel="Level2" Style="{StaticResource InkHeadingStyle}" Text="Storage" />
-        <Grid ColumnSpacing="12">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="150" />
-                <ColumnDefinition Width="*" />
-            </Grid.ColumnDefinitions>
+        <local:SettingColumnsPanel>
             <TextBlock VerticalAlignment="Top" Margin="0,6,0,0" Style="{StaticResource InkBodyStyle}" Text="Keep records" />
-            <StackPanel Grid.Column="1" Spacing="4">
+            <StackPanel Spacing="4">
                 <ComboBox
                     x:Name="Keep"
                     AutomationProperties.HelpText="{x:Bind local:StorageSection.RetentionDetail}"
@@ -23,33 +19,27 @@
                     SelectionChanged="OnKeepChanged" />
                 <TextBlock AutomationProperties.AccessibilityView="Raw" Style="{StaticResource InkCaptionStyle}" Text="{x:Bind local:StorageSection.RetentionDetail}" />
             </StackPanel>
-        </Grid>
-        <Grid x:Name="Folder" HorizontalAlignment="Left" ColumnSpacing="12">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
-            </Grid.ColumnDefinitions>
+        </local:SettingColumnsPanel>
+        <!-- The path, then its button; the button under it where both don't fit on one line. -->
+        <local:LineOrStackPanel x:Name="Folder">
             <TextBlock x:Name="FolderPath" VerticalAlignment="Center" AutomationProperties.Name="Library folder" IsTextSelectionEnabled="True" Style="{StaticResource InkTimestampStyle}" TextWrapping="Wrap" />
-            <Button x:Name="Reveal" Grid.Column="1" VerticalAlignment="Center" Click="OnReveal" Content="Show in File Explorer" />
-        </Grid>
+            <Button x:Name="Reveal" VerticalAlignment="Center" Click="OnReveal" Content="Show in File Explorer" />
+        </local:LineOrStackPanel>
         <TextBlock x:Name="Failed" Style="{StaticResource InkAlertTextStyle}" Text="{x:Bind local:StorageSection.FailedText}" Visibility="Collapsed" />
         <ProgressRing x:Name="Measuring" Width="16" Height="16" HorizontalAlignment="Left" AutomationProperties.Name="Measuring" IsActive="False" />
-        <Grid x:Name="Sizes" ColumnSpacing="12" RowSpacing="6" Visibility="Collapsed">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="150" />
-                <ColumnDefinition Width="*" />
-            </Grid.ColumnDefinitions>
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="Auto" />
-            </Grid.RowDefinitions>
-            <TextBlock Style="{StaticResource InkBodyStyle}" Text="Library" />
-            <TextBlock x:Name="LibrarySize" Grid.Column="1" Style="{StaticResource InkBodyStyle}" Foreground="{ThemeResource InkSecondaryTextBrush}" />
-            <TextBlock Grid.Row="1" Style="{StaticResource InkBodyStyle}" Text="Recordings" />
-            <TextBlock x:Name="RecordingsSize" Grid.Row="1" Grid.Column="1" Style="{StaticResource InkBodyStyle}" Foreground="{ThemeResource InkSecondaryTextBrush}" />
-            <TextBlock Grid.Row="2" Style="{StaticResource InkBodyStyle}" Text="Models" />
-            <TextBlock x:Name="ModelsSize" Grid.Row="2" Grid.Column="1" Style="{StaticResource InkBodyStyle}" Foreground="{ThemeResource InkSecondaryTextBrush}" />
-        </Grid>
+        <StackPanel x:Name="Sizes" Visibility="Collapsed" Spacing="6">
+            <local:SettingColumnsPanel>
+                <TextBlock Style="{StaticResource InkBodyStyle}" Text="Library" />
+                <TextBlock x:Name="LibrarySize" Style="{StaticResource InkBodyStyle}" Foreground="{ThemeResource InkSecondaryTextBrush}" />
+            </local:SettingColumnsPanel>
+            <local:SettingColumnsPanel>
+                <TextBlock Style="{StaticResource InkBodyStyle}" Text="Recordings" />
+                <TextBlock x:Name="RecordingsSize" Style="{StaticResource InkBodyStyle}" Foreground="{ThemeResource InkSecondaryTextBrush}" />
+            </local:SettingColumnsPanel>
+            <local:SettingColumnsPanel>
+                <TextBlock Style="{StaticResource InkBodyStyle}" Text="Models" />
+                <TextBlock x:Name="ModelsSize" Style="{StaticResource InkBodyStyle}" Foreground="{ThemeResource InkSecondaryTextBrush}" />
+            </local:SettingColumnsPanel>
+        </StackPanel>
     </StackPanel>
 </UserControl>

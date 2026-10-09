@@ -20,9 +20,10 @@
 // the shared clock; with Animation effects off or Always still, one still frame per change;
 // hidden, none.
 //
-// The consent offer's buttons ("Record this call", "Not this one") widen and deepen the pill, as
-// on the Mac. A click on one (down and up on the same button) raises ButtonClicked; the click
-// still never activates the Drop or Inkwell (MA_NOACTIVATE).
+// The consent offer's buttons ("Record this call", "Not this one", "Always for Zoom", "Never for
+// Zoom") and an Always call's ("Stop", "Stop and delete") widen and deepen the pill, as on the Mac:
+// two to a row under the lines, each row deepening it. A click on one (down and up on the same
+// button) raises ButtonClicked; the click still never activates the Drop or Inkwell (MA_NOACTIVATE).
 //
 // The Drop is the recording indicator, so it never goes blank. A lost device (TDR, driver update),
 // a lost composition device (DWM restarted) or a failed present releases every Direct3D,
@@ -55,38 +56,61 @@ internal static class DropLayout
     public const double LineSpacing = 2;
     public const float TitleSize = 12;
     public const float DetailSize = 17;
+    public const float RecordingDetailSize = 26;
+    public const double RecordingBadgeWidth = 76;
     public const string Face = "Segoe UI Variable Text";
     /// <summary>The line's face: the display serif.</summary>
     public const string DetailFace = "Sitka Text";
 
-    /// <summary>With buttons (the consent offer): wider and taller, as the Mac's sizeWithActions.</summary>
+    /// <summary>With buttons (the consent offer): wider and taller, as the Mac's sizeWithActions (one row, two lines).</summary>
     public const double WidthWithButtons = 480;
     public const double HeightWithButtons = 132;
-    public const double ButtonWidth = 150;
-    public const double ButtonHeight = 30;
+    /// <summary>Two buttons to a row, filling the lines' width.</summary>
+    public const int ButtonsPerRow = 2;
     public const double ButtonGap = 8;
+    public const double ButtonWidth = (WidthWithButtons - TextLeft - TextRight - ButtonGap) / ButtonsPerRow;
+    public const double ButtonHeight = 30;
     /// <summary>From the panel's bottom edge to the buttons'.</summary>
     public const double ButtonBottom = 14;
     public const float ButtonTextSize = 12.5f;
+    /// <summary>A line of the detail (Sitka at 17), for a third line over the buttons.</summary>
+    public const double DetailLineHeight = 23;
 
-    /// <summary>The panel's size for <paramref name="text"/>, in DIPs.</summary>
-    public static (double W, double H) Size(DropText text) =>
-        text.Buttons is null ? (Width, Height) : (WidthWithButtons, HeightWithButtons);
-
-    /// <summary>Button <paramref name="index"/>'s rectangle, in DIPs from the panel's top left: a row under the lines.</summary>
-    public static (double Left, double Top, double Right, double Bottom) Button(int index)
+    /// <summary>The panel's size for <paramref name="text"/>, in DIPs: its rows of buttons, and a third line where it has one.</summary>
+    public static (double W, double H) Size(DropText text)
     {
-        var left = TextLeft + index * (ButtonWidth + ButtonGap);
-        var top = HeightWithButtons - ButtonBottom - ButtonHeight;
+        ArgumentNullException.ThrowIfNull(text);
+        if (text.Buttons is not { } buttons)
+        {
+            return (Width, Height);
+        }
+        var rows = Rows(buttons.Count);
+        return (WidthWithButtons, ButtonsTop(text.DetailLines) + rows * ButtonHeight + (rows - 1) * ButtonGap + ButtonBottom);
+    }
+
+    private static int Rows(int count) => Math.Max(1, (count + ButtonsPerRow - 1) / ButtonsPerRow);
+
+    /// <summary>Where the first row of buttons starts, under a detail of <paramref name="detailLines"/> lines.</summary>
+    private static double ButtonsTop(int detailLines) =>
+        HeightWithButtons - ButtonBottom - ButtonHeight + Math.Max(0, detailLines - 2) * DetailLineHeight;
+
+    /// <summary>
+    /// Button <paramref name="index"/>'s rectangle, in DIPs from the panel's top left: two to a row
+    /// under the lines (a detail of <paramref name="detailLines"/> lines).
+    /// </summary>
+    public static (double Left, double Top, double Right, double Bottom) Button(int index, int detailLines = 2)
+    {
+        var left = TextLeft + (index % ButtonsPerRow) * (ButtonWidth + ButtonGap);
+        var top = ButtonsTop(detailLines) + (index / ButtonsPerRow) * (ButtonHeight + ButtonGap);
         return (left, top, left + ButtonWidth, top + ButtonHeight);
     }
 
     /// <summary>The index of the button of <paramref name="buttons"/> at (<paramref name="x"/>, <paramref name="y"/>) in DIPs, or null.</summary>
-    public static int? ButtonAt(DropButtons? buttons, double x, double y)
+    public static int? ButtonAt(DropButtons? buttons, double x, double y, int detailLines = 2)
     {
         for (var i = 0; i < (buttons?.Count ?? 0); i++)
         {
-            var (left, top, right, bottom) = Button(i);
+            var (left, top, right, bottom) = Button(i, detailLines);
             if (x >= left && x < right && y >= top && y < bottom)
             {
                 return i;
@@ -113,6 +137,7 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
     private IDWriteTextFormat* titleFormat;
     private IDWriteTextFormat* detailFormat;
     private IDWriteTextFormat* buttonFormat;
+    private IDWriteTextFormat* recordingFormat;
     private IDWriteTextLayout* titleLayout;
     private IDWriteTextLayout* detailLayout;
     /// <summary>The live words' wet ones in <see cref="detailLayout"/> (empty unless the text is live words).</summary>
@@ -176,6 +201,19 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
     }
 
     private DropLook look = DropLook.Default;
+
+    /// <summary>The same palette as the orb, including the recording pill's plain fallback.</summary>
+    public GlowLook OrbLook
+    {
+        get => Surface.Look;
+        set
+        {
+            Surface.Look = value;
+            fallback?.SetOrbLook(value);
+        }
+    }
+
+    private bool RecordingBanner => DropRecording.IsBanner(text);
 
     /// <summary>
     /// Creates the (hidden) window on this thread, which must run a message loop: the app's UI
@@ -459,6 +497,7 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
         }
         RECT bounds;
         GetWindowRect(hwnd, &bounds);
+        fallback!.SetOrbLook(Surface.Look);
         fallback!.Show(bounds, text, dpiScale);
     }
 
@@ -485,6 +524,7 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
         Com.Release(ref titleFormat);
         Com.Release(ref detailFormat);
         Com.Release(ref buttonFormat);
+        Com.Release(ref recordingFormat);
         Com.Release(ref inkBitmap);
         inkTexture?.Dispose();
         inkTexture = null;
@@ -540,15 +580,22 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
         {
             titleFormat = Format(pipeline, DropLayout.Face, DropLayout.TitleSize, DWRITE_FONT_WEIGHT.DWRITE_FONT_WEIGHT_SEMI_BOLD, wrap: false);
             detailFormat = Format(pipeline, DropLayout.DetailFace, DropLayout.DetailSize, DWRITE_FONT_WEIGHT.DWRITE_FONT_WEIGHT_NORMAL, wrap: true);
+            recordingFormat = Format(pipeline, DropLayout.Face, DropLayout.RecordingDetailSize, DWRITE_FONT_WEIGHT.DWRITE_FONT_WEIGHT_SEMI_BOLD, wrap: false);
             buttonFormat = Format(pipeline, DropLayout.Face, DropLayout.ButtonTextSize, DWRITE_FONT_WEIGHT.DWRITE_FONT_WEIGHT_SEMI_BOLD, wrap: false);
         }
         if (titleLayout is null)
         {
             var width = (float)(DropLayout.Size(text).W - DropLayout.TextLeft - DropLayout.TextRight);
-            titleLayout = Layout(pipeline, text.Title, titleFormat, width, 100);
+            titleLayout = Layout(pipeline, RecordingBanner ? "REC" : text.Title, titleFormat, RecordingBanner ? (float)DropLayout.RecordingBadgeWidth - 16 : width, 100);
+            if (RecordingBanner)
+            {
+                titleLayout->SetTextAlignment(DWRITE_TEXT_ALIGNMENT.DWRITE_TEXT_ALIGNMENT_CENTER);
+            }
+            var currentDetailFormat = RecordingBanner ? recordingFormat : detailFormat;
+            if (RecordingBanner) width -= (float)DropLayout.RecordingBadgeWidth;
             DWRITE_LINE_METRICS line;
             uint count;
-            using (var one = new DisposableLayout(Layout(pipeline, "Ag", detailFormat, width, 100)))
+            using (var one = new DisposableLayout(Layout(pipeline, "Ag", currentDetailFormat, width, 100)))
             {
                 InkRendererException.Check(one.Layout->GetLineMetrics(&line, 1, &count), "measure the Drop's text");
             }
@@ -565,8 +612,14 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
             }
             else
             {
-                // Two lines at most, the tail cut with an ellipsis.
-                detailLayout = Layout(pipeline, text.Detail, detailFormat, width, line.height * 2 + 0.5f);
+                // Two lines at most (three where the offer says why an Always app is asked), the
+                // tail cut with an ellipsis.
+                var lines = RecordingBanner ? 1 : text.Buttons is null ? 2 : Math.Max(2, text.DetailLines);
+                detailLayout = Layout(pipeline, text.Detail, currentDetailFormat, width, line.height * lines + 0.5f);
+                if (RecordingBanner)
+                {
+                    detailLayout->SetTextAlignment(DWRITE_TEXT_ALIGNMENT.DWRITE_TEXT_ALIGNMENT_CENTER);
+                }
                 wetWords = default;
             }
         }
@@ -649,6 +702,8 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
         ID2D1SolidColorBrush* fill = null, border = null, title = null, detail = null, wet = null, button = null, label = null;
         ID2D1RoundedRectangleGeometry* panel = null;
         ID2D1EllipseGeometry* circle = null;
+        ID2D1GradientStopCollection* stops = null;
+        ID2D1LinearGradientBrush* glow = null;
         HRESULT hr;
         try
         {
@@ -664,6 +719,25 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
             InkRendererException.Check(pipeline.D2DFactory->CreateRoundedRectangleGeometry(&bounds, &panel), "shape the Drop");
             fill = Brush(d2d, look.Background, 1);
             d2d->FillGeometry((ID2D1Geometry*)panel, (ID2D1Brush*)fill, null);
+            if (RecordingBanner)
+            {
+                // The selected orb's two voices run across the pill. A dark veil makes white
+                // lettering readable even for the brightest palette, in either app mode.
+                var colours = DropRecording.Colours(Surface.Look);
+                D2D1_GRADIENT_STOP* gradient = stackalloc D2D1_GRADIENT_STOP[3];
+                gradient[0] = new() { position = 0, color = Colour(colours.A) };
+                gradient[1] = new() { position = 0.5f, color = Colour(colours.Middle) };
+                gradient[2] = new() { position = 1, color = Colour(colours.B) };
+                InkRendererException.Check(d2d->CreateGradientStopCollection(gradient, 3,
+                    D2D1_GAMMA.D2D1_GAMMA_2_2, D2D1_EXTEND_MODE.D2D1_EXTEND_MODE_CLAMP, &stops), "shade the recording pill");
+                var props = new D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES
+                {
+                    startPoint = new D2D_POINT_2F(0, 0),
+                    endPoint = new D2D_POINT_2F((float)panelW, (float)panelH),
+                };
+                InkRendererException.Check(d2d->CreateLinearGradientBrush(&props, null, stops, &glow), "colour the recording pill");
+                d2d->FillGeometry((ID2D1Geometry*)panel, (ID2D1Brush*)glow, null);
+            }
 
             // The orb in its circle, which keeps its size, centred on the pill's first height
             // (the offer's pill grows below it).
@@ -707,8 +781,8 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
             d2d->DrawRoundedRectangle(&inset, (ID2D1Brush*)border, width, null);
 
             // The two lines, stacked and centred on the pill's height; text never takes a dot colour.
-            title = Brush(d2d, text.Tone == DropTone.Plain ? look.Secondary : look.Alert, 1);
-            detail = Brush(d2d, look.Text, 1);
+            title = Brush(d2d, RecordingBanner ? Rgb.Of(0xFFFFFF) : text.Tone == DropTone.Plain ? look.Secondary : look.Alert, 1);
+            detail = Brush(d2d, RecordingBanner ? Rgb.Of(0xFFFFFF) : look.Text, 1);
             if (wetWords.length > 0)
             {
                 // The newest live words in the secondary colour (a brush lives on the device, so it
@@ -721,12 +795,33 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
             detailLayout->GetMetrics(&dm);
             var total = tm.height + DropLayout.LineSpacing + dm.height;
             // Above the buttons when there are some, else centred on the pill.
-            var linesHeight = text.Buttons is null ? panelH : DropLayout.Button(0).Top - 4;
+            var linesHeight = text.Buttons is null ? panelH : DropLayout.Button(0, text.DetailLines).Top - 4;
             var top = (linesHeight - total) / 2;
-            d2d->DrawTextLayout(new D2D_POINT_2F((float)DropLayout.TextLeft, (float)top), titleLayout, (ID2D1Brush*)title,
-                D2D1_DRAW_TEXT_OPTIONS.D2D1_DRAW_TEXT_OPTIONS_NONE);
-            d2d->DrawTextLayout(new D2D_POINT_2F((float)DropLayout.TextLeft, (float)(top + tm.height + DropLayout.LineSpacing)),
-                detailLayout, (ID2D1Brush*)detail, D2D1_DRAW_TEXT_OPTIONS.D2D1_DRAW_TEXT_OPTIONS_NONE);
+            if (RecordingBanner)
+            {
+                var badgeLeft = panelW - DropLayout.TextRight - DropLayout.RecordingBadgeWidth;
+                var badge = new D2D1_ROUNDED_RECT
+                {
+                    rect = new D2D_RECT_F { left = (float)badgeLeft, top = (float)panelH / 2 - 14, right = (float)(panelW - DropLayout.TextRight), bottom = (float)panelH / 2 + 14 },
+                    radiusX = 14, radiusY = 14,
+                };
+                button = Brush(d2d, (0, 0, 0), 0.55f);
+                label = Brush(d2d, Rgb.Of(0xFF9B7A), 1);
+                d2d->FillRoundedRectangle(&badge, (ID2D1Brush*)button);
+                var dot = new D2D1_ELLIPSE { point = new D2D_POINT_2F((float)badgeLeft + 13, (float)panelH / 2), radiusX = 3, radiusY = 3 };
+                d2d->FillEllipse(&dot, (ID2D1Brush*)label);
+                d2d->DrawTextLayout(new D2D_POINT_2F((float)badgeLeft + 16, (float)((panelH - tm.height) / 2)),
+                    titleLayout, (ID2D1Brush*)title, D2D1_DRAW_TEXT_OPTIONS.D2D1_DRAW_TEXT_OPTIONS_NONE);
+                d2d->DrawTextLayout(new D2D_POINT_2F((float)DropLayout.TextLeft, (float)((panelH - dm.height) / 2)),
+                    detailLayout, (ID2D1Brush*)detail, D2D1_DRAW_TEXT_OPTIONS.D2D1_DRAW_TEXT_OPTIONS_NONE);
+            }
+            else
+            {
+                d2d->DrawTextLayout(new D2D_POINT_2F((float)DropLayout.TextLeft, (float)top), titleLayout, (ID2D1Brush*)title,
+                    D2D1_DRAW_TEXT_OPTIONS.D2D1_DRAW_TEXT_OPTIONS_NONE);
+                d2d->DrawTextLayout(new D2D_POINT_2F((float)DropLayout.TextLeft, (float)(top + tm.height + DropLayout.LineSpacing)),
+                    detailLayout, (ID2D1Brush*)detail, D2D1_DRAW_TEXT_OPTIONS.D2D1_DRAW_TEXT_OPTIONS_NONE);
+            }
 
             if (text.Buttons is { } buttons)
             {
@@ -735,7 +830,7 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
                 label = Brush(d2d, look.ButtonLabel, 1);
                 for (var i = 0; i < buttons.Count; i++)
                 {
-                    var (left, btop, right, bottom) = DropLayout.Button(i);
+                    var (left, btop, right, bottom) = DropLayout.Button(i, text.DetailLines);
                     var radius = (float)DropLayout.ButtonHeight / 2;
                     var shape = new D2D1_ROUNDED_RECT
                     {
@@ -772,6 +867,8 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
                 // The layout keeps no brush past the frame that drew it.
                 detailLayout->SetDrawingEffect(null, wetWords);
             }
+            Com.Release(ref glow);
+            Com.Release(ref stops);
             Com.Release(ref wet);
             Com.Release(ref label);
             Com.Release(ref button);
@@ -785,9 +882,15 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
         InkRendererException.Check(hr, "draw the Drop");
         swapChain.InjectedPresentResult = FailNextPresent;
         FailNextPresent = 0;
-        swapChain.Present();
+        if (!swapChain.Present())
+        {
+            // The compositor had no room: a still frame (motion off) is drawn again a frame later.
+            Surface.PresentDropped();
+        }
         return true;
     }
+
+    private static DXGI_RGBA Colour((float R, float G, float B) c) => new() { r = c.R, g = c.G, b = c.B, a = 1 };
 
     private static ID2D1SolidColorBrush* Brush(ID2D1DeviceContext* d2d, (float R, float G, float B) c, float alpha)
     {
@@ -859,7 +962,7 @@ public sealed unsafe class DropWindow : IInkTarget, IDisposable
     /// <summary>A press at <paramref name="at"/> (DIPs): a click is down and up on the same button.</summary>
     internal void Press(bool down, (double X, double Y) at)
     {
-        var button = DropLayout.ButtonAt(text.Buttons, at.X, at.Y);
+        var button = DropLayout.ButtonAt(text.Buttons, at.X, at.Y, text.DetailLines);
         if (down)
         {
             pressed = button;

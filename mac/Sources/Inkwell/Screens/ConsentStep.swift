@@ -41,7 +41,7 @@ private struct ConsentStep: ViewModifier {
                     // Meetings send the whole transcript (everyone's words), as the message says.
                     : "Turn on \(what) and send \(feature == .meetings ? "the transcript" : "your words") to \(destination.label)")
         } message: { destination in
-            Text(ConsentModel.message(feature, destination))
+            Text(consent.stepMessage(destination))
         }
     }
 }

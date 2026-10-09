@@ -35,6 +35,26 @@ public static class SettingsFormat
         $"Snippet {trigger}{(enabled ? "" : ", off")}: {expansion}{(category.Length == 0 ? "" : $", {category}")}";
 }
 
+/// <summary>
+/// The id of the row a control sits in: the Tag ({x:Bind Id}) on its row's root. An ItemsRepeater
+/// gives an x:Bind template's elements no DataContext (null on a desktop run), so a row's buttons
+/// read their row this way; a lookup through DataContext found nothing and the click did nothing.
+/// </summary>
+public static class RowTag
+{
+    public static string? Of(object sender)
+    {
+        for (var element = sender as DependencyObject; element is not null; element = VisualTreeHelper.GetParent(element))
+        {
+            if (element is FrameworkElement { Tag: string id })
+            {
+                return id;
+            }
+        }
+        return null;
+    }
+}
+
 /// <summary>Opens a folder in File Explorer: StorageModel's reveal.</summary>
 public static class FileExplorer
 {
@@ -205,36 +225,27 @@ public static class RowFocus
     }
 }
 
-/// <summary>A mode's row as the template shows it.</summary>
-public sealed record ModeRowItem(ModeRow Row, string Title)
-{
-    public IReadOnlyList<string> Traits => Row.Traits;
-    public IReadOnlyList<AppLabel> Apps => Row.Apps;
-    public string AppsText => Row.AppsText;
-    /// <summary>The apps' names follow their tiles; an empty list says what it means instead.</summary>
-    public bool HasApps => Row.Apps.Count > 0;
-}
-
 /// <summary>A voice command's row as the template shows it.</summary>
 public sealed record VoiceCommandItem(VoiceCommandDraft Row)
 {
     public string Id => Row.Id;
     public string Triggers => string.Join(" · ", Row.Triggers);
+    public string PrimaryTrigger => Row.Triggers.Count > 0 ? Row.Triggers[0] : "";
+    public string Aliases => Row.Triggers.Count > 1 ? $"Also: {string.Join(" · ", Row.Triggers.Skip(1))}" : "";
     public string Does => VoiceCommandsModel.Describe(Row);
     public bool Enabled => Row.Enabled;
     public bool NotCarriedOut => !Row.CarriedOut;
     public string Name => VoiceCommandsModel.AccessibilityLabel(Row);
 }
 
-/// <summary>A model's row where it can be downloaded (ModelRowsView).</summary>
-/// <param name="OwnDownload">The row has a Download of its own (Settings; the first run has one for all).</param>
-public sealed record ModelRowItem(ModelRow Row, bool OwnDownload)
+/// <summary>A model's row where it can be downloaded, with a Download of its own (ModelRowsView).</summary>
+public sealed record ModelRowItem(ModelRow Row)
 {
     public string Id => Row.Id;
     public string Text => Row.Text(System.Globalization.CultureInfo.CurrentCulture);
-    /// <summary>Where it would come from, beside its own Download (the first run's line says it for all).</summary>
-    public string? From => OwnDownload ? Row.From : null;
-    public bool ShowsDownload => OwnDownload && Row.CanDownload;
+    /// <summary>Where it would come from, beside its Download.</summary>
+    public string? From => Row.From;
+    public bool ShowsDownload => Row.CanDownload;
     public string DownloadName => Row.DownloadName(System.Globalization.CultureInfo.CurrentCulture);
     public bool Downloading => Row.Progress is not null;
     public double Progress => Row.Progress ?? 0;
@@ -244,6 +255,12 @@ public sealed record ModelRowItem(ModelRow Row, bool OwnDownload)
     public string? Failure => Row.CanRetry ? Row.Status(System.Globalization.CultureInfo.CurrentCulture) : null;
     public bool CanRetry => Row.CanRetry;
     public string RetryName => Row.RetryName;
+    public bool ShowsCancel => Row.CanCancel;
+    public string CancelName => Row.CancelName;
+    public bool ShowsRemove => Row.CanRemove;
+    public string RemoveName => Row.RemoveName;
+    /// <summary>Why its last Cancel or Remove did nothing.</summary>
+    public string? Note => Row.Note;
 }
 
 /// <summary>One job's line in Settings > Models.</summary>

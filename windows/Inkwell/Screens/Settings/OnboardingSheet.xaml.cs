@@ -3,9 +3,17 @@
 // or the app quitting). Escape closes it as skipped (OnboardingModel.SheetDismissed, which does
 // nothing while the app quits), except while polish's consent step is up in it: then Escape
 // cancels the step and the sheet stays. The polish switch only asks (PolishModel.SetOn with
-// ConsentHost.Onboarding); only the step's agreeing button sends anything. The models step's
-// Download is the only thing in the sheet that downloads (CatalogueModel.DownloadMissing). The
-// import step shows only while Inkwell 0.2's data is offered (OnboardingModel.ShownSteps).
+// ConsentHost.Onboarding); only the step's agreeing button sends anything. The step is the Mac's
+// modal alert, drawn inline (the sheet is a ContentDialog, and WinUI shows one at a time): it shows
+// right under what asked for it (the switch, Use Groq or the other providers' Use), comes into view
+// with the focus and is announced, holds the sheet's Skip, Back and Continue while it is up, and
+// gives the focus back to what asked once it is answered. The models step's
+// Download is the only thing in the sheet that downloads (ModelChoices.Download: what is ticked). The
+// import step shows only while Inkwell 0.2's data is offered (OnboardingModel.ShownSteps). The
+// Polish step offers this PC's own model once it is ticked in Models (its switch then asks the
+// one tap for it: with no provider chosen the core uses that model), and Groq's free key as the
+// alternative through Settings > AI's flow (CloudModel.UseKey); its box is sent once and cleared,
+// as there.
 //
 // Glow's steps: Welcome's orb plays a short demo (dictating, then a call: a one-shot timer per
 // part, only while Welcome shows); Appearance sets the mode and the dots of the mode shown, as
@@ -19,8 +27,10 @@ using Inkwell.Ink;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
+using Microsoft.UI.Xaml.Automation.Peers;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
+using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Shapes;
 
@@ -32,6 +42,7 @@ public sealed partial class OnboardingSheet : ContentDialog
     private readonly OnboardingModel onboarding;
     private readonly PermissionsModel permissions;
     private readonly PolishModel polish;
+    private readonly CloudModel cloud;
     private readonly DictationModel dictation;
     private readonly CatalogueModel catalogue;
     private readonly Import02Model import02;
@@ -44,10 +55,33 @@ public sealed partial class OnboardingSheet : ContentDialog
     /// <summary>The sheet is closing because the model says so (or the host went): Escape's rule does not apply.</summary>
     private bool closingByModel;
     private bool rendering;
+    private readonly List<ChoiceRow> choiceRows = [];
+    private OnboardingStep? shownStep;
+    /// <summary>The own key shows the other providers' rows, not Groq's.</summary>
+    private bool others;
+    /// <summary>Groq was suggested since the disclosure last opened.</summary>
+    private bool suggested;
+    /// <summary>The last of polish's steps brought into view (ConsentModel.Asked); -1: the one up, again.</summary>
+    private int revealedAsk;
+    /// <summary>
+    /// The switch is asking now. Set before it calls the model: the model's change renders the sheet
+    /// inside that call, before it returns, and the step must be placed under the switch then.
+    /// </summary>
+    private bool askingFromSwitch;
+    /// <summary>The step (ConsentModel.Asked) whose place is settled, and where it was asked.</summary>
+    private int placedAsk = -1;
+    private PolishStepPlace askedPlace;
+    /// <summary>Where polish's step shows, or showed last: what gets the focus back.</summary>
+    private PolishStepPlace consentPlace;
+    /// <summary>Polish's step was up at the last render.</summary>
+    private bool consentWasUp;
+    /// <summary>The other providers' rows, with their Use and the slot under it.</summary>
+    private readonly LanguageModelRows othersRows;
 
     private OnboardingSheet(
-        FrameworkElement host, OnboardingModel onboarding, PermissionsModel permissions, PolishModel polish, DictationModel dictation,
-        CatalogueModel catalogue, Import02Model import02, ImportNoteModel importNote, GlowTheme theme, ShellInk? ink, ScreenLog log)
+        FrameworkElement host, OnboardingModel onboarding, PermissionsModel permissions, PolishModel polish, CloudModel cloud,
+        DictationModel dictation, CatalogueModel catalogue, Import02Model import02, ImportNoteModel importNote, GlowTheme theme,
+        ShellInk? ink, ScreenLog log)
     {
         this.theme = theme;
         this.ink = ink;
@@ -55,26 +89,38 @@ public sealed partial class OnboardingSheet : ContentDialog
         this.onboarding = onboarding;
         this.permissions = permissions;
         this.polish = polish;
+        this.cloud = cloud;
         this.dictation = dictation;
         this.catalogue = catalogue;
         this.import02 = import02;
         this.log = log;
         InitializeComponent();
-        CardsHost.Content = new PermissionCardsView(permissions);
+        CardsHost.Content = new PermissionCardsView(permissions, inSettings: false);
         ImportTitle.Text = Import02Model.StepTitle;
         ImportCardHost.Content = new Import02Card(import02, inSettings: false);
-        ImportNoteHost.Content = new ImportKeyNoteView(importNote, KeyName);
+        ImportNoteHost.Content = new ImportKeyNoteView(importNote, KeyName, inSettings: false);
         PermissionsTitle.Text = OnboardingModel.PermissionsTitle;
         PermissionsNote.Text = OnboardingModel.PermissionsNote;
-        ModelRowsHost.Content = new ModelRowsView(catalogue, firstRun: true);
         ModelsTitle.Text = OnboardingModel.ModelsTitle;
-        DownloadButton.Content = OnboardingModel.DownloadTitle;
+        DownloadLine.Text = ModelChoices.NothingUntilPressed;
         ModelsTryAgain.Content = OnboardingModel.ModelsTryAgain;
         ModelsGoOn.Text = OnboardingModel.ModelsGoOn;
         PolishTitle.Text = OnboardingModel.PolishTitle;
         PolishNote.Text = OnboardingModel.PolishNote;
         AutomationProperties.SetName(PolishSwitch, OnboardingModel.PolishToggle);
+        OwnKeyExpander.Header = OnboardingModel.OwnKeyTitle;
+        OwnKeyGuideHost.Content = new GroqKeyGuideView(GroqKeyGuidePlace.FirstRun);
+        AutomationProperties.SetName(OwnKeyBox, OnboardingModel.OwnKeyBoxName);
+        OwnKeyBox.PlaceholderText = OnboardingModel.OwnKeyPlaceholder;
+        OwnKeySave.Content = OnboardingModel.OwnKeySave;
+        OthersLink.Content = OnboardingModel.OtherProviders;
+        BackToGroqLink.Content = OnboardingModel.BackToGroq;
+        othersRows = new LanguageModelRows(cloud, polish);
+        OthersHost.Content = othersRows;
         ReadyTitle.Text = OnboardingModel.ReadyTitle;
+        ReadyDownload.Content = NeedsYou.DownloadModelsTitle;
+        ReadyDownloading.Text = NeedsYou.ModelsDownloadingText;
+        ReadyTrayLine.Text = OnboardingModel.TrayLine;
         AutomationProperties.SetHelpText(SkipButton, OnboardingModel.SkipHint);
         ConsentTitle.Text = PolishModel.ConsentTitle;
         AutomationProperties.SetName(ConsentCancel, ConsentModel.CancelName(LlmFeature.Polish));
@@ -129,9 +175,11 @@ public sealed partial class OnboardingSheet : ContentDialog
     /// <summary>The orbs in the colours shown.</summary>
     private void ShowLook()
     {
-        WelcomeOrb.Look = theme.Look;
+        // The first run's orbs rest untinted: leaning toward the dots lightens them on the paper until
+        // the disc is gone (the Mac's OnboardingView.orbPalette).
+        WelcomeOrb.Look = theme.Look with { RestTint = 0 };
         WelcomeOrb.AlwaysStill = theme.AlwaysStill;
-        ReadyOrb.Look = theme.Look;
+        ReadyOrb.Look = theme.Look with { RestTint = 0 };
         ReadyOrb.AlwaysStill = theme.AlwaysStill;
         ReadyOrb.State = ink?.State ?? InkState.Idle;
     }
@@ -157,21 +205,31 @@ public sealed partial class OnboardingSheet : ContentDialog
     /// once, on the UI thread; the models are the ones the aggregator feeds.
     /// </summary>
     internal static OnboardingSheet Attach(
-        FrameworkElement host, OnboardingModel onboarding, PermissionsModel permissions, PolishModel polish, DictationModel dictation,
-        CatalogueModel catalogue, Import02Model import02, ImportNoteModel importNote, GlowTheme theme, ShellInk? ink, ScreenLog? log = null)
+        FrameworkElement host, OnboardingModel onboarding, PermissionsModel permissions, PolishModel polish, CloudModel cloud,
+        DictationModel dictation, CatalogueModel catalogue, Import02Model import02, ImportNoteModel importNote, GlowTheme theme,
+        ShellInk? ink, ScreenLog? log = null)
     {
         ArgumentNullException.ThrowIfNull(theme);
         ArgumentNullException.ThrowIfNull(host);
         ArgumentNullException.ThrowIfNull(onboarding);
         ArgumentNullException.ThrowIfNull(permissions);
         ArgumentNullException.ThrowIfNull(polish);
+        ArgumentNullException.ThrowIfNull(cloud);
         ArgumentNullException.ThrowIfNull(dictation);
         ArgumentNullException.ThrowIfNull(catalogue);
         ArgumentNullException.ThrowIfNull(import02);
         ArgumentNullException.ThrowIfNull(importNote);
-        var sheet = new OnboardingSheet(host, onboarding, permissions, polish, dictation, catalogue, import02, importNote, theme, ink, log ?? ScreenLog.System);
+        var sheet = new OnboardingSheet(
+            host, onboarding, permissions, polish, cloud, dictation, catalogue, import02, importNote, theme, ink, log ?? ScreenLog.System);
         onboarding.PropertyChanged += (_, _) => sheet.Update();
+        onboarding.Choices.PropertyChanged += (_, _) => sheet.RenderIfOpen();
         polish.PropertyChanged += (_, _) => sheet.RenderIfOpen();
+        // The own key's answers (stored, chosen, why not); the providers read: Groq goes in the picker.
+        cloud.PropertyChanged += (_, _) =>
+        {
+            sheet.SuggestGroq();
+            sheet.RenderIfOpen();
+        };
         permissions.PropertyChanged += (_, _) => sheet.RenderIfOpen();
         dictation.PropertyChanged += (_, _) => sheet.RenderIfOpen();
         // The models step's lines: the list, what is left to ask for, whether a download runs.
@@ -234,6 +292,14 @@ public sealed partial class OnboardingSheet : ContentDialog
         try
         {
             var step = onboarding.Step;
+            if (step != shownStep)
+            {
+                // Each step starts at its top; a polish step still up when Polish shows again is
+                // brought into view again (below).
+                StepScroller.ChangeView(null, 0, null, disableAnimation: true);
+                shownStep = step;
+                revealedAsk = -1;
+            }
             WelcomeStep.Visibility = Visible(step == OnboardingStep.Welcome);
             PermissionsStep.Visibility = Visible(step == OnboardingStep.Permissions);
             ModelsStep.Visibility = Visible(step == OnboardingStep.Models);
@@ -278,6 +344,11 @@ public sealed partial class OnboardingSheet : ContentDialog
             SkipButton.Visibility = Visible(onboarding.ShowsSkip);
             BackButton.Visibility = Visible(onboarding.ShowsBack);
             NextButton.Content = onboarding.NextTitle;
+            // Nothing moves behind polish's step, as behind the Mac's alert.
+            var canNavigate = OnboardingModel.CanNavigate(polish.Consent, step);
+            SkipButton.IsEnabled = canNavigate;
+            BackButton.IsEnabled = canNavigate;
+            NextButton.IsEnabled = canNavigate;
 
             var keyName = KeyName();
             var welcome = OnboardingModel.WelcomeLines(keyName);
@@ -286,15 +357,19 @@ public sealed partial class OnboardingSheet : ContentDialog
             WelcomeLine2.Text = welcome[2];
 
             ModelsNote.Text = OnboardingModel.ModelsNote(catalogue);
-            var downloadLine = OnboardingModel.DownloadLine(catalogue, CultureInfo.CurrentCulture);
-            DownloadLine.Text = downloadLine ?? "";
-            DownloadLine.Visibility = Visible(downloadLine is not null);
-            DownloadButton.Visibility = Visible(downloadLine is not null);
-            if (downloadLine is not null)
+            ShowChoices();
+            var downloadTitle = onboarding.Choices.DownloadTitle(catalogue, CultureInfo.CurrentCulture);
+            DownloadButton.Content = downloadTitle;
+            DownloadButton.Visibility = Visible(downloadTitle is not null);
+            DownloadLine.Visibility = Visible(downloadTitle is not null);
+            if (downloadTitle is not null)
             {
-                AutomationProperties.SetName(DownloadButton, OnboardingModel.DownloadName(catalogue, CultureInfo.CurrentCulture));
+                AutomationProperties.SetName(DownloadButton, onboarding.Choices.DownloadName(catalogue, CultureInfo.CurrentCulture));
             }
             ModelsTryAgain.Visibility = Visible(catalogue.Failed);
+            var free = ModelChoices.FreeSpaceLine(catalogue, CultureInfo.CurrentCulture);
+            FreeSpaceLine.Text = free ?? "";
+            FreeSpaceLine.Visibility = Visible(free is not null);
             ModelsGoOn.Visibility = Visible(catalogue.Downloading);
 
             PolishSwitch.IsOn = polish.IsOn;
@@ -302,16 +377,50 @@ public sealed partial class OnboardingSheet : ContentDialog
             AutomationProperties.SetHelpText(PolishSwitch, polish.Status);
             PolishStatus.Text = polish.Status;
             PolishStatus.Style = (Style)Application.Current.Resources[polish.IsProblem ? "InkAlertTextStyle" : "InkCaptionStyle"];
+            var localLine = OnboardingModel.PolishLocalLine(catalogue, cloud, onboarding.Choices, CultureInfo.CurrentCulture);
+            PolishLocalLine.Text = localLine ?? "";
+            PolishLocalLine.Visibility = Visible(localLine is not null);
+            // With this PC's model offered, Groq's free key is the other way.
+            var ownKeyTitle = localLine is null ? OnboardingModel.OwnKeyTitle : OnboardingModel.OwnKeyAlternativeTitle;
+            if (!Equals(OwnKeyExpander.Header, ownKeyTitle))
+            {
+                OwnKeyExpander.Header = ownKeyTitle;
+            }
+            RenderOwnKey();
             var asking = polish.Consent.IsShowingStep(ConsentHost.Onboarding) ? polish.PendingConsent : null;
             ConsentCard.Visibility = Visible(asking is not null);
+            PlaceConsent(asking is not null);
+            if (asking is null && consentWasUp && step == OnboardingStep.Polish && FocusWasInStep())
+            {
+                // Answered: the focus goes back to what asked, not to the top of the sheet.
+                if (!Opener(consentPlace).Focus(FocusState.Programmatic))
+                {
+                    NextButton.Focus(FocusState.Programmatic);
+                }
+            }
+            consentWasUp = asking is not null;
             if (asking is not null)
             {
                 ConsentMessage.Text = PolishModel.ConsentMessage(asking);
                 ConsentAllow.Content = PolishModel.ConsentButton(asking);
                 AutomationProperties.SetName(ConsentAllow, ConsentModel.AllowName(LlmFeature.Polish, asking));
+                // Only while the card can be seen: a step left up on another step waits for Polish.
+                if (polish.Consent.Asked != revealedAsk && step == OnboardingStep.Polish && IsLoaded)
+                {
+                    revealedAsk = polish.Consent.Asked;
+                    RevealConsent(asking);
+                }
             }
 
-            ReadyLine.Text = OnboardingModel.ReadyLine(keyName);
+            // No speech model: no "Hold … and speak" and no box to try it in; the orb stays.
+            var noSpeechModel = catalogue.HasSpeechModel == false;
+            ReadyLine.Text = OnboardingModel.ReadyLine(keyName, noSpeechModel);
+            ReadyDownload.Visibility = Visible(noSpeechModel && !catalogue.Downloading);
+            ReadyDownloading.Visibility = Visible(noSpeechModel && catalogue.Downloading);
+            TryIt.Visibility = Visible(!noSpeechModel);
+            NotHearingLine.Text = OnboardingModel.NotHearingText;
+            NotHearingLine.Visibility = Visible(!noSpeechModel && onboarding.NotHearing);
+            ReadyTrayLine.Visibility = Visible(noSpeechModel);
             var stillOff = OnboardingModel.StillOff(permissions);
             StillOffLine.Text = stillOff ?? "";
             StillOffLine.Visibility = Visible(stillOff is not null);
@@ -324,30 +433,309 @@ public sealed partial class OnboardingSheet : ContentDialog
 
     private void OnNext(object sender, RoutedEventArgs e)
     {
+        if (!OnboardingModel.CanNavigate(polish.Consent, onboarding.Step))
+        {
+            return;
+        }
         onboarding.Next();
         Render();
     }
 
     private void OnBack(object sender, RoutedEventArgs e)
     {
+        if (!OnboardingModel.CanNavigate(polish.Consent, onboarding.Step))
+        {
+            return;
+        }
         onboarding.Back();
         Render();
     }
 
-    private void OnSkip(object sender, RoutedEventArgs e) => onboarding.Finish();
+    private void OnSkip(object sender, RoutedEventArgs e)
+    {
+        if (OnboardingModel.CanNavigate(polish.Consent, onboarding.Step))
+        {
+            onboarding.Finish();
+        }
+    }
 
     /// <summary>The user's agreement to the models the step names: the only download the sheet starts.</summary>
-    private void OnDownload(object sender, RoutedEventArgs e) => catalogue.DownloadMissing();
+    private void OnDownload(object sender, RoutedEventArgs e) => onboarding.Choices.Download(catalogue);
+
+    /// <summary>
+    /// The models step's choices: made again only when the catalogue offers others, so focus and
+    /// the boxes stay put while a download's progress redraws them; otherwise their state and lines.
+    /// </summary>
+    private void ShowChoices()
+    {
+        var shown = ModelChoices.Shown(catalogue);
+        if (!shown.Select(c => c.Id).SequenceEqual(choiceRows.Select(r => r.Choice.Id)))
+        {
+            ChoiceList.Children.Clear();
+            choiceRows.Clear();
+            foreach (var choice in shown)
+            {
+                var row = new ChoiceRow(choice);
+                row.Box.Click += (_, _) => onboarding.Choices.Tick(choice, row.Box.IsChecked == true);
+                choiceRows.Add(row);
+                ChoiceList.Children.Add(row.Root);
+            }
+        }
+        foreach (var row in choiceRows)
+        {
+            row.Show(onboarding.Choices, catalogue);
+        }
+    }
+
+    /// <summary>
+    /// One choice: its box, its title beside it (in the text colour: a required box is disabled,
+    /// its words are not), and under the title what it adds, a line per model, Windows' note and
+    /// the download's state. Every line wraps; nothing is cut.
+    /// </summary>
+    private sealed class ChoiceRow
+    {
+        private readonly TextBlock detail = Caption();
+        private readonly StackPanel lines = new() { Spacing = 0 };
+        private readonly TextBlock note = Caption();
+        private readonly TextBlock status = Caption();
+
+        public ChoiceRow(ModelChoice choice)
+        {
+            Choice = choice;
+            Box = new CheckBox { MinWidth = 0, Padding = new Thickness(0), VerticalAlignment = VerticalAlignment.Top };
+            AutomationProperties.SetName(Box, choice.Title);
+            var title = new TextBlock { Text = choice.Title, TextWrapping = TextWrapping.Wrap, Style = (Style)Application.Current.Resources["InkBodyStyle"] };
+            AutomationProperties.SetAccessibilityView(title, Microsoft.UI.Xaml.Automation.Peers.AccessibilityView.Raw);
+            var words = new StackPanel { Spacing = 2, Margin = new Thickness(0, 5, 0, 0) };
+            words.Children.Add(title);
+            words.Children.Add(detail);
+            words.Children.Add(lines);
+            words.Children.Add(note);
+            words.Children.Add(status);
+            var root = new Grid { ColumnSpacing = 4 };
+            root.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            root.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            root.Children.Add(Box);
+            Grid.SetColumn(words, 1);
+            root.Children.Add(words);
+            Root = root;
+        }
+
+        public ModelChoice Choice { get; }
+        public CheckBox Box { get; }
+        public UIElement Root { get; }
+
+        public void Show(ModelChoices choices, CatalogueModel catalogue)
+        {
+            Box.IsChecked = choices.IsTicked(Choice, catalogue);
+            Box.IsEnabled = ModelChoices.CanTick(Choice, catalogue);
+            var detailText = ModelChoices.Detail(Choice);
+            detail.Text = detailText ?? "";
+            detail.Visibility = detailText is null ? Visibility.Collapsed : Visibility.Visible;
+            var modelLines = ModelChoices.Lines(Choice, catalogue, CultureInfo.CurrentCulture);
+            if (!modelLines.SequenceEqual(lines.Children.OfType<TextBlock>().Select(t => t.Text)))
+            {
+                lines.Children.Clear();
+                foreach (var text in modelLines)
+                {
+                    var line = Caption();
+                    line.Text = text;
+                    line.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["InkSecondaryTextBrush"];
+                    lines.Children.Add(line);
+                }
+            }
+            var noteText = ModelChoices.Note(Choice, catalogue);
+            note.Text = noteText ?? "";
+            note.Visibility = noteText is null ? Visibility.Collapsed : Visibility.Visible;
+            var statusText = ModelChoices.Status(Choice, catalogue, CultureInfo.CurrentCulture);
+            status.Text = statusText ?? "";
+            status.Visibility = statusText is null ? Visibility.Collapsed : Visibility.Visible;
+            AutomationProperties.SetHelpText(Box, string.Join(" ", new[] { detailText, string.Join(". ", modelLines), noteText, statusText }.Where(t => !string.IsNullOrEmpty(t))));
+        }
+
+        private static TextBlock Caption() =>
+            new() { TextWrapping = TextWrapping.Wrap, Style = (Style)Application.Current.Resources["InkCaptionStyle"] };
+    }
 
     private void OnModelsTryAgain(object sender, RoutedEventArgs e) => catalogue.Requery();
+
+    private void OnReadyDownload(object sender, RoutedEventArgs e) => catalogue.DownloadRecommended();
 
     private void OnPolishToggled(object sender, RoutedEventArgs e)
     {
         if (!rendering && PolishSwitch.IsOn != polish.IsOn)
         {
-            polish.SetOn(PolishSwitch.IsOn, ConsentHost.Onboarding);
+            askingFromSwitch = true;
+            try
+            {
+                polish.SetOn(PolishSwitch.IsOn, ConsentHost.Onboarding);
+            }
+            finally
+            {
+                askingFromSwitch = false;
+            }
             Render();
         }
+    }
+
+    /// <summary>
+    /// The own key's rows: Groq's (its key, the key's line, Use Groq and what it means, what is in
+    /// use), or the other providers' (LanguageModelRows) with the way back.
+    /// </summary>
+    private void RenderOwnKey()
+    {
+        GroqRows.Visibility = Visible(!others);
+        OthersRows.Visibility = Visible(others);
+        var groq = cloud.SelectedProvider?.Id == OnboardingModel.OwnKeyProvider;
+        OwnKeyBox.IsEnabled = groq;
+        OwnKeySave.IsEnabled = groq;
+        OwnKeyStatus.Text = groq ? cloud.KeyStatus : "";
+        OwnKeyStatus.Visibility = Visible(groq);
+        OwnKeyUse.Content = cloud.UseLabel;
+        OwnKeyUse.IsEnabled = PolishModel.CanUseOwnKey(cloud);
+        OwnKeyUseNote.Text = cloud.FirstRunUseNote;
+        AutomationProperties.SetHelpText(OwnKeyUse, cloud.FirstRunUseNote);
+        OwnKeyCloudStatus.Text = cloud.Failure ?? cloud.Status;
+        OwnKeyCloudStatus.Style = (Style)Application.Current.Resources[
+            cloud.Failure is not null || cloud.ReadError is not null ? "InkAlertTextStyle" : "InkCaptionStyle"];
+    }
+
+    /// <summary>
+    /// While the disclosure is open: Groq goes in the picker if nothing is chosen or picked (it
+    /// sends nothing), once per opening, as soon as the providers are read; a provider chosen or
+    /// picked already opens the other providers' rows.
+    /// </summary>
+    private void SuggestGroq()
+    {
+        if (!OwnKeyExpander.IsExpanded || suggested || !cloud.Loaded)
+        {
+            return;
+        }
+        suggested = true;
+        cloud.Suggest(OnboardingModel.OwnKeyProvider);
+        others = cloud.FirstRunStartsOnOthers;
+    }
+
+    private void OnOwnKeyExpanding(Expander sender, ExpanderExpandingEventArgs args)
+    {
+        suggested = false;
+        // IsExpanded turns true just after this: the suggestion waits for it.
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            SuggestGroq();
+            RenderIfOpen();
+        });
+    }
+
+    /// <summary>Closed with polish's step up inside it: the step moves under the switch.</summary>
+    private void OnOwnKeyCollapsed(Expander sender, ExpanderCollapsedEventArgs args) => RenderIfOpen();
+
+    private void OnOwnKeySave(object sender, RoutedEventArgs e)
+    {
+        // Sent once, then gone from the box: the key is never kept or shown here (as in Settings > AI).
+        var key = OwnKeyBox.Password;
+        OwnKeyBox.Password = "";
+        cloud.SaveKey(key);
+    }
+
+    private void OnOwnKeyUse(object sender, RoutedEventArgs e) => polish.UseOwnKey(cloud);
+
+    private void OnOthers(object sender, RoutedEventArgs e)
+    {
+        OwnKeyBox.Password = "";
+        others = true;
+        RenderIfOpen();
+    }
+
+    private void OnBackToGroq(object sender, RoutedEventArgs e)
+    {
+        cloud.PickGroq();
+        others = false;
+        RenderIfOpen();
+    }
+
+    /// <summary>
+    /// Puts polish's step in the slot under what asked for it, settled once per step
+    /// (OnboardingModel.PolishStepPlaceFor) and kept while those rows show
+    /// (OnboardingModel.PolishStepShownAt), and shows only that slot while the step is up (an empty
+    /// slot would still take the panel's spacing). A card that moves while up is brought into view
+    /// and focused again: the focused button went with it.
+    /// </summary>
+    private void PlaceConsent(bool up)
+    {
+        if (up)
+        {
+            if (polish.Consent.Asked != placedAsk)
+            {
+                placedAsk = polish.Consent.Asked;
+                askedPlace = OnboardingModel.PolishStepPlaceFor(askingFromSwitch, OwnKeyExpander.IsExpanded, others);
+            }
+            consentPlace = OnboardingModel.PolishStepShownAt(askedPlace, OwnKeyExpander.IsExpanded, others);
+        }
+        var slot = Slot(consentPlace);
+        if (ConsentCard.Parent is Panel from && from != slot)
+        {
+            from.Children.Remove(ConsentCard);
+            slot.Children.Add(ConsentCard);
+            if (up)
+            {
+                revealedAsk = -1;
+            }
+        }
+        Panel[] slots = [SwitchStepSlot, GroqStepSlot, othersRows.StepSlot];
+        foreach (var each in slots)
+        {
+            each.Visibility = Visible(up && each == slot);
+        }
+    }
+
+    private Panel Slot(PolishStepPlace place) => place switch
+    {
+        PolishStepPlace.UnderGroqUse => GroqStepSlot,
+        PolishStepPlace.UnderOthersUse => othersRows.StepSlot,
+        _ => SwitchStepSlot,
+    };
+
+    /// <summary>
+    /// The focus is on the step's buttons, or nowhere (it was on a button of the card that just
+    /// went): only then does it go back to what asked. A step the core ended while the user was
+    /// elsewhere leaves the focus where it is.
+    /// </summary>
+    private bool FocusWasInStep() =>
+        FocusManager.GetFocusedElement(XamlRoot) is not DependencyObject focused
+        || focused == ConsentCancel || focused == ConsentAllow;
+
+    /// <summary>What asked for the step in <paramref name="place"/>, which gets the focus back.</summary>
+    private Control Opener(PolishStepPlace place) => place switch
+    {
+        PolishStepPlace.UnderGroqUse => OwnKeyUse,
+        PolishStepPlace.UnderOthersUse => othersRows.Use,
+        _ => PolishSwitch,
+    };
+
+    /// <summary>
+    /// Polish's step, just put up under what asked for it, where it can sit below the fold: Use
+    /// then seemed to do nothing, and the first run went on with nothing chosen and local-only mode
+    /// on. The whole card comes into view, and focus goes where Settings' step puts it
+    /// (ConsentModel.FocusesCancel): Cancel for a provider off this PC, so Enter never agrees to
+    /// send words away, else the agreeing button. Narrator then hears the heading and where the
+    /// words would go, as the Mac's alert reads. The card may have been collapsed until now: laid
+    /// out first.
+    /// </summary>
+    private void RevealConsent(ConsentDestination asking)
+    {
+        StepScroller.UpdateLayout();
+        ConsentCard.StartBringIntoView(new BringIntoViewOptions { AnimationDesired = false });
+        Button target = ConsentModel.FocusesCancel(asking) ? ConsentCancel : ConsentAllow;
+        target.Focus(FocusState.Programmatic);
+        // After the focus has moved, so Narrator's reading of the button doesn't cut it off.
+        var announcement = ConsentModel.Announcement(LlmFeature.Polish, asking);
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            var peer = FrameworkElementAutomationPeer.FromElement(target) ?? FrameworkElementAutomationPeer.CreatePeerForElement(target);
+            peer?.RaiseNotificationEvent(
+                AutomationNotificationKind.Other, AutomationNotificationProcessing.ImportantAll, announcement, "inkwell.polish-consent");
+        });
     }
 
     private void OnConsentCancel(object sender, RoutedEventArgs e) => polish.CancelConsent();
@@ -383,6 +771,7 @@ public sealed partial class OnboardingSheet : ContentDialog
         demo.Stop();
         WelcomeOrb.State = InkState.Idle;
         closingByModel = false;
+        consentWasUp = false;
         if (polish.Consent.IsShowingStep(ConsentHost.Onboarding))
         {
             polish.CancelConsent();

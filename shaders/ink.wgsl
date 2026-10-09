@@ -58,12 +58,14 @@
 //     48     4    dark    1 in dark mode, 0 in light
 //     52     4    motion  1 animates; 0 draws one still frame, whatever `time` is
 //     56     8    pad     unused (vec2)
-//     64     16   yA      your colour (vec4: rgb, a unused; so are the five below)
+//     64     16   yA      your colour (vec4: rgb; a is unused here and in yB, tA and tB)
 //     80     16   yB      your partner shade
 //     96     16   tA      the far end's colour
 //     112    16   tB      its partner shade
-//     128    16   idle    the orb at rest
-//     144    16   ink     the drop it blots down to
+//     128    16   idle    the orb at rest (rgb), and how far it leans toward the dots (a, 0..1:
+//                         its first shade toward yA, its second toward tA; 0 keeps it as rgb)
+//     144    16   ink     the drop it blots down to (rgb), rest alpha boost (a, 0..1; 0 keeps
+//                         the original rest alpha, 1 raises it by 50 %)
 // Colours are sRGB, 0..1, written as they are: render into a UNORM target, not an sRGB one.
 //
 // Units: p is the pixel's offset from `center` divided by `unit`, with y up. At rest the orb's
@@ -186,13 +188,22 @@ fn fs_main(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
     let c2 = (vec2<f32>(0.15, -0.02) - swirl) * apart;
     // The problem state's slow pulse: about once every three seconds.
     let pulse = 0.5 + 0.5 * sin(t * 2.0);
-    let r1 = mix((0.19 + 0.05 * dictating + 0.09 * g.you * live) * mix(0.8, 1.0, live), 0.06, blot);
+    // Blotted, one drop: big enough to read in the Drop's circle (at 0.06 it was a dot there), and
+    // breathing slowly while the final pass works.
+    let breath = 1.0 + 0.06 * blot * sin(t * 1.6);
+    let r1 = mix((0.19 + 0.05 * dictating + 0.09 * g.you * live) * mix(0.8, 1.0, live), 0.13 * breath, blot);
     let r2 = mix((0.16 + 0.08 * g.them) * meeting, 0.0, blot) * (1.0 + 0.06 * problem * (pulse - 0.5));
-    let soft = mix(0.24, 0.012, blot);
+    let soft = mix(0.24, 0.025, blot);
+    // At rest the idle colour leans toward the dots by idle.a, so each preset shows at rest: the
+    // first shade toward yours, the second toward theirs. Live, both go on to yours from there,
+    // so nothing jumps.
+    let restTint = clamp(g.idle.a, 0.0, 1.0);
+    let restA = mix(g.idle.rgb, g.yA.rgb, restTint);
+    let restB = mix(g.idle.rgb, g.tA.rgb, restTint);
     let o1 = orb(
         p - c1, r1, soft,
-        mix(mix(g.idle.rgb, g.yA.rgb, live), g.ink.rgb, blot),
-        mix(mix(g.idle.rgb, g.yB.rgb, live), g.ink.rgb, blot),
+        mix(mix(restA, g.yA.rgb, live), g.ink.rgb, blot),
+        mix(mix(restB, g.yB.rgb, live), g.ink.rgb, blot),
         0.0, tt,
     );
     var o2 = vec4<f32>(0.0);
@@ -206,7 +217,9 @@ fn fs_main(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
     }
     // Yours over theirs. Theirs, in the problem state, between 55 % and 85 % of its strength.
     let a2 = o2.a * 0.9 * meeting * (1.0 - problem * (0.45 - 0.3 * pulse));
-    let a1 = o1.a * 0.9 * mix(0.55, 1.0, max(live, blot)) * (1.0 - 0.35 * a2 * (1.0 - blot));
+    // Zero keeps the old look for shells that do not supply a boost; live and blot stay as before.
+    let restAlpha = mix(0.55, 0.825, clamp(g.ink.a, 0.0, 1.0));
+    let a1 = o1.a * 0.9 * mix(restAlpha, 1.0, max(live, blot)) * (1.0 - 0.35 * a2 * (1.0 - blot));
     let alpha = a1 + a2 * (1.0 - a1);
     if (alpha <= 0.0) { return vec4<f32>(0.0); }
     var col = (o1.rgb * a1 + o2.rgb * a2 * (1.0 - a1)) / max(alpha, 0.0001);

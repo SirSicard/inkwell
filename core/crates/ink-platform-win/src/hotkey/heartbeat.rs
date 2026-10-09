@@ -9,13 +9,19 @@
 //! [`ACTIVE_MS`] and that input was not the previous heartbeat. A hook can only be removed while
 //! it is handling input, so an idle machine has nothing to check.
 //!
+//! **Never into a window that drops it.** Windows drops input a process injects into a window
+//! of a higher integrity level (an app run as administrator: Task Manager, an elevated terminal),
+//! and says nothing (UIPI, `crate::integrity`). A heartbeat sent while one is in front never
+//! reaches our hook, so it read as a miss, three in ten minutes as a lost hotkey, while the hook
+//! was fine. So none is sent while the window in front would drop it.
+//!
 //! **A miss can be false.** Another low-level hook installed after ours (AutoHotkey, a key
 //! remapper) runs first and may swallow the heartbeat key, so our live hook never sees it. So a
 //! miss counts only if our callback saw no key event at all since the heartbeat went out, and
 //! reinstalls are capped ([`ReinstallBudget`]: three in ten minutes); past the cap the hotkey is
 //! reported lost once, rather than churn. A reinstall puts our hook first again, which ends
 //! the false misses of that kind. A reinstall never cancels a hold: if its release was really
-//! missed, the core's stuck-hold watchdog ends it.
+//! missed, the key's next press ends it (`machine`), or the core's stuck-hold watchdog does.
 //!
 //! Pure over tick-counter milliseconds (which wrap every 49.7 days, hence the wrapping maths).
 #![cfg(windows)]
@@ -49,14 +55,20 @@ pub(crate) struct Heartbeat {
 }
 
 impl Heartbeat {
-    /// Whether to send one now: none is pending, and the last input (`GetLastInputInfo`) is recent
-    /// and not our own.
-    pub(crate) fn should_send(&self, now_ms: u32, last_input_ms: u32) -> bool {
+    /// Whether to send one now: none is pending, the last input (`GetLastInputInfo`) is recent
+    /// and not our own, and `reaches` says the window in front takes injected input (asked last,
+    /// and only then: it reads the foreground process's token).
+    pub(crate) fn should_send(
+        &self,
+        now_ms: u32,
+        last_input_ms: u32,
+        reaches: impl FnOnce() -> bool,
+    ) -> bool {
         let recent = now_ms.wrapping_sub(last_input_ms) <= ACTIVE_MS;
         let not_ours = self
             .ours_until
             .is_none_or(|ours| later(last_input_ms, ours));
-        !self.pending && recent && not_ours
+        !self.pending && recent && not_ours && reaches()
     }
 
     /// One was injected; `after_ms` is the tick just after `SendInput` returned, `callbacks` our
@@ -104,10 +116,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn no_heartbeat_goes_to_a_window_that_drops_injected_input() {
+        let mut hb = Heartbeat::default();
+        assert!(
+            !hb.should_send(10_000, 9_000, || false),
+            "an elevated window in front"
+        );
+        assert!(hb.should_send(10_000, 9_000, || true));
+        // Not even asked while one is pending: the token is read only when one would go.
+        hb.sent(10_001, 0);
+        assert!(!hb.should_send(10_500, 10_400, || panic!("asked")));
+    }
+
+    #[test]
     fn an_idle_user_gets_no_heartbeat() {
         let hb = Heartbeat::default();
-        assert!(!hb.should_send(10_000, 10_000 - ACTIVE_MS - 1));
-        assert!(hb.should_send(10_000, 9_000), "typed a second ago");
+        assert!(!hb.should_send(10_000, 10_000 - ACTIVE_MS - 1, || true));
+        assert!(hb.should_send(10_000, 9_000, || true), "typed a second ago");
     }
 
     #[test]
@@ -116,16 +141,16 @@ mod tests {
         hb.sent(10_000, 0);
         hb.seen();
         // Five seconds on, the last input is the heartbeat itself (stamped a few ms later).
-        assert!(!hb.should_send(15_000, 10_020));
+        assert!(!hb.should_send(15_000, 10_020, || true));
         // The user typed after it.
-        assert!(hb.should_send(15_000, 14_500));
+        assert!(hb.should_send(15_000, 14_500, || true));
     }
 
     #[test]
     fn a_seen_heartbeat_is_not_missed_and_an_unseen_one_is() {
         let mut hb = Heartbeat::default();
         hb.sent(1_000, 0);
-        assert!(!hb.should_send(1_050, 1_040), "one at a time");
+        assert!(!hb.should_send(1_050, 1_040, || true), "one at a time");
         hb.seen();
         assert!(!hb.missed(0));
         hb.sent(6_000, 0);
@@ -171,7 +196,7 @@ mod tests {
         hb.sent(u32::MAX - 10, 0);
         hb.seen();
         // The margin wraps past zero; input at 100 is after it.
-        assert!(hb.should_send(200, 100));
-        assert!(!hb.should_send(30, 20), "inside the margin: ours");
+        assert!(hb.should_send(200, 100, || true));
+        assert!(!hb.should_send(30, 20, || true), "inside the margin: ours");
     }
 }

@@ -54,6 +54,7 @@ fn rig(label: &str) -> Rig {
         }),
         data_dir: dir.path().to_owned(),
         permissions: probe.clone() as Arc<dyn PermissionProbe>,
+        local: Default::default(),
         meetings: Default::default(),
     };
     let events = Recorder::new();
@@ -388,6 +389,137 @@ fn a_live_meetings_notes_are_added_updated_and_deleted_and_matched_to_their_comm
     rig.finish();
 }
 
+/// The failed command after the first `before` failures.
+fn failure(rig: &Rig, before: usize) -> Value {
+    assert!(rig.events.wait_count("command.failed", before + 1, WAIT));
+    rig.events
+        .all()
+        .into_iter()
+        .filter(|e| e["type"] == "command.failed")
+        .nth(before)
+        .unwrap()
+}
+
+#[test]
+fn a_far_end_speaker_is_named_renamed_and_cleared_and_the_record_reads_the_name() {
+    let rig = rig("speakers");
+    let record = meeting(rig.store.as_ref(), None, 1_790_000_000_000);
+    let line = |channel, start_ms, speaker: Option<&str>| ink_core::Segment {
+        channel,
+        start_ms,
+        end_ms: start_ms + 900,
+        text: "one two three".into(),
+        speaker: speaker.map(|s| ink_core::SpeakerId(s.into())),
+    };
+    rig.store
+        .append_segments(
+            &record,
+            &[
+                line(Channel::Mic, 0, None),
+                line(Channel::Far, 1_000, Some("spk0")),
+                line(Channel::Far, 2_000, Some("spk1")),
+            ],
+        )
+        .unwrap();
+    let speakers = |n: usize| -> Value {
+        rig.ask(
+            json!({"cmd": "record.open", "record": record.0, "id": format!("open-{n}")}),
+            "library.record",
+            n,
+        )["speakers"]
+            .clone()
+    };
+
+    // Named: trimmed, and the name is not echoed (the record carries it, to whoever opens it).
+    let named = rig.ask(
+        json!({"cmd": "speaker.name", "record": record.0, "speaker": "spk1", "name": "  Robin Example ", "id": "name-1"}),
+        "speaker.named",
+        1,
+    );
+    assert_eq!(named["ref"], "name-1");
+    assert_eq!(named["record"], record.0.as_str());
+    assert_eq!(named["speaker"], "spk1");
+    assert_eq!(named["named"], true);
+    assert!(named.get("name").is_none(), "the name stays with the shell");
+    assert_eq!(
+        speakers(1),
+        json!([{"speaker": "spk1", "name": "Robin Example"}])
+    );
+
+    // Renamed.
+    rig.ask(
+        json!({"cmd": "speaker.name", "record": record.0, "speaker": "spk1", "name": "Sam Example", "id": "name-2"}),
+        "speaker.named",
+        2,
+    );
+    assert_eq!(
+        speakers(2),
+        json!([{"speaker": "spk1", "name": "Sam Example"}])
+    );
+
+    // Cleared, by an empty name (or one of spaces): numbered again.
+    let cleared = rig.ask(
+        json!({"cmd": "speaker.name", "record": record.0, "speaker": "spk1", "name": "   ", "id": "name-3"}),
+        "speaker.named",
+        3,
+    );
+    assert_eq!(cleared["named"], false);
+    assert_eq!(speakers(3), json!([]));
+    // Clearing a speaker who has no name is no error.
+    let again = rig.ask(
+        json!({"cmd": "speaker.name", "record": record.0, "speaker": "spk0", "name": "", "id": "name-4"}),
+        "speaker.named",
+        4,
+    );
+    assert_eq!(again["named"], false);
+
+    // Refused when it runs, naming the command's id, never the name: a label the transcript's far
+    // end does not have (the mic is the user, and has none), or a record that is not there.
+    for (label, command) in [
+        (
+            "an unknown label",
+            json!({"cmd": "speaker.name", "record": record.0, "speaker": "spk9", "name": "Zebra Quartz", "id": "bad-1"}),
+        ),
+        (
+            "no record",
+            json!({"cmd": "speaker.name", "record": "no-such-record", "speaker": "spk0", "name": "Zebra Quartz", "id": "bad-2"}),
+        ),
+    ] {
+        let before = rig.events.count("command.failed");
+        rig.core.command(&command.to_string()).unwrap();
+        let failed = failure(&rig, before);
+        assert_eq!(failed["command"], "speaker.name", "{label}");
+        assert_eq!(failed["id"], command["id"], "{label}");
+        let message = failed["message"].as_str().unwrap();
+        assert!(
+            !message.contains("Zebra"),
+            "{label}: an error never quotes the name: {message}"
+        );
+    }
+
+    // Refused as it is read, as every command whose fields are wrong: a name over two lines (it is
+    // written into Ask's transcript, one line per turn), one too long, a missing field, or one it
+    // does not take.
+    let long = "Zebra".repeat(ink_ffi::queries::MAX_SPEAKER_NAME_CHARS);
+    for command in [
+        json!({"cmd": "speaker.name", "record": record.0, "speaker": "spk0", "name": "Zebra\nQuartz: hi"}),
+        json!({"cmd": "speaker.name", "record": record.0, "speaker": "spk0", "name": long}),
+        json!({"cmd": "speaker.name", "record": record.0, "speaker": "spk0"}),
+        json!({"cmd": "speaker.name", "record": record.0, "name": "Zebra"}),
+        json!({"cmd": "speaker.name", "record": record.0, "speaker": "", "name": "Zebra"}),
+        json!({"cmd": "speaker.name", "record": record.0, "speaker": "spk0", "name": "Zebra", "colour": "red"}),
+    ] {
+        let refused = rig.core.command(&command.to_string()).unwrap_err();
+        assert!(refused.starts_with("speaker.name: "), "{refused}");
+        assert!(
+            !refused.contains("Zebra"),
+            "never quotes the name: {refused}"
+        );
+    }
+    assert!(rig.store.speaker_names(&record).unwrap().is_empty());
+    rig.finish();
+}
+
 #[test]
 fn shell_settings_are_whitelisted_and_round_trip() {
     let rig = rig("settings");
@@ -447,6 +579,83 @@ fn shell_settings_are_whitelisted_and_round_trip() {
     rig.finish();
 }
 
+/// hotkey.check answers whether this computer can watch a binding, before the shell stores it:
+/// its one spelling when it can, why not when it cannot. Nothing is stored.
+#[test]
+fn a_key_is_checked_before_it_is_stored() {
+    let rig = rig("hotkey-check");
+    let ok = rig.ask(
+        json!({"cmd": "hotkey.check", "binding": "f13", "id": "k1"}),
+        "hotkey.checked",
+        1,
+    );
+    assert_eq!(ok["binding"], "f13");
+    assert_eq!(ok["ok"], true, "{ok}");
+    assert_eq!(ok["canonical"], "f13");
+    assert!(ok.get("reason").is_none(), "{ok}");
+    assert_eq!(ok["ref"], "k1");
+    let refused = rig.ask(
+        json!({"cmd": "hotkey.check", "binding": "a", "id": "k2"}),
+        "hotkey.checked",
+        2,
+    );
+    assert_eq!(refused["ok"], false, "{refused}");
+    assert!(refused.get("canonical").is_none(), "{refused}");
+    let reason = refused["reason"].as_str().unwrap_or_default();
+    assert!(
+        reason.starts_with(|c: char| c.is_lowercase()) && !reason.ends_with('.'),
+        "words to show after \"can't use that:\": {reason:?}"
+    );
+    assert_eq!(rig.store.setting("dictation.key").unwrap(), None);
+    // A key setting's refusal gives the reason, never the settings table's placeholder.
+    for value in ["off", "a"] {
+        let refused = rig
+            .core
+            .command(
+                &json!({"cmd": "setting.set", "key": "dictation.key", "value": value}).to_string(),
+            )
+            .expect_err("not a key this computer watches");
+        assert!(!refused.contains("<key>"), "{refused}");
+        assert!(refused.contains("can't be"), "{refused}");
+    }
+    for bad in [
+        json!({"cmd": "hotkey.check"}),
+        json!({"cmd": "hotkey.check", "binding": 13}),
+        json!({"cmd": "hotkey.check", "binding": "f13", "key": "dictation.key"}),
+    ] {
+        assert!(rig.core.command(&bad.to_string()).is_err(), "{bad}");
+    }
+    rig.finish();
+}
+
+/// The Mac's answers: the canonical spelling, and the parser's own words.
+#[cfg(target_os = "macos")]
+#[test]
+fn the_mac_check_spells_a_chord_one_way_and_says_why_it_refuses() {
+    let rig = rig("hotkey-check-mac");
+    let chord = rig.ask(
+        json!({"cmd": "hotkey.check", "binding": " Shift+Ctrl+Space "}),
+        "hotkey.checked",
+        1,
+    );
+    assert_eq!(chord["binding"], " Shift+Ctrl+Space ");
+    assert_eq!(chord["canonical"], "ctrl+shift+space");
+    let left = rig.ask(
+        json!({"cmd": "hotkey.check", "binding": "left_option"}),
+        "hotkey.checked",
+        2,
+    );
+    assert_eq!(left["ok"], false);
+    assert!(
+        left["reason"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("left-hand modifier"),
+        "{left}"
+    );
+    rig.finish();
+}
+
 #[test]
 fn modes_come_from_the_store_then_the_import_then_the_default() {
     let rig = rig("modes");
@@ -487,6 +696,156 @@ fn modes_come_from_the_store_then_the_import_then_the_default() {
     rig.finish();
 }
 
+/// Settings edits the modes: the first save adopts the import's document, patched in place so
+/// what this build does not read (0.2's `model`, a transcription model's name) survives; each
+/// refusal the editor shows carries its code; the stored modes reach the listing.
+#[test]
+fn modes_are_saved_in_place_and_each_refusal_says_which_by_its_code() {
+    let rig = rig("modes-save");
+    let imported = json!({"default_id": "d", "modes": [
+        {"id": "d", "name": "Everywhere else", "style": "formal", "model": "", "polish_enabled": true, "apps": []},
+        {"id": "c", "name": "Chat", "style": "casual", "model": "ggml-base.en", "apps": ["com.example.chat"]},
+        {"id": "x", "name": "Odd", "style": "shouting"}]})
+    .to_string();
+    rig.store
+        .set_setting(ink_store::import::MODES_KEY, &imported)
+        .unwrap();
+    let saved = rig.ask(
+        json!({"cmd": "modes.save", "id": "s1", "mode": {"id": "c", "polish": true, "polish_prompt": "Short."}}),
+        "modes.listed",
+        1,
+    );
+    assert_eq!(saved["ref"], "s1");
+    assert_eq!(saved["modes"][1]["polish"], true);
+    assert_eq!(saved["modes"][1]["polish_prompt"], "Short.");
+    assert_eq!(
+        saved["modes"][1]["name"], "Chat",
+        "absent fields keep their value"
+    );
+    assert_eq!(
+        saved["modes"][2]["style"], "other",
+        "a style this build does not know"
+    );
+    assert!(
+        saved["default_polish_prompt"]
+            .as_str()
+            .is_some_and(|p| !p.is_empty())
+    );
+    assert_eq!(
+        saved["polish_models"],
+        json!([]),
+        "no language model registered"
+    );
+    assert!(saved.get("setting_polish_model").is_none());
+    let stored: Value =
+        serde_json::from_str(&rig.store.setting(MODES_KEY).unwrap().unwrap()).unwrap();
+    assert_eq!(
+        stored["modes"][1]["model"], "ggml-base.en",
+        "0.2's field survives"
+    );
+    assert_eq!(
+        stored["modes"][2]["style"], "shouting",
+        "kept until the user picks one"
+    );
+    assert_eq!(
+        rig.store
+            .setting(ink_store::import::MODES_KEY)
+            .unwrap()
+            .as_deref(),
+        Some(imported.as_str()),
+        "the import's document is left as written"
+    );
+
+    let long = "x".repeat(2_001);
+    let refusals = [
+        (
+            json!({"cmd": "modes.save", "mode": {"name": " chat "}}),
+            "name_taken",
+        ),
+        (
+            json!({"cmd": "modes.save", "mode": {"name": "Formal"}}),
+            "name_is_style",
+        ),
+        (
+            json!({"cmd": "modes.save", "mode": {"name": "  "}}),
+            "name_blank",
+        ),
+        (
+            json!({"cmd": "modes.save", "mode": {"id": "c", "polish_prompt": long}}),
+            "too_long",
+        ),
+        (
+            json!({"cmd": "modes.save", "mode": {"name": "Mail", "apps": ["com.example.chat"]}}),
+            "app_taken",
+        ),
+        (
+            json!({"cmd": "modes.save", "mode": {"id": "d", "apps": ["com.example.mail"]}}),
+            "default_mode",
+        ),
+        (
+            json!({"cmd": "modes.save", "mode": {"id": "gone", "name": "x"}}),
+            "mode_not_found",
+        ),
+        (
+            json!({"cmd": "modes.save", "mode": {"name": "Mail", "polish_model": "engine:none"}}),
+            "model_unknown",
+        ),
+        (json!({"cmd": "modes.delete", "mode": "d"}), "default_mode"),
+        (
+            json!({"cmd": "modes.delete", "mode": "gone"}),
+            "mode_not_found",
+        ),
+    ];
+    for (n, (cmd, code)) in refusals.iter().enumerate() {
+        let failed = rig.ask(cmd.clone(), "command.failed", n + 1);
+        assert_eq!(failed["code"], *code, "{cmd}: {failed}");
+        let message = failed["message"].as_str().unwrap();
+        assert!(
+            !message.contains("Chat") && !message.contains("com.example"),
+            "{failed}"
+        );
+    }
+    let failures = refusals.len();
+
+    // Moving an app is asked for; then the mode it left matches no more.
+    let moved = rig.ask(
+        json!({"cmd": "modes.save", "take_apps": true, "mode": {"name": "Mail", "apps": ["com.example.chat"]}}),
+        "modes.listed",
+        2,
+    );
+    assert_eq!(moved["modes"][1]["apps"], json!([]));
+    let mail = moved["modes"][3]["id"].as_str().unwrap().to_owned();
+    assert!(mail.starts_with('m'), "{mail}");
+    let left = rig.ask(
+        json!({"cmd": "modes.delete", "mode": mail, "id": "d1"}),
+        "modes.listed",
+        3,
+    );
+    assert_eq!(left["ref"], "d1");
+    assert_eq!(left["modes"].as_array().unwrap().len(), 3);
+
+    // A document that cannot be read is never saved over unless the user starts over.
+    rig.store.set_setting(MODES_KEY, "{broken").unwrap();
+    let refused = rig.ask(
+        json!({"cmd": "modes.save", "mode": {"name": "Mail"}}),
+        "command.failed",
+        failures + 1,
+    );
+    assert_eq!(refused["code"], "list_unreadable");
+    assert_eq!(
+        rig.store.setting(MODES_KEY).unwrap().as_deref(),
+        Some("{broken")
+    );
+    let fresh = rig.ask(
+        json!({"cmd": "modes.save", "replace_unreadable": true, "mode": {"name": "Mail"}}),
+        "modes.listed",
+        4,
+    );
+    assert_eq!(fresh["default_id"], "default");
+    assert_eq!(fresh["modes"][1]["name"], "Mail");
+    rig.finish();
+}
+
 #[test]
 fn a_save_refused_over_an_unreadable_list_says_so_by_its_code() {
     let rig = rig("list-unreadable");
@@ -514,6 +873,79 @@ fn the_catalogue_lists_this_oses_models_with_their_rates_and_whether_they_are_in
     let jobs = models[0]["jobs"].as_array().unwrap();
     assert!(jobs.contains(&json!({"job": "dictation_final", "wer": 5.0})));
     rig.finish();
+}
+
+/// A language model is listed by its kind and name. The free space where models go comes with
+/// the list, and the command's id with it.
+#[test]
+fn the_catalogue_names_the_language_model_and_says_the_free_space() {
+    let listed = |free: Option<u64>, installed: bool| {
+        let dir = TempDir::new("catalogue-language");
+        let models = ModelDir::new(dir.path().join("models"));
+        let speech = test_row(ROW_ID);
+        let chat = language_row("test-chat", "Test Chat");
+        if installed {
+            install(&models, &chat);
+        }
+        let loader = MockLoader::new(Behaviour::Say("x".into()));
+        let system = FakeSystem::new(free);
+        let (core, events) = start_parts(Parts {
+            store: Arc::new(ink_store::SqliteStore::open_in_memory().unwrap()),
+            clock: clock(),
+            registry: Registry::new(vec![speech, chat]).unwrap(),
+            models,
+            loader: loader.clone(),
+            installer: Arc::new(MockInstaller {
+                generation: loader.generation.clone(),
+                gate: None,
+                installs: AtomicUsize::new(0),
+            }),
+            data_dir: dir.path().to_owned(),
+            permissions: Arc::new(ink_ffi::queries::NoPermissionProbe),
+            local: ink_ffi::runtime::LocalParts {
+                system: system.clone(),
+                ..Default::default()
+            },
+            meetings: Default::default(),
+        });
+        core.command(r#"{"cmd":"models.list","id":"m1"}"#).unwrap();
+        let listed = events.wait_type("models.listed", WAIT);
+        // Asked of the models root, or, before it exists, of the directory above it.
+        let asked = if installed {
+            dir.path().join("models")
+        } else {
+            dir.path().to_owned()
+        };
+        assert_eq!(*system.asked.lock().unwrap(), [asked]);
+        core.shutdown();
+        events.assert_valid();
+        listed
+    };
+
+    let roomy = listed(Some(47_000_000_000), true);
+    assert_eq!(roomy["ref"], "m1");
+    assert_eq!(roomy["free_bytes"], 47_000_000_000_u64);
+    let models = roomy["models"].as_array().unwrap();
+    let by_id = |id: &str| models.iter().find(|m| m["id"] == id).unwrap().clone();
+    let speech = by_id(ROW_ID);
+    assert_eq!(speech["kind"], "speech");
+    assert!(speech.get("name").is_none());
+    assert_eq!(
+        by_id("test-chat"),
+        json!({
+            "id": "test-chat",
+            "kind": "language",
+            "name": "Test Chat",
+            "licence": "Apache-2.0",
+            "size_bytes": 4,
+            "installed": true,
+            "jobs": [],
+        })
+    );
+
+    // The OS saying nothing of free space: no free_bytes.
+    let unknown = listed(None, false);
+    assert!(unknown.get("free_bytes").is_none(), "{unknown}");
 }
 
 /// What serves a job is a screen's question (Settings > Models asks it after each download, and
@@ -565,6 +997,7 @@ fn the_catalogue_lists_the_macs_parakeet_on_macos_only() {
         }),
         data_dir: dir.path().to_owned(),
         permissions: Arc::new(ink_ffi::queries::NoPermissionProbe),
+        local: Default::default(),
         meetings: Default::default(),
     });
     let parakeet = |n: usize| {
@@ -594,6 +1027,7 @@ fn the_catalogue_lists_the_macs_parakeet_on_macos_only() {
         parakeet(1),
         Some(json!({
             "id": "parakeet-tdt-0.6b-v3-coreml",
+            "kind": "speech",
             "licence": "CC-BY-4.0",
             "size_bytes": 483_105_645,
             "installed": false,

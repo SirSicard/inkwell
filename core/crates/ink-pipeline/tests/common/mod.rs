@@ -219,6 +219,15 @@ impl RigBuilder {
         });
         let mem = Arc::new(MemStore::new());
         let store: Arc<dyn Store> = self.store.clone().unwrap_or_else(|| mem.clone());
+        // The chain reads polish's consents again from the store at each call, so the settings'
+        // are stored too, as the core keeps them: in the rig's own store only (a test that brings
+        // its own stores them itself, and a probe built from this config must not write it).
+        if self.store.is_none() && !self.settings.polish_consents.is_empty() {
+            let _ = mem.set_setting(
+                ink_pipeline::consent::Feature::Polish.setting_key(),
+                &ink_pipeline::consent::consents_to_setting(&self.settings.polish_consents),
+            );
+        }
         let events = Arc::new(Mutex::new(Vec::new()));
         let sink_events = events.clone();
         let sink: EventSink<DictationEvent> =
@@ -497,6 +506,9 @@ impl Store for FaultyStore {
         }
         self.inner.finish_record(id, at)
     }
+    fn mark_stuck(&self, id: &RecordId) -> Result<(), StoreError> {
+        self.inner.mark_stuck(id)
+    }
     fn delete_record(&self, id: &RecordId) -> Result<(), StoreError> {
         self.inner.delete_record(id)
     }
@@ -547,6 +559,9 @@ impl Store for FaultyStore {
     }
     fn set_speaker_name(&self, id: &RecordId, s: &SpeakerId, n: &str) -> Result<(), StoreError> {
         self.inner.set_speaker_name(id, s, n)
+    }
+    fn clear_speaker_name(&self, id: &RecordId, s: &SpeakerId) -> Result<(), StoreError> {
+        self.inner.clear_speaker_name(id, s)
     }
     fn speaker_names(&self, id: &RecordId) -> Result<Vec<(SpeakerId, String)>, StoreError> {
         self.inner.speaker_names(id)

@@ -64,6 +64,7 @@ mac="$(cd "$(dirname "$0")/.." && pwd)"
 . "$mac/scripts/lib/redact-signing.sh"
 # check_bundle_linkage: what the bundle's code loads, and from where.
 . "$mac/scripts/lib/bundle-check.sh"
+. "$mac/scripts/lib/swiftpm-rpath.sh"
 # check_entitlements: the signed entitlements, against the allow-list.
 . "$mac/scripts/lib/entitlements-check.sh"
 config=release
@@ -159,8 +160,8 @@ done <"$link_file"
 # Only the versions pinned in the committed Package.resolved: a build that re-resolved could ship
 # a dependency the licence audit never saw. A stale or missing Package.resolved fails here.
 # The rpath: the frameworks and libraries the app loads (Sparkle, the engines') go in
-# Contents/Frameworks, and SwiftPM's own rpath is only @loader_path, which is Contents/MacOS in the
-# bundle.
+# Contents/Frameworks. SwiftPM also adds a build-local PackageFrameworks path on newer Xcode;
+# the copied executable removes exactly that path before the unchanged linkage check.
 swift build --package-path "$mac" -c "$config" --product Inkwell --only-use-versions-from-resolved-file \
   -Xlinker -rpath -Xlinker @executable_path/../Frameworks ${link_args[@]+"${link_args[@]}"}
 bin="$(swift build --package-path "$mac" -c "$config" --show-bin-path --only-use-versions-from-resolved-file)"
@@ -179,10 +180,34 @@ fi
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$bin/Inkwell" "$app/Contents/MacOS/Inkwell"
+remove_swiftpm_framework_rpath "$app/Contents/MacOS/Inkwell" "$mac" "$bin" \
+  || fail "could not remove SwiftPM's build-local framework search path"
 cp "$mac/Info.plist" "$app/Contents/Info.plist"
 plutil -replace CFBundleShortVersionString -string "${INK_VERSION:-1.0.0}" "$app/Contents/Info.plist"
 plutil -replace CFBundleVersion -string "${INK_BUILD_NUMBER:-1}" "$app/Contents/Info.plist"
 printf 'APPL????' >"$app/Contents/PkgInfo"
+# The asset catalog: the app's accent (Info.plist's NSAccentColorName), Glow's button fill per
+# mode. Without it macOS draws selections and default buttons in the system's blue, silently, so
+# a catalog that did not compile, or lacks the colour Info.plist names, stops the build.
+assets_plist="$(mktemp -t inkwell-assets)"
+xcrun actool "$mac/Assets.xcassets" --compile "$app/Contents/Resources" --platform macosx \
+  --minimum-deployment-target "$target" --output-partial-info-plist "$assets_plist" \
+  --errors --warnings --output-format human-readable-text >/dev/null \
+  || fail "actool could not compile mac/Assets.xcassets"
+rm -f "$assets_plist"
+accent="$(plutil -extract NSAccentColorName raw "$app/Contents/Info.plist")" \
+  || fail "Info.plist names no NSAccentColorName"
+[ -f "$app/Contents/Resources/Assets.car" ] || fail "the bundle has no Assets.car"
+# Read whole before matching: grep -q closing the pipe early could fail assetutil under pipefail.
+car_info="$(xcrun assetutil --info "$app/Contents/Resources/Assets.car")"
+grep -qF "\"Name\" : \"$accent\"" <<<"$car_info" \
+  || fail "Assets.car holds no colour named $accent (Info.plist's NSAccentColorName)"
+# The app icon (Info.plist's CFBundleIconFile): design/icon/make_icon.py renders it. Without it
+# the Dock, Finder, About and the updater show a blank placeholder, so a missing icon stops the build.
+icon="$(plutil -extract CFBundleIconFile raw "$app/Contents/Info.plist")" \
+  || fail "Info.plist names no CFBundleIconFile"
+[ -f "$mac/$icon.icns" ] || fail "mac/$icon.icns is missing (design/icon/make_icon.py writes it)"
+cp "$mac/$icon.icns" "$app/Contents/Resources/$icon.icns"
 # SwiftPM resource bundles (a dependency's data files). Bundle.module looks in
 # Bundle.main.resourceURL first, which is Contents/Resources in an app.
 find "$bin" -maxdepth 1 -name '*.bundle' -type d -exec cp -R {} "$app/Contents/Resources/" \;

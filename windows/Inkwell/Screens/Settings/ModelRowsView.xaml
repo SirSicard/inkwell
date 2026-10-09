@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- The catalogue's models where they can be downloaded (Settings > Models and the first-run
-     sheet): each model's line, where it would come from, its download's progress, and a failure in
-     words with Retry. Settings gives each row its own Download; the first run has one for all. -->
+<!-- The catalogue's models where they can be downloaded (Settings > Models): each model's line,
+     where it would come from, its download's progress, a failure in words with Retry, and a
+     Download of its own; Cancel while it downloads, and Remove once it is in. The first run offers choices instead (ModelChoices). -->
 <UserControl
     x:Class="Inkwell.Screens.ModelRowsView"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -9,17 +9,20 @@
     xmlns:local="using:Inkwell.Screens">
     <ItemsRepeater x:Name="Rows">
         <ItemsRepeater.Layout>
-            <StackLayout Spacing="8" />
+            <StackLayout Spacing="16" />
         </ItemsRepeater.Layout>
         <ItemsRepeater.ItemTemplate>
             <DataTemplate x:DataType="local:ModelRowItem">
-                <Grid ColumnSpacing="12" Tag="{x:Bind Id}">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
+                <!-- The model's lines and its button; the button under them at the narrowest. -->
+                <local:LineOrStackPanel Fill="0" FillMinimum="160" Tag="{x:Bind Id}">
                     <StackPanel VerticalAlignment="Center" Spacing="4">
-                        <TextBlock Style="{StaticResource InkCaptionStyle}" Text="{x:Bind Text}" />
+                        <local:LineOrStackPanel Fill="0" FillMinimum="160" Spacing="8">
+                            <TextBlock Style="{StaticResource InkBodyStyle}" FontWeight="SemiBold" Text="{x:Bind Row.Name}" />
+                            <Border Padding="8,2" CornerRadius="8" HorizontalAlignment="Left" Background="{ThemeResource InkChipBrush}" Visibility="{x:Bind local:SettingsFormat.ShowsIf(Row.Installed)}">
+                                <TextBlock Style="{StaticResource InkCaptionStyle}" Text="Installed" />
+                            </Border>
+                        </local:LineOrStackPanel>
+                        <TextBlock Style="{StaticResource InkCaptionStyle}" Text="{x:Bind local:ModelRowsView.Metadata(Row)}" />
                         <TextBlock Style="{StaticResource InkCaptionStyle}" Text="{x:Bind From}" Visibility="{x:Bind local:SettingsFormat.Shows(From)}" />
                         <ProgressBar
                             AutomationProperties.Name="{x:Bind ProgressName}"
@@ -28,24 +31,37 @@
                             Value="{x:Bind Progress}" />
                         <TextBlock Style="{StaticResource InkCaptionStyle}" Text="{x:Bind Status}" Visibility="{x:Bind local:SettingsFormat.Shows(Status)}" />
                         <TextBlock Style="{StaticResource InkAlertTextStyle}" Text="{x:Bind Failure}" Visibility="{x:Bind local:SettingsFormat.Shows(Failure)}" />
+                        <TextBlock Style="{StaticResource InkAlertTextStyle}" Text="{x:Bind Note}" Visibility="{x:Bind local:SettingsFormat.Shows(Note)}" />
                     </StackPanel>
-                    <Button
-                        x:Name="Download"
-                        Grid.Column="1"
-                        VerticalAlignment="Top"
-                        AutomationProperties.Name="{x:Bind DownloadName}"
-                        Click="OnDownload"
-                        Content="Download"
-                        Visibility="{x:Bind ShowsDownload}" />
-                    <Button
-                        x:Name="Retry"
-                        Grid.Column="1"
-                        VerticalAlignment="Top"
-                        AutomationProperties.Name="{x:Bind RetryName}"
-                        Click="OnRetry"
-                        Content="Retry"
-                        Visibility="{x:Bind CanRetry}" />
-                </Grid>
+                    <!-- One of these at a time: Download or Retry while it is not in, Cancel while it
+                         downloads or waits, Remove once it is installed (asks first). -->
+                    <StackPanel HorizontalAlignment="Left" VerticalAlignment="Top" Spacing="6">
+                        <Button
+                            x:Name="Download"
+                            AutomationProperties.Name="{x:Bind DownloadName}"
+                            Click="OnDownload"
+                            Content="Download"
+                            Visibility="{x:Bind ShowsDownload}" />
+                        <Button
+                            x:Name="Retry"
+                            AutomationProperties.Name="{x:Bind RetryName}"
+                            Click="OnRetry"
+                            Content="Retry"
+                            Visibility="{x:Bind CanRetry}" />
+                        <Button
+                            x:Name="Cancel"
+                            AutomationProperties.Name="{x:Bind CancelName}"
+                            Click="OnCancel"
+                            Content="Cancel"
+                            Visibility="{x:Bind ShowsCancel}" />
+                        <Button
+                            x:Name="Remove"
+                            AutomationProperties.Name="{x:Bind RemoveName}"
+                            Click="OnRemove"
+                            Content="Remove…"
+                            Visibility="{x:Bind ShowsRemove}" />
+                    </StackPanel>
+                </local:LineOrStackPanel>
             </DataTemplate>
         </ItemsRepeater.ItemTemplate>
     </ItemsRepeater>

@@ -136,7 +136,9 @@ fn redirects_are_not_followed() {
         (307, "Temporary Redirect"),
         (308, "Permanent Redirect"),
     ] {
-        let (elsewhere, contacted) = loopback_server(http_response(200, "OK", OPENAI_OK), 1);
+        // Several connections: anything else on this machine that probes loopback ports (a dev
+        // tool's `GET /` was seen) must not use up the one a followed redirect would need.
+        let (elsewhere, contacted) = loopback_server(http_response(200, "OK", OPENAI_OK), 8);
         let redirect = format!(
             "HTTP/1.1 {status} {reason}\r\nLocation: http://127.0.0.1:{elsewhere}/v1/chat/completions\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
         );
@@ -151,10 +153,18 @@ fn redirects_are_not_followed() {
             LlmError::Http { status }
         );
         assert!(received.recv_timeout(Duration::from_secs(5)).is_ok());
-        assert!(
-            contacted.recv_timeout(Duration::from_millis(300)).is_err(),
-            "the {status} redirect was followed"
-        );
+        // Only the redirect's own target counts: a stray request from another process is not the
+        // client following the redirect.
+        let deadline = std::time::Instant::now() + Duration::from_millis(300);
+        while let Some(left) = deadline.checked_duration_since(std::time::Instant::now()) {
+            let Ok(got) = contacted.recv_timeout(left) else {
+                break;
+            };
+            assert!(
+                !got.request_line.contains("/v1/chat/completions"),
+                "the {status} redirect was followed"
+            );
+        }
     }
 }
 

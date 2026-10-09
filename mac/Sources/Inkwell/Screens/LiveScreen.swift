@@ -14,7 +14,7 @@ struct LiveScreen: View {
 
     var body: some View {
         if let meeting = store.meeting {
-            LiveMeetingView(meeting: meeting, live: screens.live, meetings: screens.meetings)
+            LiveMeetingView(meeting: meeting, live: screens.live, meetings: screens.meetings, speech: screens.catalogue.speech)
         } else {
             VStack(alignment: .leading, spacing: 12) {
                 Paper.Header(title: "Live", subtitle: nil)
@@ -40,6 +40,8 @@ struct LiveMeetingView: View {
     let meeting: CoreStore.LiveMeeting
     @Bindable var live: LiveModel
     let meetings: MeetingModel
+    /// Whether a speech model can transcribe the meeting (the catalogue's answer).
+    var speech = SpeechModels.unknown
     @Environment(GlowTheme.self) private var theme
 
     var body: some View {
@@ -54,7 +56,7 @@ struct LiveMeetingView: View {
                     .padding(.trailing, 26)
                 Rectangle().fill(PaperPalette.border).frame(width: 1)
                     .accessibilityHidden(true)
-                LedgerView(lines: lines, earlierInRecord: meeting.ledger.dropped > 0)
+                LedgerView(lines: lines, earlierInRecord: meeting.ledger.dropped > 0, empty: SpeechModels.ledgerEmptyLine(speech))
                     .frame(minWidth: 240, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     .layoutPriority(1.25)
                     .padding(.leading, 26)
@@ -108,6 +110,12 @@ struct LiveMeetingView: View {
                         .font(Typography.caption)
                         .foregroundStyle(far.alert ? Theme.alert : Theme.secondaryText)
                 }
+                if let noModel = SpeechModels.liveLine(speech) {
+                    Text(noModel)
+                        .font(Typography.caption)
+                        .foregroundStyle(Theme.alert)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             Spacer(minLength: 0)
             VStack(alignment: .trailing, spacing: 8) {
@@ -152,11 +160,19 @@ struct LiveMeetingView: View {
     }
 
     /// Which mic, when the reason is worth saying ("why is it using the laptop mic?").
-    private var micLine: String? {
+    private var micLine: String? { Self.micLine(meeting) }
+
+    /// Which mic, when the reason is worth saying: a mic that went and the one in its place, one
+    /// standing in for a chosen mic that isn't connected, or Automatic's reason.
+    static func micLine(_ meeting: CoreStore.LiveMeeting) -> String? {
         guard let name = meeting.micName else { return nil }
+        if let change = meeting.micSwitch {
+            return change.from.map { "\(name), since \($0) went" } ?? "\(name), since your mic went"
+        }
         switch meeting.micReason {
         case .builtInForBluetoothOutput?: return "\(name), because your headphones are Bluetooth"
         case .headsetMicSetting?: return "\(name), the headset's own mic"
+        case .chosenMissing?: return "\(name), until your chosen mic is back"
         default: return nil
         }
     }
@@ -199,7 +215,7 @@ struct LiveMeetingView: View {
             legendItem(theme.them, "them")
             Text("grey = still settling")
         }
-        .font(Typography.timestamp)
+        .font(Typography.caption)
         .foregroundStyle(Theme.secondaryText)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Your lines have your colour's dot, the others' theirs; grey lines are still settling.")
@@ -242,13 +258,15 @@ struct LedgerView: View {
     let lines: [LiveLine]
     /// The oldest lines were let go of in memory (the record keeps every one).
     var earlierInRecord = false
+    /// What it says while nothing has been said.
+    var empty = "Waiting for someone to speak."
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             Paper.Eyebrow(text: "What's being said")
                 .padding(.bottom, 6)
             if lines.isEmpty {
-                Text("Waiting for someone to speak.")
+                Text(empty)
                     .font(Typography.caption)
                     .foregroundStyle(Theme.secondaryText)
             }

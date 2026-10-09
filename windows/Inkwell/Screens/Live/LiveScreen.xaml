@@ -147,20 +147,19 @@
                     HorizontalAlignment="Right"
                     VerticalAlignment="Bottom"
                     Spacing="8">
-                    <!-- The large Stop (Ctrl+.). -->
+                    <!-- The large Stop; its shortcut follows the global meeting toggle. -->
                     <Button
                         x:Name="StopButton"
                         MinWidth="132"
                         Padding="30,12,30,13"
                         HorizontalAlignment="Right"
-                        AutomationProperties.AcceleratorKey="Control+Period"
                         AutomationProperties.HelpText="Stops recording; the final pass then writes the record"
                         Click="OnStop"
                         Content="Stop"
                         FontSize="17"
                         FontWeight="SemiBold"
                         Style="{StaticResource InkAccentButtonStyle}"
-                        ToolTipService.ToolTip="Stop (Ctrl+.)" />
+                        ToolTipService.ToolTip="Stop recording" />
                     <TextBlock x:Name="StopFailure" HorizontalAlignment="Right" Style="{StaticResource InkAlertTextStyle}" />
                     <!-- The legend, read as one sentence. -->
                     <ContentControl

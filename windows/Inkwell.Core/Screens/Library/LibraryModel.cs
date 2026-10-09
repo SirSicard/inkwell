@@ -79,6 +79,10 @@ public sealed class LibraryModel : ObservableModel
         TodayOpen,
         StatsDay,
         StatsWeek,
+        /// <summary>A name given to one of the open record's speakers.</summary>
+        Speaker,
+        /// <summary>A record the user deleted.</summary>
+        Delete,
     }
 
     private static readonly Dictionary<Slot, string> SlotNames = new()
@@ -91,6 +95,8 @@ public sealed class LibraryModel : ObservableModel
         [Slot.TodayOpen] = "todayOpen",
         [Slot.StatsDay] = "statsDay",
         [Slot.StatsWeek] = "statsWeek",
+        [Slot.Speaker] = "speaker",
+        [Slot.Delete] = "delete",
     };
 
     private static readonly Dictionary<string, Slot> SlotsByName =
@@ -107,6 +113,16 @@ public sealed class LibraryModel : ObservableModel
     /// <summary>Where to put the playhead once the record being opened arrives.</summary>
     private long? _pendingSeek;
     private bool _pendingPlay;
+    /// <summary>
+    /// The names sent for the open record's speakers, by label: what the store holds once each is
+    /// saved, before the record is read again. Forgotten when one fails, and with the record.
+    /// </summary>
+    private readonly Dictionary<string, string> _sentNames = new(StringComparer.Ordinal);
+    /// <summary>The record the last record.delete asked about: its refusal is shown only on it.</summary>
+    // The record each naming and deletion was about, by its command's id: a refusal counts even
+    // after a newer one was sent, and only on its own record.
+    private readonly Dictionary<string, string> _namingFor = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _deletingFor = new(StringComparer.Ordinal);
     // Every kind until a chip narrows it (the All chip).
     private RecordKind? _filter;
     private string _query = "";
@@ -201,6 +217,15 @@ public sealed class LibraryModel : ObservableModel
 
     /// <summary>Plays the open record's audio.</summary>
     public RecordPlayer? Player { get; private set; }
+
+    /// <summary>Why the last name given to a speaker was not saved (the core's words), until the next try or another record.</summary>
+    public string? NamingFailure { get; private set; }
+
+    /// <summary>Why the record the user deleted was not deleted (the core's words), on that record, until the next try.</summary>
+    public string? DeleteFailure { get; private set; }
+
+    /// <summary>What the last deletion left on this PC, when it left anything, until another record opens.</summary>
+    public string? DeletionNote { get; private set; }
 
     /// <summary>Today: the latest finished meeting, whole.</summary>
     public RecordDocument? LastMeeting { get; private set; }
@@ -367,6 +392,10 @@ public sealed class LibraryModel : ObservableModel
         Selected = record;
         Document = null;
         OpenFailure = null;
+        NamingFailure = null;
+        DeleteFailure = null;
+        DeletionNote = null;
+        _sentNames.Clear();
         ReplacePlayer(null);
         _send(new CoreCommand.RecordOpen(record, RefFor(Slot.Open)));
         Changed();
@@ -389,6 +418,77 @@ public sealed class LibraryModel : ObservableModel
     /// shows a failure (it lists again); the record is read again when the core says it changed.
     /// </summary>
     public void SetDone(string commitment, bool done) => _send(new CoreCommand.CommitmentSetDone(commitment, done));
+
+    /// <summary>
+    /// The longest name a speaker takes, in Unicode scalars, as the core counts it
+    /// (MAX_SPEAKER_NAME_CHARS): an emoji is one, an accent written as two scalars is two.
+    /// </summary>
+    public const int MaxSpeakerName = 80;
+
+    /// <summary>A name's length as the core counts it, once on one line.</summary>
+    public static int NameLength(string name) => OneLine(name).EnumerateRunes().Count();
+
+    /// <summary><paramref name="text"/> on one line: every run of white space and control characters (the core refuses those) is one space, and none at either end.</summary>
+    public static string OneLine(string text)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        return string.Join(' ', text.Split(
+            text.Where(c => char.IsWhiteSpace(c) || char.IsControl(c)).Distinct().ToArray(),
+            StringSplitOptions.RemoveEmptyEntries));
+    }
+
+    /// <summary>
+    /// Names one of the open record's far-end speakers, by the diarizer's label, as the user typed
+    /// it: on one line, and empty clears the name (the speaker reads as "Speaker N" again).
+    /// Nothing is sent when nothing changed, or for a label the record's far end does not have
+    /// (the mic is the user, never renamed). The record is read again when the core says it is
+    /// saved; a name the core refuses is said (NamingFailure).
+    /// </summary>
+    public void NameSpeaker(string label, string name)
+    {
+        ArgumentNullException.ThrowIfNull(label);
+        ArgumentNullException.ThrowIfNull(name);
+        if (Document is not { } document || document.SpeakerLabelled(label) is not { } speaker)
+        {
+            return;
+        }
+        var oneLine = OneLine(name);
+        // Unchanged from what was last sent, or else from what the record says: a rename sent
+        // since the record was read makes the record's name stale.
+        if (oneLine == (_sentNames.TryGetValue(label, out var sent) ? sent : speaker.Name ?? ""))
+        {
+            return;
+        }
+        NamingFailure = null;
+        _sentNames[label] = oneLine;
+        var id = RefFor(Slot.Speaker);
+        _namingFor[id] = document.Record.Record;
+        _send(new CoreCommand.SpeakerName(document.Record.Record, label, oneLine, id));
+        Changed();
+    }
+
+    /// <summary>
+    /// Deletes <paramref name="record"/> whole: asked only once the user confirmed
+    /// (DeletionWarning). Nothing moves until the core says it is gone (record.deleted); a refusal
+    /// (a record still being recorded or finished) is said on that record (DeleteFailure).
+    /// </summary>
+    public void DeleteRecord(string record)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        DeleteFailure = null;
+        var id = RefFor(Slot.Delete);
+        _deletingFor[id] = record;
+        _send(new CoreCommand.RecordDelete(record, id));
+        Changed();
+    }
+
+    /// <summary>What the confirmation says goes with a record of <paramref name="kind"/>, and that it can't be undone.</summary>
+    public static string DeletionWarning(RecordKind kind) => kind switch
+    {
+        RecordKind.Meeting => "Its audio, transcript, notes and summary, and what's owed from it, are deleted from this PC.",
+        RecordKind.Dictation => "Its words are deleted from this PC.",
+        _ => "Its transcript, notes and summary, and what's owed from it, are deleted from this PC. The file you imported stays where it is.",
+    } + " This can't be undone.";
 
     /// <summary>Puts the playhead at <paramref name="ms"/> (a chip, a line, a search hit) and plays from there.</summary>
     public void PlayFrom(long ms, bool start = true)
@@ -460,13 +560,44 @@ public sealed class LibraryModel : ObservableModel
                 case CommandFailed failed:
                     changed |= Fail(failed);
                     break;
+                case RecordDeleted deleted:
+                    if (deleted.Ref is string deletedRef)
+                    {
+                        _deletingFor.Remove(deletedRef);
+                    }
+                    Removed(deleted);
+                    // Today's counts and its last meeting may have changed.
+                    libraryChanged = true;
+                    changed = true;
+                    break;
+                case SpeakerNamed named:
+                    if (named.Ref is string namedRef)
+                    {
+                        _namingFor.Remove(namedRef);
+                    }
+                    // The name shows wherever that record does: the open record, and Today's last
+                    // meeting.
+                    if (Document?.Record.Record == named.Record)
+                    {
+                        recordChanged = true;
+                        if (Current(named.Ref) == Slot.Speaker && NamingFailure is not null)
+                        {
+                            NamingFailure = null;
+                            changed = true;
+                        }
+                    }
+                    if (LastMeeting?.Record.Record == named.Record)
+                    {
+                        _send(new CoreCommand.RecordOpen(named.Record, RefFor(Slot.TodayOpen)));
+                    }
+                    break;
                 case CommitmentUpdated or NoteAdded or NoteUpdated or NoteDeleted:
                     // The open record may hold it: read it again.
                     recordChanged = true;
                     break;
-                case MeetingFinished or DictationInserted or CoreReady or ImportFinished:
-                    // A record was written or finished, or 0.2's came over: what the screens list
-                    // has changed.
+                case MeetingFinished or MeetingDiscarded or DictationInserted or CoreReady or ImportFinished:
+                    // A record was written, finished or deleted with Stop and delete, or 0.2's came
+                    // over: what the screens list has changed.
                     libraryChanged = true;
                     break;
             }
@@ -488,6 +619,26 @@ public sealed class LibraryModel : ObservableModel
 
     private bool Fail(CommandFailed failed)
     {
+        // Naming and deleting are not questions a newer one replaces: each refusal counts, stale
+        // or not, said only while its own record is open.
+        switch (SlotOf(failed.Id))
+        {
+            case Slot.Speaker:
+                if (_namingFor.Remove(failed.Id!, out var named) && Document?.Record.Record == named)
+                {
+                    NamingFailure = failed.Message;
+                }
+                // What was sent did not stick: the record's names are what stands, so the same
+                // name can be sent again.
+                _sentNames.Clear();
+                return true;
+            case Slot.Delete:
+                if (_deletingFor.Remove(failed.Id!, out var deleting) && Selected == deleting)
+                {
+                    DeleteFailure = failed.Message;
+                }
+                return true;
+        }
         switch (Current(failed.Id))
         {
             case Slot.List:
@@ -522,6 +673,53 @@ public sealed class LibraryModel : ObservableModel
             default:
                 return false;
         }
+    }
+
+    /// <summary>
+    /// A record is gone: out of the list and the matches, out of Today, and the selection moves to
+    /// the record below it in what the column shows (the matches while searching, else the list;
+    /// above when it was the last), or to none. What it left behind is said until another record
+    /// opens.
+    /// </summary>
+    private void Removed(RecordDeleted deleted)
+    {
+        var gone = deleted.Record;
+        List<string> Shown() => (IsSearching ? Hits.Select(h => h.Record) : Records.Select(r => r.Record)).Distinct().ToList();
+        var index = Shown().IndexOf(gone);
+        Records = Records.Where(r => r.Record != gone).ToList();
+        Hits = Hits.Where(h => h.Record != gone).ToList();
+        if (LastMeeting?.Record.Record == gone)
+        {
+            LastMeeting = null;
+            // Asked for again (the library changed): not "no meetings yet" meanwhile.
+            LastMeetingLoad = LibraryLoad.Loading;
+        }
+        if (Selected == gone)
+        {
+            var rest = Shown();
+            if (index >= 0 && rest.Count > 0)
+            {
+                Open(rest[Math.Min(index, rest.Count - 1)]);
+            }
+            else
+            {
+                Selected = null;
+                Document = null;
+                OpenFailure = null;
+                _pendingSeek = null;
+                ReplacePlayer(null);
+            }
+        }
+        var left = new List<string>();
+        if (!deleted.Scrubbed)
+        {
+            left.Add("its words are still in the library's files while another app reads them, and Inkwell clears them as soon as it can");
+        }
+        if (deleted.AudioLeft)
+        {
+            left.Add("its recording couldn't be removed from the library's folder");
+        }
+        DeletionNote = left.Count == 0 ? null : $"Deleted, but {string.Join(", and ", left)}.";
     }
 
     private bool Receive(LibraryRecords answer)
@@ -600,10 +798,13 @@ public sealed class LibraryModel : ObservableModel
         ? Hits.Count.ToString(CultureInfo.InvariantCulture)
         : string.Create(CultureInfo.InvariantCulture, $"{Records.Count}{(HasMore ? "+" : "")}");
 
-    /// <summary>The count as a screen reader reads it.</summary>
+    /// <summary>The count as a screen reader reads it: "1 record", "7 records", "1 match".</summary>
     public string CountLabel => IsSearching
-        ? string.Create(CultureInfo.InvariantCulture, $"{Hits.Count} matches")
-        : string.Create(CultureInfo.InvariantCulture, $"{Records.Count} records");
+        ? Counted(Hits.Count, "match", "matches")
+        : Counted(Records.Count, "record", "records");
+
+    private static string Counted(int count, string one, string many) =>
+        string.Create(CultureInfo.InvariantCulture, $"{count} {(count == 1 ? one : many)}");
 
     /// <summary>What an empty list says, for the filter shown.</summary>
     public (string Title, string Detail) EmptyText => Filter switch

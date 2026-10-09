@@ -608,6 +608,7 @@ fn every_record_scoped_call_on_an_unknown_record_is_not_found(store: &dyn Store)
     let ghost = RecordId("nope".into());
     let nf = Err(StoreError::NotFound);
     assert_eq!(store.finish_record(&ghost, 1), nf);
+    assert_eq!(store.mark_stuck(&ghost), nf);
     assert_eq!(
         store.append_segments(&ghost, &[seg(Channel::Mic, 0, "x")]),
         nf
@@ -627,6 +628,10 @@ fn every_record_scoped_call_on_an_unknown_record_is_not_found(store: &dyn Store)
         nf
     );
     assert_eq!(store.speaker_names(&ghost), Err(StoreError::NotFound));
+    assert_eq!(
+        store.clear_speaker_name(&ghost, &SpeakerId("spk0".into())),
+        nf
+    );
     assert_eq!(store.save_removed(&ghost, &[seg(Channel::Mic, 0, "x")]), nf);
     assert_eq!(store.save_removed(&ghost, &[]), nf);
     assert_eq!(store.removed(&ghost), Err(StoreError::NotFound));
@@ -797,6 +802,41 @@ fn several_settings_are_written_together(store: &dyn Store) {
     assert_eq!(store.setting("b").unwrap().as_deref(), Some("set"));
     store.set_settings(&[]).unwrap();
     assert_eq!(store.setting("a").unwrap().as_deref(), Some("new"));
+}
+
+/// A cleared name goes, and only that speaker's: the speaker reads as unnamed again. Clearing a
+/// speaker that has no name changes nothing and is no error (the user cleared an empty field).
+fn a_cleared_speaker_name_goes_and_only_that_one(store: &dyn Store) {
+    let id = meeting(store, 1);
+    let other = meeting(store, 2);
+    let s0 = SpeakerId("spk0".into());
+    let s1 = SpeakerId("spk1".into());
+    store.set_speaker_name(&id, &s0, "Guest").unwrap();
+    store.set_speaker_name(&id, &s1, "Host").unwrap();
+    store.set_speaker_name(&other, &s0, "Chair").unwrap();
+
+    store.clear_speaker_name(&id, &s0).unwrap();
+    assert_eq!(
+        store.speaker_names(&id).unwrap(),
+        vec![(s1.clone(), "Host".to_string())]
+    );
+    assert_eq!(
+        store.speaker_names(&other).unwrap(),
+        vec![(s0.clone(), "Chair".to_string())],
+        "the same label in another record keeps its name"
+    );
+
+    store.clear_speaker_name(&id, &s0).unwrap();
+    store
+        .clear_speaker_name(&id, &SpeakerId("spk7".into()))
+        .unwrap();
+    assert_eq!(store.speaker_names(&id).unwrap().len(), 1);
+
+    store.set_speaker_name(&id, &s0, "Guest again").unwrap();
+    assert_eq!(
+        store.speaker_names(&id).unwrap(),
+        vec![(s0, "Guest again".to_string()), (s1, "Host".to_string())]
+    );
 }
 
 /// Setting a value twice keeps the second; so do speaker names and summaries.
@@ -1041,6 +1081,7 @@ fn fields_round_trip(store: &dyn Store) {
             revision: 1,
             // Made here, from a file: no importer wrote it.
             imported: false,
+            stuck: false,
         }
     );
 
@@ -1306,6 +1347,208 @@ fn a_batch_of_commitments_and_its_merges_is_saved_whole_or_not_at_all(store: &dy
     assert_eq!(open.iter().map(|c| &c.id).collect::<Vec<_>>(), [&ids[2]]);
 }
 
+// --- Stats -------------------------------------------------------------------------------------
+
+/// Digests are the counts of each record's current transcript, newest first, and follow every
+/// write that changes a transcript: an append, a supersede, a delete.
+fn digests_follow_every_record_and_its_current_transcript(store: &dyn Store) {
+    assert_eq!(store.digests().unwrap(), vec![]);
+    let dictation = store
+        .create_record(NewRecord {
+            kind: RecordKind::Dictation,
+            title: None,
+            started_at_unix_ms: 10,
+            source_app: None,
+            audio_dir: None,
+        })
+        .unwrap();
+    store
+        .append_segments(
+            &dictation,
+            &[Segment {
+                channel: Channel::Mic,
+                start_ms: 0,
+                end_ms: 4_000,
+                text: "one two three".into(),
+                speaker: None,
+            }],
+        )
+        .unwrap();
+    store.finish_record(&dictation, 5_000).unwrap();
+    let call = meeting(store, 20);
+    store
+        .append_segments(
+            &call,
+            &[
+                seg(Channel::Mic, 0, "are we on track?"),
+                seg(Channel::Far, 1_000, "yes we are"),
+            ],
+        )
+        .unwrap();
+
+    let mut all = store.digests().unwrap();
+    // No order is promised.
+    all.sort_by_key(|d| std::cmp::Reverse(d.started_at_unix_ms));
+    assert_eq!(
+        all.iter().map(|d| &d.record).collect::<Vec<_>>(),
+        [&call, &dictation]
+    );
+    assert_eq!(all[1].kind, RecordKind::Dictation);
+    assert_eq!(all[1].started_at_unix_ms, 10);
+    assert_eq!(all[1].ended_at_unix_ms, Some(5_000));
+    assert!(!all[1].imported);
+    assert_eq!(all[1].transcript.mic.words, 3);
+    assert_eq!(all[1].transcript.mic.speech_ms, 4_000);
+    assert_eq!(all[0].ended_at_unix_ms, None, "still live");
+    assert_eq!(all[0].transcript.mic_questions, 1);
+    assert_eq!(all[0].transcript.far.words, 3);
+
+    // A live append is counted at once.
+    store
+        .append_segments(&call, &[seg(Channel::Far, 2_000, "four more words here")])
+        .unwrap();
+    let of_call = |all: Vec<ink_core::stats::RecordDigest>| {
+        all.into_iter().find(|d| d.record == call).unwrap()
+    };
+    assert_eq!(of_call(store.digests().unwrap()).transcript.far.words, 7);
+    // So is the offline pass that replaces the transcript.
+    store
+        .supersede(
+            &call,
+            &[
+                seg(Channel::Mic, 0, "are we on track"),
+                seg(Channel::Far, 1_000, "yes we are four more words"),
+            ],
+        )
+        .unwrap();
+    let after = of_call(store.digests().unwrap());
+    assert_eq!(after.transcript.mic_questions, 0);
+    assert_eq!(after.transcript.far.words, 6);
+    assert_eq!(
+        after.transcript,
+        ink_core::stats::digest(&store.segments(&call).unwrap())
+    );
+    // And the delete.
+    store.delete_record(&call).unwrap();
+    assert_eq!(
+        store
+            .digests()
+            .unwrap()
+            .iter()
+            .map(|d| &d.record)
+            .collect::<Vec<_>>(),
+        [&dictation]
+    );
+}
+
+/// Every commitment's state, merged ones included, with when its record started.
+fn commitment_states_cover_every_commitment(store: &dyn Store) {
+    let a = meeting(store, 100);
+    let b = meeting(store, 200);
+    let owe = |text: &str, due_at: Option<i64>| NewCommitment {
+        recipient: None,
+        text: text.into(),
+        owner: None,
+        due: None,
+        due_at_unix_ms: due_at,
+        provenance: vec![],
+    };
+    let in_a = store
+        .add_commitments(
+            &a,
+            &[owe("send the deck", Some(500)), owe("call back", None)],
+        )
+        .unwrap();
+    let in_b = store
+        .add_commitments(&b, &[owe("send the deck again", Some(500))])
+        .unwrap();
+    store.set_commitment_done(&in_a[0], true).unwrap();
+    store.merge_commitment(&in_b[0], &in_a[0]).unwrap();
+
+    let mut states = store.commitment_states().unwrap();
+    states.sort_by(|x, y| x.commitment.cmp(&y.commitment));
+    let mut expected = vec![
+        ink_core::stats::CommitmentState {
+            commitment: in_a[0].clone(),
+            record: a.clone(),
+            record_started_at_unix_ms: 100,
+            due_at_unix_ms: Some(500),
+            done: true,
+            merged: false,
+        },
+        ink_core::stats::CommitmentState {
+            commitment: in_a[1].clone(),
+            record: a.clone(),
+            record_started_at_unix_ms: 100,
+            due_at_unix_ms: None,
+            done: false,
+            merged: false,
+        },
+        ink_core::stats::CommitmentState {
+            commitment: in_b[0].clone(),
+            record: b.clone(),
+            record_started_at_unix_ms: 200,
+            due_at_unix_ms: Some(500),
+            done: false,
+            merged: true,
+        },
+    ];
+    expected.sort_by(|x, y| x.commitment.cmp(&y.commitment));
+    assert_eq!(states, expected);
+    store.delete_record(&a).unwrap();
+    let left = store.commitment_states().unwrap();
+    assert_eq!(left.len(), 1);
+    assert!(
+        !left[0].merged,
+        "un-merged when what it was merged into went"
+    );
+}
+
+/// The stuck-key watchdog's mark: kept on the record it is set on, never on another, and in the
+/// record's digest, also when the digest was counted before the mark was set.
+fn a_stuck_mark_is_kept_and_reaches_the_digest(store: &dyn Store) {
+    let take = |start: i64| {
+        let id = store
+            .create_record(NewRecord {
+                kind: RecordKind::Dictation,
+                title: None,
+                started_at_unix_ms: start,
+                source_app: None,
+                audio_dir: None,
+            })
+            .unwrap();
+        store
+            .append_segments(&id, &[seg(Channel::Mic, 0, "held and held")])
+            .unwrap();
+        store.finish_record(&id, start + 180_000).unwrap();
+        id
+    };
+    let (stuck, fine) = (take(10), take(20));
+    assert!(
+        !store.record(&stuck).unwrap().unwrap().stuck,
+        "unmarked at first"
+    );
+    // Counted (and, by the SQLite store, kept) before the mark.
+    assert!(store.digests().unwrap().iter().all(|d| !d.stuck));
+    store.mark_stuck(&stuck).unwrap();
+    assert!(store.record(&stuck).unwrap().unwrap().stuck);
+    assert!(!store.record(&fine).unwrap().unwrap().stuck);
+    let all = store.digests().unwrap();
+    let marked = |id: &RecordId| all.iter().find(|d| &d.record == id).unwrap().stuck;
+    assert!(marked(&stuck), "the kept digest follows the mark");
+    assert!(!marked(&fine));
+    assert_eq!(
+        all.iter()
+            .find(|d| d.record == stuck)
+            .unwrap()
+            .transcript
+            .mic
+            .words,
+        3,
+        "its words are kept"
+    );
+}
+
 macro_rules! contract {
     ($($scenario:ident),* $(,)?) => {
         mod mem {
@@ -1331,6 +1574,9 @@ macro_rules! contract {
 }
 
 contract!(
+    digests_follow_every_record_and_its_current_transcript,
+    a_stuck_mark_is_kept_and_reaches_the_digest,
+    commitment_states_cover_every_commitment,
     a_batch_of_commitments_and_its_merges_is_saved_whole_or_not_at_all,
     summary_items_round_trip_and_are_replaced_with_their_summary,
     recipients_and_looks_done_round_trip_and_settle,
@@ -1350,6 +1596,7 @@ contract!(
     open_commitment_ties_keep_the_order_they_were_added,
     same_time_segments_and_notes_keep_a_stable_order,
     upserts_replace_the_previous_value,
+    a_cleared_speaker_name_goes_and_only_that_one,
     several_settings_are_written_together,
     search_follows_supersede_and_delete,
     removed_lines_are_kept_apart_from_the_transcript,

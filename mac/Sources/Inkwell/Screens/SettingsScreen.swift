@@ -1,8 +1,9 @@
 // Settings: General (open at login, updates, Inkwell 0.2's history), Appearance, permissions with
-// their live state, dictation's keys, modes, snippets and voice commands (PhrasesSections), AI (the
-// language model you bring, local-only mode, polish, summaries and Ask), meetings, models (with
-// measured accuracy, and Download for those not on this Mac), storage, and About with every notice
-// the app ships.
+// their live state, sound (the microphone and its test: SoundSection), dictation's keys, modes, snippets and voice commands (PhrasesSections), AI (the
+// language model you bring, local-only mode, polish, summaries and Ask), meetings, stats
+// (milestones and the typing speed), models (with measured accuracy, and Download for those not on
+// this Mac), storage, and About with every notice the app ships. Each section is a card, as
+// Today's are, with its heading inside.
 import AppleEngines
 import InkBridge
 import SwiftUI
@@ -11,12 +12,14 @@ enum SettingsSection: String, CaseIterable, Identifiable {
     case general
     case appearance
     case permissions
+    case sound
     case dictation
     case modes
     case snippets
     case voiceCommands
     case ai
     case meetings
+    case stats
     case models
     case storage
     case about
@@ -28,12 +31,14 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .general: "General"
         case .appearance: "Appearance"
         case .permissions: "Permissions"
+        case .sound: "Sound"
         case .dictation: "Dictation"
         case .modes: "Modes"
         case .snippets: "Snippets"
         case .voiceCommands: "Voice commands"
         case .ai: "AI"
         case .meetings: "Meetings"
+        case .stats: "Stats"
         case .models: "Models"
         case .storage: "Storage"
         case .about: "About"
@@ -44,6 +49,8 @@ enum SettingsSection: String, CaseIterable, Identifiable {
 struct SettingsScreen: View {
     @Environment(ScreenModels.self) private var screens
     @State private var section: SettingsSection? = .general
+    /// The section list has the keyboard: its selected row is drawn in the accent (`onAccent`).
+    @FocusState private var sectionsFocused: Bool
     /// The section a click scrolled to: it stays selected while any of it is in view, as the last
     /// sections cannot scroll to the top.
     @State private var clicked: SettingsSection?
@@ -52,37 +59,41 @@ struct SettingsScreen: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            List(SettingsSection.allCases, selection: $section) { section in
-                Text(section.title).tag(section)
+            List(SettingsSection.allCases, selection: $section) { item in
+                Text(item.title).tag(item).onAccent(selected: section == item, listFocused: sectionsFocused)
             }
             .listStyle(.sidebar)
+            .focused($sectionsFocused)
             .scrollContentBackground(.hidden)
             .frame(width: 188)
             .accessibilityLabel("Settings sections")
             Rectangle().fill(PaperPalette.border).frame(width: 1).accessibilityHidden(true)
             ScrollViewReader { proxy in
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 30) {
-                        GeneralSection(screens: screens).id(SettingsSection.general)
-                        AppearanceSection(theme: screens.theme).id(SettingsSection.appearance)
-                        PermissionsSection(permissions: screens.permissions).id(SettingsSection.permissions)
+                    // Each section on its own card, as Today's are, apart as Today's are: in Dark,
+                    // sections divided by hairlines alone ran together.
+                    VStack(alignment: .leading, spacing: TodayColumnsLayout.spacing) {
+                        GeneralSection(screens: screens).settingsCard(.general)
+                        AppearanceSection(theme: screens.theme).settingsCard(.appearance)
+                        PermissionsSection(permissions: screens.permissions).settingsCard(.permissions)
+                        SoundSection(sound: screens.sound).settingsCard(.sound)
                         DictationSection(screens: screens, dictation: screens.dictation, permissions: screens.permissions)
-                            .id(SettingsSection.dictation)
-                        ModesSection(modes: screens.modes).id(SettingsSection.modes)
-                        SnippetsSection(snippets: screens.snippets).id(SettingsSection.snippets)
-                        VoiceCommandsSection(commands: screens.voiceCommands).id(SettingsSection.voiceCommands)
-                        AISection(polish: screens.polish, screens: screens, cloud: screens.cloud).id(SettingsSection.ai)
-                        MeetingsSection(permissions: screens.permissions, meetings: screens.meetings)
-                            .id(SettingsSection.meetings)
-                        ModelsSection(catalogue: screens.catalogue).id(SettingsSection.models)
-                        StorageSection(storage: screens.storage, meetings: screens.meetings)
-                            .id(SettingsSection.storage)
-                        AboutSection().id(SettingsSection.about)
+                            .settingsCard(.dictation)
+                        ModesSection(modes: screens.modes).settingsCard(.modes)
+                        SnippetsSection(snippets: screens.snippets).settingsCard(.snippets)
+                        VoiceCommandsSection(commands: screens.voiceCommands).settingsCard(.voiceCommands)
+                        AISection(polish: screens.polish, screens: screens, cloud: screens.cloud).settingsCard(.ai)
+                        MeetingsSection(permissions: screens.permissions, meetings: screens.meetings, calls: screens.calls, shortcut: screens.meetingShortcut, recorder: screens.shortcuts)
+                            .settingsCard(.meetings)
+                        StatsSettingsSection(stats: screens.stats).settingsCard(.stats)
+                        ModelsSection(catalogue: screens.catalogue).settingsCard(.models)
+                        StorageSection(storage: screens.storage, meetings: screens.meetings).settingsCard(.storage)
+                        AboutSection().settingsCard(.about)
                     }
                     // The sections are the scroll's targets, for the list to follow (below).
                     .scrollTargetLayout()
-                    .frame(maxWidth: 760, alignment: .leading)
-                    .padding(.horizontal, 40)
+                    .frame(maxWidth: Self.maxCardWidth, alignment: .leading)
+                    .modifier(SettingsMargins())
                     .padding(.vertical, 28)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -115,6 +126,7 @@ struct SettingsScreen: View {
             screens.modes.load()
             screens.polish.load()
             screens.meetingsConsent.load()
+            screens.calls.load()
             screens.dictation.load()
             screens.snippets.load()
             screens.voiceCommands.load()
@@ -123,15 +135,127 @@ struct SettingsScreen: View {
             screens.cloud.load()
             screens.catalogue.requery()
             screens.storage.measure()
+            screens.sound.load()
         }
-        .onDisappear { screens.permissions.screenDisappeared() }
+        .onDisappear {
+            screens.permissions.screenDisappeared()
+            screens.sound.disappeared()
+        }
     }
+
+    /// The cards' widest: 760 pt of section inside their padding, as wide as the page was before.
+    static let maxCardWidth: CGFloat = 760 + 2 * SectionCard.horizontal
 
     /// Selects `next` for the scrolling, without scrolling.
     private func follow(_ next: SettingsSection?) {
         guard let next, next != section else { return }
         followed = next
         section = next
+    }
+}
+
+/// The page's margins either side: 28 pt, and 24 in a column too narrow to spare them (the window
+/// at its smallest), so the sections keep the room their controls need there. Between the two the
+/// margin grows with the column, so the sections' width only ever grows as the window widens (a
+/// step would narrow them for a moment, and flip a picker from segments to a menu and back). 28,
+/// not the 40 the page had before its cards: the cards' padding is inside it, and with 40 the voice
+/// command form stacked in the default 1040-pt window (500 pt in its card, under its 520).
+private struct SettingsMargins: ViewModifier {
+    func body(content: Content) -> some View {
+        SettingsMarginsLayout { content }
+    }
+}
+
+struct SettingsMarginsLayout: Layout {
+    static let wide: CGFloat = 28
+    static let narrow: CGFloat = 24
+    /// The column's width, margins included, up to which the margins are narrow, and from which
+    /// they are wide.
+    static let narrowUpTo: CGFloat = 400
+    static let wideFrom: CGFloat = 440
+
+    static func margin(_ width: CGFloat?) -> CGFloat {
+        guard let width, width.isFinite else { return wide }
+        let progress = min(max((width - narrowUpTo) / (wideFrom - narrowUpTo), 0), 1)
+        return narrow + (wide - narrow) * progress
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let margin = Self.margin(proposal.width)
+        let inner = ProposedViewSize(
+            width: proposal.width.map { $0.isFinite ? max(0, $0 - 2 * margin) : $0 }, height: proposal.height)
+        let size = subviews.reduce(CGSize.zero) { size, subview in
+            let fitted = subview.sizeThatFits(inner)
+            return CGSize(width: max(size.width, fitted.width), height: max(size.height, fitted.height))
+        }
+        return CGSize(width: size.width + 2 * margin, height: size.height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        // The margin for the width proposed, as measured; the bounds only place it.
+        let margin = Self.margin(proposal.width)
+        let inner = ProposedViewSize(
+            width: proposal.width.map { $0.isFinite ? max(0, $0 - 2 * margin) : $0 }, height: proposal.height)
+        for subview in subviews {
+            subview.place(at: CGPoint(x: bounds.minX + margin, y: bounds.minY), anchor: .topLeading, proposal: inner)
+        }
+    }
+}
+
+extension View {
+    /// A Settings section on its card (Today's, sectionCard), its heading inside: one VoiceOver
+    /// group named for the section, and the target the list scrolls to, so it lands on the card.
+    func settingsCard(_ section: SettingsSection) -> some View {
+        transformAnchorPreference(key: SettingsCardBounds.self, value: .bounds) {
+            $0.append(SettingsCardBounds.Part(section: section, isCard: false, bounds: $1))
+        }
+        .sectionCard()
+        .transformAnchorPreference(key: SettingsCardBounds.self, value: .bounds) {
+            $0.append(SettingsCardBounds.Part(section: section, isCard: true, bounds: $1))
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(section.title)
+        .id(section)
+    }
+
+    /// A group inside a section's card (the permission rows, Inkwell 0.2's import): a hairline
+    /// round it and no card of its own, whose material would lie over the card's.
+    func cardGroup() -> some View {
+        modifier(CardGroup())
+    }
+}
+
+/// Where each Settings card is, and its section inside it: anchors, which change no layout, read by
+/// the layout tests (SettingsCardsLayoutTests) and by no view of the app's.
+struct SettingsCardBounds: PreferenceKey {
+    struct Part {
+        let section: SettingsSection
+        /// The card, or the section inside its padding.
+        let isCard: Bool
+        let bounds: Anchor<CGRect>
+    }
+
+    static var defaultValue: [Part] { [] }
+
+    static func reduce(value: inout [Part], nextValue: () -> [Part]) {
+        value.append(contentsOf: nextValue())
+    }
+}
+
+/// cardGroup's hairline: the stronger border a card has under Increase Contrast or Reduce
+/// Transparency (GlowCard), so the group keeps its edge there as the card it replaced did.
+struct CardGroup: ViewModifier {
+    /// Inside the card's 22 pt corner, a smaller one.
+    static let radius: CGFloat = 14
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
+
+    func body(content: Content) -> some View {
+        let solid = reduceTransparency || contrast == .increased
+        let shape = RoundedRectangle(cornerRadius: Self.radius, style: .continuous)
+        content
+            .clipShape(shape)
+            .overlay(shape.strokeBorder(solid ? Theme.text.opacity(0.35) : PaperPalette.border, lineWidth: 1))
     }
 }
 
@@ -161,17 +285,19 @@ struct PermissionsSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             SectionTitle(text: "Permissions")
-            PermissionCards(permissions: permissions)
+            PermissionCards(permissions: permissions, onCard: true)
         }
     }
 }
 
-/// The four cards, in one frame (Settings and onboarding).
+/// The four cards, in one frame: a card of its own in the first run, a group inside the
+/// Permissions card in Settings (`onCard`).
 struct PermissionCards: View {
     let permissions: PermissionsModel
+    var onCard = false
 
     var body: some View {
-        VStack(spacing: 0) {
+        let rows = VStack(spacing: 0) {
             ForEach(PermissionCard.allCases) { card in
                 PermissionRow(card: card, state: permissions.state(card)) { permissions.request(card) }
                 if card != PermissionCard.allCases.last {
@@ -179,8 +305,13 @@ struct PermissionCards: View {
                 }
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: Glow.Radius.card, style: .continuous))
-        .paperCard()
+        if onCard {
+            rows.cardGroup()
+        } else {
+            rows
+                .clipShape(RoundedRectangle(cornerRadius: Glow.Radius.card, style: .continuous))
+                .paperCard()
+        }
     }
 }
 
@@ -189,18 +320,28 @@ private struct PermissionRow: View {
     let state: CardState
     let request: () -> Void
 
+    /// The least room the words get beside the state: narrower, the state goes under them (the
+    /// Permissions card in the window at its smallest, where "Checking…" broke).
+    static let wordsMinimum: CGFloat = 150
+    /// The icon's width, and the room between it and the words.
+    private static let iconWidth: CGFloat = 22
+    private static let gap: CGFloat = 14
+
     var body: some View {
-        HStack(spacing: 14) {
-            icon.frame(width: 22, height: 22).accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(card.title).font(.system(.body, weight: .semibold)).foregroundStyle(Theme.text)
-                Text(state.isAlert ? card.offDetail : card.detail)
-                    .font(Typography.caption)
-                    .foregroundStyle(state.isAlert ? Theme.text : Theme.secondaryText)
-                    .fixedSize(horizontal: false, vertical: true)
+        // Chosen from the ideal widths, the words' set to their minimum: no width is measured.
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: Self.gap) {
+                icon.frame(width: Self.iconWidth, height: Self.iconWidth).accessibilityHidden(true)
+                words.frame(minWidth: Self.wordsMinimum, idealWidth: Self.wordsMinimum, maxWidth: .infinity, alignment: .leading)
+                trailing.fixedSize()
             }
-            Spacer(minLength: 0)
-            trailing
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: Self.gap) {
+                    icon.frame(width: Self.iconWidth, height: Self.iconWidth).accessibilityHidden(true)
+                    words.frame(maxWidth: .infinity, alignment: .leading)
+                }
+                trailing.fixedSize().padding(.leading, Self.iconWidth + Self.gap)
+            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 13)
@@ -208,6 +349,16 @@ private struct PermissionRow: View {
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(card.title): \(spoken)")
         .accessibilityAction(named: actionTitle ?? "Check") { request() }
+    }
+
+    private var words: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(card.title).font(.system(.body, weight: .semibold)).foregroundStyle(Theme.text)
+            Text(state.isAlert ? card.offDetail : card.detail)
+                .font(Typography.caption)
+                .foregroundStyle(state.isAlert ? Theme.text : Theme.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 
     @ViewBuilder private var icon: some View {
@@ -240,8 +391,9 @@ private struct PermissionRow: View {
                 Button(actionTitle, action: request)
             }
         } else {
+            // A state in words, in the caption's face: mono is for timestamps and versions.
             Text(state == .allowed ? "Allowed" : "Checking…")
-                .font(Typography.timestamp)
+                .font(Typography.caption)
                 .foregroundStyle(Theme.secondaryText)
         }
     }
@@ -264,57 +416,57 @@ private struct DictationSection: View {
     let screens: ScreenModels
     let dictation: DictationModel
     let permissions: PermissionsModel
+    /// Each row's picker and key cap, as wide as they are: both rows give them the wider width, so
+    /// the two Record a shortcut buttons start in one column whatever the keys are.
+    @State private var dictateKeysWidth: CGFloat = 0
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             SectionTitle(text: "Dictation")
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Text("Dictation").frame(width: 150, alignment: .leading)
-                Toggle("Dictation", isOn: Binding(get: { dictation.isOn }, set: { dictation.setOn($0) }))
-                    .toggleStyle(.switch)
-                    .labelsHidden()
-                Text(dictation.isOn ? "The keys below are Inkwell's" : "Off: the keys do what they did before")
-                    .foregroundStyle(Theme.secondaryText)
+            SettingColumns {
+                Text("Dictation")
+            } controls: {
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    Toggle("Dictation", isOn: Binding(get: { dictation.isOn }, set: { dictation.setOn($0) }))
+                        .toggleStyle(.switch)
+                        .labelsHidden()
+                        // Turned on mid-recording, the core would hold the keys the recorder listens for.
+                        .disabled(shortcuts.busy)
+                    Text(dictation.isOn ? "The keys below are Inkwell's" : "Off: the keys do what they did before")
+                        .foregroundStyle(Theme.secondaryText)
+                }
             }
             .font(Typography.body)
             .padding(.vertical, 5)
             .accessibilityElement(children: .contain)
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Text("Dictate").frame(width: 150, alignment: .leading)
-                Picker("Dictate", selection: Binding(get: { dictation.key }, set: { dictation.setKey($0) })) {
-                    ForEach(DictationModel.keys) { key in
-                        Text(key.name).tag(key.token)
+            SettingRow(title: "Dictate") {
+                KeyControls {
+                    HStack(alignment: .firstTextBaseline, spacing: 12) {
+                        Picker("Dictate", selection: Binding(get: { dictation.key }, set: { dictation.setKey($0) })) {
+                            ForEach(DictationModel.keys) { key in
+                                Text(key.name).tag(key.token)
+                            }
+                            // A recorded key is not a quick pick: it is listed so the picker shows it.
+                            if !DictationModel.keys.contains(where: { $0.token == dictation.key }),
+                               let recorded = DictationModel.key(dictation.key) {
+                                Text(recorded.cap).accessibilityLabel(recorded.name).tag(dictation.key)
+                            }
+                        }
+                        .labelsHidden()
+                        .fixedSize()
+                        .disabled(shortcuts.busy)
+                        Key(text: DictationModel.cap(dictation.key))
+                            .accessibilityLabel(DictationModel.key(dictation.key)?.name ?? dictation.key)
                     }
+                    .fixedSize()
+                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { dictateKeysWidth = $0 }
+                    .frame(minWidth: keysColumn, alignment: .leading)
+                } record: {
+                    RecordShortcutButton(recorder: shortcuts, target: .dictation, what: "the dictation key")
                 }
-                .labelsHidden()
-                .fixedSize()
-                Key(text: DictationModel.key(dictation.key)?.cap ?? dictation.key)
-                Text("hold, speak, let go").foregroundStyle(Theme.secondaryText)
+                KeyHint(text: "hold, speak, let go")
+                ShortcutMessage(recorder: shortcuts, target: .dictation)
             }
-            .font(Typography.body)
-            .padding(.vertical, 5)
-            .accessibilityElement(children: .contain)
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Text("Edit a selection").frame(width: 150, alignment: .leading)
-                Picker("Edit a selection", selection: Binding(
-                    get: { dictation.editKey ?? "off" },
-                    set: { screens.chooseEditKey($0 == "off" ? nil : $0) }
-                )) {
-                    Text("Off").tag("off")
-                    ForEach(DictationModel.keys.filter { $0.token != dictation.key }) { key in
-                        Text(key.name).tag(key.token)
-                    }
-                }
-                .labelsHidden()
-                .fixedSize()
-                if let edit = dictation.editKey, dictation.editKeyProblem == nil {
-                    Key(text: DictationModel.key(edit)?.cap ?? edit)
-                }
-                Text("select text, hold, say what to change").foregroundStyle(Theme.secondaryText)
-            }
-            .font(Typography.body)
-            .padding(.vertical, 5)
-            .accessibilityElement(children: .contain)
             VStack(alignment: .leading, spacing: 4) {
                 Text(dictation.keyFailure ?? dictation.status)
                     .foregroundStyle(dictation.isProblem ? Theme.alert : Theme.secondaryText)
@@ -323,13 +475,6 @@ private struct DictationSection: View {
                 } else if dictation.canRetry {
                     Button(dictation.retryTitle) { dictation.retry() }
                 }
-                if let problem = dictation.editKeyProblem {
-                    Text(problem == DictationModel.editKeyLostText ? problem : "The edit key isn't held: \(problem)")
-                        .foregroundStyle(Theme.alert)
-                }
-                if let problem = screens.editConsent.problem {
-                    Text(problem).foregroundStyle(Theme.alert)
-                }
                 if let problem = dictation.settingsProblem {
                     Text("Dictation \(problem), so it uses the defaults for them.").foregroundStyle(Theme.alert)
                 }
@@ -337,12 +482,98 @@ private struct DictationSection: View {
             .font(Typography.caption)
             .fixedSize(horizontal: false, vertical: true)
             ImportKeyNoteView(model: screens.importNote, currentKey: DictationModel.key(dictation.key)?.name ?? dictation.key)
-            Text("Editing sends the selection and what you say to a language model, and replaces the selection with the answer, so choosing its key asks you first where that is. Edits are not saved in the Library.")
+        }
+        .shortcutRecording(shortcuts)
+    }
+
+    private var shortcuts: ShortcutRecorderModel { screens.shortcuts }
+    private var keysColumn: CGFloat { dictateKeysWidth }
+}
+
+/// A key row's controls: the picker and its cap, then Record a shortcut…, on one line where the
+/// row has room for the button's longest label, else the button under them. Measured with that
+/// label, both rows choose alike (their key slots are as wide) and the buttons stay in one column,
+/// and pressing the button never moves it to the next line. Crossing the width rebuilds the
+/// controls, so an open picker menu closes; a recording, held by the recorder, goes on.
+struct KeyControls<Keys: View, Record: View>: View {
+    @ViewBuilder var keys: Keys
+    @ViewBuilder var record: Record
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                keys
+                ZStack(alignment: .leading) {
+                    // Only its width: never drawn, pressed, tabbed to or read out.
+                    Button(RecordShortcutButton.recordingTitle) {}
+                        .hidden()
+                        .disabled(true)
+                        .accessibilityHidden(true)
+                    record
+                }
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                keys
+                record
+            }
+        }
+    }
+}
+
+/// What a key does, under its controls, as the other rows' details are.
+private struct KeyHint: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(Typography.caption)
+            .foregroundStyle(Theme.secondaryText)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+/// "Record a shortcut…", and while recording, what to do and how to stop.
+struct RecordShortcutButton: View {
+    let recorder: ShortcutRecorderModel
+    let target: ShortcutRecorderModel.Target
+    /// "the dictation key", for VoiceOver.
+    let what: String
+
+    /// The title while recording, the longest it has.
+    static let recordingTitle = "Press the keys\u{2026} (Esc cancels)"
+
+    private var isRecording: Bool { recorder.recording == target }
+    private var isChecking: Bool { recorder.checking?.target == target || recorder.waiting == target }
+
+    var body: some View {
+        // Pressed while recording or checking, it cancels: a check the core never answers is
+        // given up after a few seconds anyway (ShortcutRecorderModel.checkTimeout).
+        Button(isRecording ? Self.recordingTitle : isChecking ? "Cancel" : "Record a shortcut\u{2026}") {
+            recorder.toggle(target)
+        }
+        .accessibilityLabel(isRecording
+            ? "Recording a shortcut for \(what)"
+            : isChecking ? "Cancel checking the shortcut for \(what)" : "Record a shortcut for \(what)")
+        .accessibilityHint(isRecording
+            ? "Press the keys you want: a right-hand modifier alone, a function key, or modifiers and a key. Escape on its own cancels."
+            : isChecking ? "" : "Then press the keys you want to use.")
+    }
+}
+
+/// What became of the last recording of a key: why it was refused, or a clash with a shortcut the
+/// app knows, under the key's hint. VoiceOver hears it from the recorder when it happens, not each
+/// time this appears.
+private struct ShortcutMessage: View {
+    let recorder: ShortcutRecorderModel
+    let target: ShortcutRecorderModel.Target
+
+    var body: some View {
+        if let message = recorder.message(for: target) {
+            Text(message.text)
                 .font(Typography.caption)
-                .foregroundStyle(Theme.secondaryText)
+                .foregroundStyle(message.isProblem ? Theme.alert : Theme.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .consentStep(screens.editConsent, host: .settings)
     }
 }
 
@@ -360,76 +591,6 @@ private struct Key: View {
     }
 }
 
-// MARK: - Modes
-
-private struct ModesSection: View {
-    let modes: ModesModel
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            SectionTitle(text: "Modes", note: "Picked by the app you're typing in")
-            if modes.failed {
-                Text("Your modes could not be read.").foregroundStyle(Theme.alert)
-            }
-            ForEach(modes.rows) { row in
-                HStack(alignment: .firstTextBaseline, spacing: 12) {
-                    Text(row.isDefault && modes.rows.count > 1 ? "Everywhere else" : row.name)
-                        .font(.system(.body, weight: .semibold))
-                        .frame(width: 150, alignment: .leading)
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 6) {
-                            ForEach(row.traits, id: \.self) { Paper.Chip(text: $0) }
-                        }
-                        if row.apps.isEmpty {
-                            Text(row.isDefault ? "Every app without a mode of its own" : "No apps")
-                                .font(Typography.caption).foregroundStyle(Theme.secondaryText)
-                        } else {
-                            HStack(spacing: 6) {
-                                ForEach(row.apps) { app in
-                                    AppIcon(app: app)
-                                }
-                                Text(row.apps.map(\.name).joined(separator: ", "))
-                                    .font(Typography.caption).foregroundStyle(Theme.secondaryText)
-                                    .lineLimit(2)
-                            }
-                        }
-                    }
-                    Spacer(minLength: 0)
-                }
-                .padding(.vertical, 10)
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel(accessibility(row))
-                Rectangle().fill(PaperPalette.separator).frame(height: 1).accessibilityHidden(true)
-            }
-        }
-    }
-
-    private func accessibility(_ row: ModeRow) -> String {
-        let apps = row.apps.isEmpty ? (row.isDefault ? "the default" : "no apps") : row.apps.map(\.name).joined(separator: ", ")
-        return "\(row.name): \(row.traits.joined(separator: ", ")); used in \(apps)"
-    }
-}
-
-private struct AppIcon: View {
-    let app: AppLabel
-
-    var body: some View {
-        Group {
-            if let icon = app.icon {
-                Image(nsImage: icon).resizable()
-            } else {
-                Text(String(app.name.prefix(1)))
-                    .font(.system(size: 11, weight: .semibold))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(PaperPalette.chip, in: RoundedRectangle(cornerRadius: 6))
-            }
-        }
-        .frame(width: 24, height: 24)
-        .help(app.name)
-        .accessibilityLabel(app.name)
-    }
-}
-
 // MARK: - AI
 
 private struct AISection: View {
@@ -442,8 +603,9 @@ private struct AISection: View {
             SectionTitle(text: "AI")
             LanguageModelRows(cloud: cloud)
                 .padding(.bottom, 6)
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Text("Polish my words").frame(width: 150, alignment: .leading)
+            SettingColumns {
+                Text("Polish my words")
+            } controls: {
                 VStack(alignment: .leading, spacing: 4) {
                     Toggle(
                         "Polish my words",
@@ -464,8 +626,50 @@ private struct AISection: View {
                 .font(Typography.caption)
                 .foregroundStyle(Theme.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Text("Summaries and Ask").frame(width: 150, alignment: .leading)
+            SettingRow(title: "Voice edit") {
+                KeyControls {
+                    HStack(alignment: .firstTextBaseline, spacing: 12) {
+                        Picker("Edit a selection", selection: Binding(
+                            get: { screens.dictation.editKey ?? "off" },
+                            set: { screens.chooseEditKey($0 == "off" ? nil : $0) }
+                        )) {
+                            Text("Off").tag("off")
+                            ForEach(DictationModel.keys.filter { $0.token != screens.dictation.key }) { key in
+                                Text(key.name).tag(key.token)
+                            }
+                            if let edit = screens.dictation.editKey, !DictationModel.keys.contains(where: { $0.token == edit }),
+                               let recorded = DictationModel.key(edit) {
+                                Text(recorded.cap).accessibilityLabel(recorded.name).tag(edit)
+                            }
+                        }
+                        .labelsHidden()
+                        .fixedSize()
+                        .disabled(screens.shortcuts.busy)
+                        if let edit = screens.dictation.editKey, screens.dictation.editKeyProblem == nil {
+                            Key(text: DictationModel.cap(edit))
+                                .accessibilityLabel(DictationModel.key(edit)?.name ?? edit)
+                        }
+                    }
+                    .fixedSize()
+                } record: {
+                    RecordShortcutButton(recorder: screens.shortcuts, target: .edit, what: "the edit key")
+                }
+                KeyHint(text: "select text, hold, say what to change")
+                ShortcutMessage(recorder: screens.shortcuts, target: .edit)
+            }
+            Text("Editing sends the selection and what you say to a language model, and replaces the selection with the answer, so choosing its key asks you first where that is. Edits are not saved in the Library.")
+                .font(Typography.caption)
+                .foregroundStyle(Theme.secondaryText)
+                .fixedSize(horizontal: false, vertical: true)
+            if let problem = screens.dictation.editKeyProblem ?? screens.editConsent.problem {
+                Text(problem).font(Typography.caption).foregroundStyle(Theme.alert)
+            }
+            // One OK per destination: a mode may polish on a model of its own (Settings > Modes).
+            PolishConsentsRow(polish: polish)
+                .padding(.top, 4)
+            SettingColumns {
+                Text("Summaries and Ask")
+            } controls: {
                 VStack(alignment: .leading, spacing: 4) {
                     // Plain closures (the CI runner's Swift 6.3 crashes on some closure forms here).
                     Toggle(
@@ -492,6 +696,56 @@ private struct AISection: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         .polishConsent(polish, host: .settings)
+        .consentStep(screens.editConsent, host: .settings)
+        .shortcutRecording(screens.shortcuts)
+    }
+}
+
+// MARK: - Settings > AI: where polish may send
+
+/// Each destination the user agreed polish may send to, with Revoke.
+struct PolishConsentsRow: View {
+    let polish: PolishModel
+
+    var body: some View {
+        let consents = polish.state?.consents ?? []
+        SettingColumns {
+            Text("Polish may send to")
+        } controls: {
+            VStack(alignment: .leading, spacing: 8) {
+                if consents.isEmpty {
+                    Text("Nowhere yet. Polish asks before it first sends anywhere.")
+                        .font(Typography.caption)
+                        .foregroundStyle(Theme.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                ForEach(consents, id: \.self) { granted in
+                    LineOrStack(minWidth: 260) {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(granted.label)
+                            Text(granted.detail)
+                                .font(Typography.caption)
+                                .foregroundStyle(Theme.secondaryText)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .accessibilityElement(children: .combine)
+                        Button("Revoke") { polish.consent.revoke(granted) }
+                            .fixedSize()
+                            .accessibilityLabel("Revoke polish's OK for \(granted.label)")
+                    }
+                    .accessibilityElement(children: .contain)
+                }
+                if !consents.isEmpty {
+                    Text("Revoking the last one turns polish off. Modes on a model there go in as you said them.")
+                        .font(Typography.caption)
+                        .foregroundStyle(Theme.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+        .font(Typography.body)
+        .accessibilityElement(children: .contain)
     }
 }
 
@@ -500,18 +754,29 @@ private struct AISection: View {
 private struct MeetingsSection: View {
     let permissions: PermissionsModel
     let meetings: MeetingModel
+    let calls: CallPolicyModel
+    let shortcut: MeetingShortcutModel
+    let recorder: ShortcutRecorderModel
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             SectionTitle(text: "Meetings")
-            toggle(
-                "Offer to record calls",
-                detail: "When an app opens the microphone for a call, Inkwell asks whether to record it. It never records without you saying so.",
-                isOn: meetings.detect, set: { meetings.setDetect($0) })
-            toggle(
-                "Use the headset's microphone",
-                detail: "With Bluetooth headphones, record their own microphone instead of the Mac's. It carries only call-quality sound.",
-                isOn: meetings.headsetMic, set: { meetings.setHeadsetMic($0) })
+            SettingRow(title: "Start / stop shortcut") {
+                KeyControls {
+                    Picker("Start / stop shortcut", selection: Binding(get: { shortcut.key }, set: { shortcut.setKey($0) })) {
+                        Text("Off").tag("off")
+                        if shortcut.key != "off" { Text(DictationModel.cap(shortcut.key)).tag(shortcut.key) }
+                    }
+                    .labelsHidden()
+                    .disabled(recorder.busy)
+                } record: {
+                    RecordShortcutButton(recorder: recorder, target: .meeting, what: "the meeting key")
+                }
+                KeyHint(text: "Press once to start or stop recording. Off leaves the keys free.")
+                ShortcutMessage(recorder: recorder, target: .meeting)
+                if let problem = shortcut.problem { Text(problem).font(Typography.caption).foregroundStyle(Theme.alert) }
+            }
+            CallPolicyRows(calls: calls)
             if meetings.settingsFailed {
                 Text("Couldn't read or save a meeting setting. It may not be what it shows.")
                     .font(Typography.caption)
@@ -520,8 +785,8 @@ private struct MeetingsSection: View {
             VStack(alignment: .leading, spacing: 8) {
                 fact("Consent", "Tell the others in the call that you are recording. Inkwell shows while it records, and never hides that it does.")
                 fact("You", "Your microphone, as \u{201C}Hear you\u{201D} allows.")
-                fact("Them", "For a call you record when Inkwell offers, the call app's own sound. With Record now, or when Inkwell can't hear the call app alone, everything this Mac plays, and Inkwell says so. As \u{201C}Hear the others\u{201D} allows.")
-                fact("Headphones", "With Bluetooth headphones, Inkwell records the Mac's own microphone: a headset microphone carries only call-quality sound.")
+                fact("Them", "For a call from an app, its own sound. With Record now, or when Inkwell can't hear the call app alone, everything this Mac plays, and Inkwell says so. As \u{201C}Hear the others\u{201D} allows.")
+                fact("Headphones", "With Bluetooth headphones, Automatic records the Mac's own microphone: a headset microphone carries only call-quality sound. Settings > Sound picks another.")
                 fact("Where", "Recordings and transcripts stay on this Mac. Nothing is sent anywhere unless you add your own key for a model online.")
             }
             if permissions.state(.hearTheOthers).isAlert {
@@ -530,13 +795,15 @@ private struct MeetingsSection: View {
                     .foregroundStyle(Theme.alert)
             }
         }
+        .shortcutRecording(recorder)
     }
 
     private func toggle(
         _ title: String, detail: String, isOn: Bool, set: @escaping @MainActor @Sendable (Bool) -> Void
     ) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
-            Text(title).frame(width: 150, alignment: .leading)
+        SettingColumns {
+            Text(title)
+        } controls: {
             VStack(alignment: .leading, spacing: 4) {
                 // A closure literal, not `set` itself: handing the main-actor closure straight to
                 // Binding's generic setter makes Swift 6.3 (the CI runner's Xcode 26.6) crash
@@ -556,8 +823,9 @@ private struct MeetingsSection: View {
     }
 
     private func fact(_ label: String, _ text: String) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
-            Text(label).font(.system(.body, weight: .semibold)).frame(width: 150, alignment: .leading)
+        SettingColumns {
+            Text(label).font(.system(.body, weight: .semibold))
+        } controls: {
             Text(text).font(Typography.body).foregroundStyle(Theme.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -578,18 +846,13 @@ private struct ModelsSection: View {
             }
             ForEach(CatalogueModel.jobs, id: \.self) { job in
                 let line = catalogue.line(job)
-                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                SettingColumns {
                     Text(CatalogueModel.title(job))
                         .font(.system(.body, weight: .semibold))
-                        .frame(width: 150, alignment: .leading)
+                } controls: {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(line.engineText)
                             .foregroundStyle(line.engine == nil ? Theme.secondaryText : Theme.text)
-                        if let accuracy = line.accuracy {
-                            Text(accuracy)
-                                .font(Typography.caption)
-                                .foregroundStyle(Theme.secondaryText)
-                        }
                     }
                 }
                 .padding(.vertical, 6)
@@ -599,7 +862,7 @@ private struct ModelsSection: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Paper.Eyebrow(text: "Downloadable")
                     ForEach(catalogue.models, id: \.id) { model in
-                        ModelDownloadRow(catalogue: catalogue, model: model, offersDownload: true)
+                        ModelDownloadRow(catalogue: catalogue, model: model)
                     }
                     Text("Nothing is downloaded until you press Download. Downloads run one at a time.")
                         .font(Typography.caption)
@@ -609,29 +872,41 @@ private struct ModelsSection: View {
             }
             // Where the accuracy comes from, only when a row shows one.
             if CatalogueModel.jobs.contains(where: { catalogue.line($0).accuracy != nil }) {
-                Text("Accuracy is measured on public test sets: AMI meetings and FLEURS English.")
-                    .font(Typography.caption)
-                    .foregroundStyle(Theme.secondaryText)
+                DisclosureGroup("Accuracy details") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(CatalogueModel.jobs, id: \.self) { job in
+                            let line = catalogue.line(job)
+                            if let accuracy = line.accuracy {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(CatalogueModel.title(job)).font(Typography.body)
+                                    Text(accuracy).font(Typography.caption).foregroundStyle(Theme.secondaryText)
+                                }
+                            }
+                        }
+                        Text("Accuracy is measured on public test sets: AMI meetings and FLEURS English.")
+                            .font(Typography.caption)
+                            .foregroundStyle(Theme.secondaryText)
+                    }.padding(.top, 6)
+                }
             }
         }
     }
 }
 
 /// A catalogue model: its name, licence, size and where it comes from, and its download: a
-/// Download button (when `offersDownload`) while it is not on this Mac, its bar while it downloads,
-/// and why it failed, with Retry. Settings > Models and the first run's Models step list these.
+/// Download button while it is not on this Mac, its bar while it downloads,
+/// and why it failed, with Retry. Settings > Models lists these (the first run's step shows choices: ModelChoices.swift).
 struct ModelDownloadRow: View {
     let catalogue: CatalogueModel
     let model: CatalogueEntry
-    let offersDownload: Bool
 
     var body: some View {
         let name = CatalogueModel.name(model.id)
         let state = catalogue.download(of: model)
         VStack(alignment: .leading, spacing: 3) {
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
+            LineOrStack(minWidth: 440) {
                 Text(name).font(.system(.body, weight: .semibold))
-                Spacer(minLength: 8)
+                    .fixedSize(horizontal: false, vertical: true)
                 trailing(state, name: name)
             }
             Text(facts)
@@ -666,12 +941,16 @@ struct ModelDownloadRow: View {
     private func trailing(_ state: CatalogueModel.Download, name: String) -> some View {
         switch state {
         case .installed:
-            Text("On this Mac").font(Typography.caption).foregroundStyle(Theme.secondaryText)
+            Text("Installed")
+                .font(Typography.caption)
+                .foregroundStyle(Theme.text)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(Theme.card, in: Capsule())
+                .accessibilityLabel("Installed on this Mac")
         case .notInstalled:
-            if offersDownload {
-                Button("Download") { catalogue.download([model.id]) }
-                    .accessibilityLabel("Download \(name), \(facts)")
-            }
+            Button("Download") { catalogue.download([model.id]) }
+                .accessibilityLabel("Download \(name), \(facts)")
         case .waiting:
             Text("Waiting").font(Typography.caption).foregroundStyle(Theme.secondaryText)
         case .downloading(let progress?):
@@ -707,8 +986,9 @@ private struct StorageSection: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             SectionTitle(text: "Storage")
-            HStack(alignment: .firstTextBaseline, spacing: 12) {
-                Text("Keep records").frame(width: 150, alignment: .leading)
+            SettingColumns {
+                Text("Keep records")
+            } controls: {
                 VStack(alignment: .leading, spacing: 4) {
                     Picker("Keep records", selection: Binding(
                         get: { meetings.retention ?? .forever }, set: { meetings.setRetention($0) }
@@ -753,8 +1033,9 @@ private struct StorageSection: View {
     }
 
     private func row(_ label: String, _ bytes: Int64) -> some View {
-        HStack(spacing: 12) {
-            Text(label).frame(width: 150, alignment: .leading)
+        SettingColumns {
+            Text(label)
+        } controls: {
             Text(Self.size(bytes))
                 .foregroundStyle(Theme.secondaryText)
         }

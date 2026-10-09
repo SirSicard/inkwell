@@ -172,7 +172,7 @@ fn answer_about(shared: &Shared, record: &RecordId, question: &str) -> Result<St
     let consent = consent::stored(store, Feature::Meetings);
     let consented = Consented {
         inner: llm.as_ref(),
-        consent: consent.as_ref(),
+        consents: &consent,
     };
     answer(
         question,

@@ -76,9 +76,12 @@ public abstract record InkEvent
                 "dictation.mic_failed" => root.Deserialize(InkEventsJson.Default.DictationMicFailed)!,
                 "meeting.started" => root.Deserialize(InkEventsJson.Default.MeetingStarted)!,
                 "meeting.far_end_fallback" => root.Deserialize(InkEventsJson.Default.MeetingFarEndFallback)!,
+                "meeting.mic_switched" => root.Deserialize(InkEventsJson.Default.MeetingMicSwitched)!,
                 "meeting.detected" => root.Deserialize(InkEventsJson.Default.MeetingDetected)!,
                 "meeting.detection_ended" => root.Deserialize(InkEventsJson.Default.MeetingDetectionEnded)!,
                 "meeting.detection" => root.Deserialize(InkEventsJson.Default.MeetingDetection)!,
+                "meetings.calls" => root.Deserialize(InkEventsJson.Default.MeetingsCalls)!,
+                "meeting.discarded" => root.Deserialize(InkEventsJson.Default.MeetingDiscarded)!,
                 "meeting.answered" => root.Deserialize(InkEventsJson.Default.MeetingAnswered)!,
                 "meeting.recovered" => root.Deserialize(InkEventsJson.Default.MeetingRecovered)!,
                 "meetings.recovered" => root.Deserialize(InkEventsJson.Default.MeetingsRecovered)!,
@@ -109,8 +112,17 @@ public abstract record InkEvent
                 "note.added" => root.Deserialize(InkEventsJson.Default.NoteAdded)!,
                 "note.updated" => root.Deserialize(InkEventsJson.Default.NoteUpdated)!,
                 "note.deleted" => root.Deserialize(InkEventsJson.Default.NoteDeleted)!,
+                "speaker.named" => root.Deserialize(InkEventsJson.Default.SpeakerNamed)!,
+                "record.deleted" => root.Deserialize(InkEventsJson.Default.RecordDeleted)!,
                 "models.listed" => root.Deserialize(InkEventsJson.Default.ModelsListed)!,
                 "setting.value" => root.Deserialize(InkEventsJson.Default.SettingValue)!,
+                "audio.devices" => root.Deserialize(InkEventsJson.Default.AudioDevices)!,
+                "audio.devices_changed" => root.Deserialize(InkEventsJson.Default.AudioDevicesChanged)!,
+                "audio.input_fallback" => root.Deserialize(InkEventsJson.Default.AudioInputFallback)!,
+                "audio.test_started" => root.Deserialize(InkEventsJson.Default.AudioTestStarted)!,
+                "audio.test_level" => root.Deserialize(InkEventsJson.Default.AudioTestLevel)!,
+                "audio.tested" => root.Deserialize(InkEventsJson.Default.AudioTested)!,
+                "hotkey.checked" => root.Deserialize(InkEventsJson.Default.HotkeyChecked)!,
                 "consent.state" => root.Deserialize(InkEventsJson.Default.ConsentState)!,
                 "llm.providers" => root.Deserialize(InkEventsJson.Default.LlmProviders)!,
                 "llm.tested" => root.Deserialize(InkEventsJson.Default.LlmTested)!,
@@ -125,6 +137,9 @@ public abstract record InkEvent
                 "library.record" => root.Deserialize(InkEventsJson.Default.LibraryRecord)!,
                 "library.stats" => root.Deserialize(InkEventsJson.Default.LibraryStats)!,
                 "library.swept" => root.Deserialize(InkEventsJson.Default.LibrarySwept)!,
+                "stats.counted" => root.Deserialize(InkEventsJson.Default.StatsCounted)!,
+                "milestones.reached" => root.Deserialize(InkEventsJson.Default.MilestonesReached)!,
+                "meetings.shortcut.state" => root.Deserialize(InkEventsJson.Default.MeetingsShortcutState)!,
                 _ => new UnknownEvent { Type = type },
             };
         }
@@ -210,9 +225,12 @@ public sealed class StrictEnumConverter<T> : JsonStringEnumConverter<T>
 [JsonSerializable(typeof(DictationMicFailed))]
 [JsonSerializable(typeof(MeetingStarted))]
 [JsonSerializable(typeof(MeetingFarEndFallback))]
+[JsonSerializable(typeof(MeetingMicSwitched))]
 [JsonSerializable(typeof(MeetingDetected))]
 [JsonSerializable(typeof(MeetingDetectionEnded))]
 [JsonSerializable(typeof(MeetingDetection))]
+[JsonSerializable(typeof(MeetingsCalls))]
+[JsonSerializable(typeof(MeetingDiscarded))]
 [JsonSerializable(typeof(MeetingAnswered))]
 [JsonSerializable(typeof(MeetingRecovered))]
 [JsonSerializable(typeof(MeetingsRecovered))]
@@ -243,8 +261,17 @@ public sealed class StrictEnumConverter<T> : JsonStringEnumConverter<T>
 [JsonSerializable(typeof(NoteAdded))]
 [JsonSerializable(typeof(NoteUpdated))]
 [JsonSerializable(typeof(NoteDeleted))]
+[JsonSerializable(typeof(SpeakerNamed))]
+[JsonSerializable(typeof(RecordDeleted))]
 [JsonSerializable(typeof(ModelsListed))]
 [JsonSerializable(typeof(SettingValue))]
+[JsonSerializable(typeof(AudioDevices))]
+[JsonSerializable(typeof(AudioDevicesChanged))]
+[JsonSerializable(typeof(AudioInputFallback))]
+[JsonSerializable(typeof(AudioTestStarted))]
+[JsonSerializable(typeof(AudioTestLevel))]
+[JsonSerializable(typeof(AudioTested))]
+[JsonSerializable(typeof(HotkeyChecked))]
 [JsonSerializable(typeof(ConsentState))]
 [JsonSerializable(typeof(LlmProviders))]
 [JsonSerializable(typeof(LlmTested))]
@@ -259,6 +286,9 @@ public sealed class StrictEnumConverter<T> : JsonStringEnumConverter<T>
 [JsonSerializable(typeof(LibraryRecord))]
 [JsonSerializable(typeof(LibraryStats))]
 [JsonSerializable(typeof(LibrarySwept))]
+[JsonSerializable(typeof(StatsCounted))]
+[JsonSerializable(typeof(MilestonesReached))]
+[JsonSerializable(typeof(MeetingsShortcutState))]
 public sealed partial class InkEventsJson : JsonSerializerContext
 {
 }
@@ -313,6 +343,183 @@ public sealed record AudioChunk
 }
 
 /// <summary>
+/// A connected input or output device.
+/// </summary>
+public sealed record AudioDevice
+{
+    /// <summary>
+    /// The OS's id for it (a Core Audio UID, a WASAPI endpoint id): what audio.input and
+    /// audio.output take. Opaque: never shown.
+    /// </summary>
+    [JsonPropertyName("id")]
+    public required string Id { get; init; }
+
+    /// <summary>
+    /// Whether it is the system default for its direction.
+    /// </summary>
+    [JsonPropertyName("is_default")]
+    public required bool IsDefault { get; init; }
+
+    /// <summary>
+    /// Its name as the OS shows it.
+    /// </summary>
+    [JsonPropertyName("name")]
+    public required string Name { get; init; }
+
+    /// <summary>
+    /// How it connects.
+    /// </summary>
+    [JsonPropertyName("transport")]
+    public required MicTransport Transport { get; init; }
+}
+
+/// <summary>
+/// The answer to audio.devices: the devices, the user's choice, and what Inkwell records with
+/// now.
+/// </summary>
+public sealed record AudioDevices : InkEvent
+{
+    /// <summary>
+    /// What Automatic records now ("Automatic (&lt;name&gt;)"); absent when there is no
+    /// microphone.
+    /// </summary>
+    [JsonPropertyName("automatic")]
+    public AudioInput? Automatic { get; init; }
+
+    /// <summary>
+    /// The mic choice (audio.input): auto, or the chosen device's id.
+    /// </summary>
+    [JsonPropertyName("input")]
+    public required string Input { get; init; }
+
+    /// <summary>
+    /// The connected microphones, the default first.
+    /// </summary>
+    [JsonPropertyName("inputs")]
+    public required global::System.Collections.Generic.IReadOnlyList<AudioDevice> Inputs { get; init; }
+
+    /// <summary>
+    /// The output choice (audio.output), with outputs: default, or the chosen device's id.
+    /// </summary>
+    [JsonPropertyName("output")]
+    public string? Output { get; init; }
+
+    /// <summary>
+    /// The output a meeting's far end is to record, and why; absent when there is no output.
+    /// Record now, and a call whose app could not be heard alone, record it; an app heard from
+    /// its own output keeps that output.
+    /// </summary>
+    [JsonPropertyName("output_using")]
+    public AudioOutput? OutputUsing { get; init; }
+
+    /// <summary>
+    /// The chosen output as remembered, when output is a device.
+    /// </summary>
+    [JsonPropertyName("output_wanted")]
+    public AudioWanted? OutputWanted { get; init; }
+
+    /// <summary>
+    /// The connected outputs, the default first, where there is an output picker (Windows);
+    /// absent on macOS, whose far end is tapped from its app wherever it plays.
+    /// </summary>
+    [JsonPropertyName("outputs")]
+    public global::System.Collections.Generic.IReadOnlyList<AudioDevice>? Outputs { get; init; }
+
+    /// <summary>
+    /// The id of the command this answers, when it carried one.
+    /// </summary>
+    [JsonPropertyName("ref")]
+    public string? Ref { get; init; }
+
+    /// <summary>
+    /// The mic Inkwell opens now for a take, a meeting or a test, and why: the chosen one, or
+    /// Automatic (chosen_missing when it stands in for a chosen mic that is not connected).
+    /// Absent when there is no microphone. A meeting already recording keeps its own mic
+    /// (meeting.started, meeting.mic_switched).
+    /// </summary>
+    [JsonPropertyName("using")]
+    public AudioInput? Using { get; init; }
+
+    /// <summary>
+    /// The chosen mic as remembered, when input is a device: Settings shows its name even while
+    /// it is not connected.
+    /// </summary>
+    [JsonPropertyName("wanted")]
+    public AudioWanted? Wanted { get; init; }
+}
+
+/// <summary>
+/// Devices came or went, a default changed, or the choice did: the same as audio.devices, once
+/// a burst of changes has gone quiet (300 ms after the last, at most 1 s after the first). Sent
+/// after a setting.set of audio.input or audio.output, and on a device change where the
+/// platform tells the core of them.
+/// </summary>
+public sealed record AudioDevicesChanged : InkEvent
+{
+    /// <summary>
+    /// What Automatic records now ("Automatic (&lt;name&gt;)"); absent when there is no
+    /// microphone.
+    /// </summary>
+    [JsonPropertyName("automatic")]
+    public AudioInput? Automatic { get; init; }
+
+    /// <summary>
+    /// The mic choice (audio.input): auto, or the chosen device's id.
+    /// </summary>
+    [JsonPropertyName("input")]
+    public required string Input { get; init; }
+
+    /// <summary>
+    /// The connected microphones, the default first.
+    /// </summary>
+    [JsonPropertyName("inputs")]
+    public required global::System.Collections.Generic.IReadOnlyList<AudioDevice> Inputs { get; init; }
+
+    /// <summary>
+    /// The output choice (audio.output), with outputs: default, or the chosen device's id.
+    /// </summary>
+    [JsonPropertyName("output")]
+    public string? Output { get; init; }
+
+    /// <summary>
+    /// The output a meeting's far end is to record, and why; absent when there is no output.
+    /// Record now, and a call whose app could not be heard alone, record it; an app heard from
+    /// its own output keeps that output.
+    /// </summary>
+    [JsonPropertyName("output_using")]
+    public AudioOutput? OutputUsing { get; init; }
+
+    /// <summary>
+    /// The chosen output as remembered, when output is a device.
+    /// </summary>
+    [JsonPropertyName("output_wanted")]
+    public AudioWanted? OutputWanted { get; init; }
+
+    /// <summary>
+    /// The connected outputs, the default first, where there is an output picker (Windows);
+    /// absent on macOS, whose far end is tapped from its app wherever it plays.
+    /// </summary>
+    [JsonPropertyName("outputs")]
+    public global::System.Collections.Generic.IReadOnlyList<AudioDevice>? Outputs { get; init; }
+
+    /// <summary>
+    /// The mic Inkwell opens now for a take, a meeting or a test, and why: the chosen one, or
+    /// Automatic (chosen_missing when it stands in for a chosen mic that is not connected).
+    /// Absent when there is no microphone. A meeting already recording keeps its own mic
+    /// (meeting.started, meeting.mic_switched).
+    /// </summary>
+    [JsonPropertyName("using")]
+    public AudioInput? Using { get; init; }
+
+    /// <summary>
+    /// The chosen mic as remembered, when input is a device: Settings shows its name even while
+    /// it is not connected.
+    /// </summary>
+    [JsonPropertyName("wanted")]
+    public AudioWanted? Wanted { get; init; }
+}
+
+/// <summary>
 /// The pump dropped capture blocks because a chain's queue was full (the chain fell behind).
 /// Sent once per stretch, when the queue takes audio again or closes.
 /// </summary>
@@ -345,6 +552,205 @@ public sealed record AudioDropped : InkEvent
 }
 
 /// <summary>
+/// A microphone Inkwell picks, and why.
+/// </summary>
+public sealed record AudioInput
+{
+    /// <summary>
+    /// The OS's id for it.
+    /// </summary>
+    [JsonPropertyName("id")]
+    public required string Id { get; init; }
+
+    /// <summary>
+    /// Its name as the OS shows it.
+    /// </summary>
+    [JsonPropertyName("name")]
+    public required string Name { get; init; }
+
+    /// <summary>
+    /// Why it is the one.
+    /// </summary>
+    [JsonPropertyName("reason")]
+    public required MicReason Reason { get; init; }
+
+    /// <summary>
+    /// How it connects.
+    /// </summary>
+    [JsonPropertyName("transport")]
+    public required MicTransport Transport { get; init; }
+}
+
+/// <summary>
+/// The mic the user chose is not connected, and a mic just opened on Automatic in its place (a
+/// take, a meeting, a meeting's mic that went, a test): said once until the chosen mic is seen
+/// again or the choice changes. The shell says "&lt;wanted&gt; isn't connected. Inkwell is
+/// using &lt;mic&gt; until it is."
+/// </summary>
+public sealed record AudioInputFallback : InkEvent
+{
+    /// <summary>
+    /// The mic recording instead, as the OS names it.
+    /// </summary>
+    [JsonPropertyName("mic_name")]
+    public required string MicName { get; init; }
+
+    /// <summary>
+    /// How that mic connects.
+    /// </summary>
+    [JsonPropertyName("mic_transport")]
+    public required MicTransport MicTransport { get; init; }
+
+    /// <summary>
+    /// The chosen mic.
+    /// </summary>
+    [JsonPropertyName("wanted")]
+    public required AudioWanted Wanted { get; init; }
+}
+
+/// <summary>
+/// The output a meeting's far end is to record (Windows), and why. Record now, and a call whose
+/// app could not be heard alone, record it; an app heard from its own output keeps that output.
+/// </summary>
+public sealed record AudioOutput
+{
+    /// <summary>
+    /// The OS's id for it.
+    /// </summary>
+    [JsonPropertyName("id")]
+    public required string Id { get; init; }
+
+    /// <summary>
+    /// Its name as the OS shows it.
+    /// </summary>
+    [JsonPropertyName("name")]
+    public required string Name { get; init; }
+
+    /// <summary>
+    /// Why it is the one.
+    /// </summary>
+    [JsonPropertyName("reason")]
+    public required OutputReason Reason { get; init; }
+
+    /// <summary>
+    /// How it connects.
+    /// </summary>
+    [JsonPropertyName("transport")]
+    public required MicTransport Transport { get; init; }
+}
+
+/// <summary>
+/// How a mic test ended: its time was up (done), audio.test_stop or the core's shutdown ended
+/// it (stopped), a meeting started recording (meeting), or the mic failed or went away (failed,
+/// with a message).
+/// </summary>
+[JsonConverter(typeof(StrictEnumConverter<AudioTestEnd>))]
+public enum AudioTestEnd
+{
+    [JsonStringEnumMemberName("done")]
+    Done,
+    [JsonStringEnumMemberName("stopped")]
+    Stopped,
+    [JsonStringEnumMemberName("meeting")]
+    Meeting,
+    [JsonStringEnumMemberName("failed")]
+    Failed,
+}
+
+/// <summary>
+/// The mic test's level over the last 100 ms: the loudest moment, from the ink's band analyzer
+/// with no gain applied, on a meter scale.
+/// </summary>
+public sealed record AudioTestLevel : InkEvent
+{
+    /// <summary>
+    /// 0 at -60 dBFS and below, 1 at full scale, linear in dB between.
+    /// </summary>
+    [JsonPropertyName("level")]
+    public required double Level { get; init; }
+
+    /// <summary>
+    /// The id of the command this answers, when it carried one.
+    /// </summary>
+    [JsonPropertyName("ref")]
+    public string? Ref { get; init; }
+}
+
+/// <summary>
+/// A mic test has opened the mic (audio.test): the one dictation and meetings would use now.
+/// audio.test_level follows about ten times a second, then audio.tested.
+/// </summary>
+public sealed record AudioTestStarted : InkEvent
+{
+    /// <summary>
+    /// The mic, as the OS names it.
+    /// </summary>
+    [JsonPropertyName("mic_name")]
+    public required string MicName { get; init; }
+
+    /// <summary>
+    /// Why that mic.
+    /// </summary>
+    [JsonPropertyName("mic_reason")]
+    public required MicReason MicReason { get; init; }
+
+    /// <summary>
+    /// How it connects.
+    /// </summary>
+    [JsonPropertyName("mic_transport")]
+    public required MicTransport MicTransport { get; init; }
+
+    /// <summary>
+    /// The id of the command this answers, when it carried one.
+    /// </summary>
+    [JsonPropertyName("ref")]
+    public string? Ref { get; init; }
+
+    /// <summary>
+    /// How long the test runs at most, in seconds.
+    /// </summary>
+    [JsonPropertyName("seconds")]
+    public required long Seconds { get; init; }
+}
+
+/// <summary>
+/// The mic test is over. Nothing it heard was kept.
+/// </summary>
+public sealed record AudioTested : InkEvent
+{
+    /// <summary>
+    /// How it ended.
+    /// </summary>
+    [JsonPropertyName("ended")]
+    public required AudioTestEnd Ended { get; init; }
+
+    /// <summary>
+    /// Whether the mic heard anything louder than a quiet room (-50 dBFS) at any moment: false
+    /// is the screen's cue for "Not hearing you?".
+    /// </summary>
+    [JsonPropertyName("heard")]
+    public required bool Heard { get; init; }
+
+    /// <summary>
+    /// Why it failed, naming the device, when ended is failed.
+    /// </summary>
+    [JsonPropertyName("message")]
+    public string? Message { get; init; }
+
+    /// <summary>
+    /// The loudest moment, on audio.test_level's scale.
+    /// </summary>
+    [JsonPropertyName("peak")]
+    public required double Peak { get; init; }
+
+    /// <summary>
+    /// The id of the command this answers, when it carried one.
+    /// </summary>
+    [JsonPropertyName("ref")]
+    public string? Ref { get; init; }
+}
+
+/// <summary>
 /// How a record's chunks were placed on its timeline: recorded (from the start the meeting
 /// wrote beside them) or estimated (from its earliest chunk, because that start is missing: an
 /// older record, or one whose write failed). Estimated: the two sides may be out of step, and
@@ -357,6 +763,201 @@ public enum AudioTimeline
     Recorded,
     [JsonStringEnumMemberName("estimated")]
     Estimated,
+}
+
+/// <summary>
+/// A device the user chose, as the core remembers it from when it was chosen (it may not be
+/// connected now).
+/// </summary>
+public sealed record AudioWanted
+{
+    /// <summary>
+    /// The OS's id for it.
+    /// </summary>
+    [JsonPropertyName("id")]
+    public required string Id { get; init; }
+
+    /// <summary>
+    /// Its name when it was chosen; absent for a choice stored without one.
+    /// </summary>
+    [JsonPropertyName("name")]
+    public string? Name { get; init; }
+
+    /// <summary>
+    /// How it connected when it was chosen; absent likewise.
+    /// </summary>
+    [JsonPropertyName("transport")]
+    public MicTransport? Transport { get; init; }
+}
+
+/// <summary>
+/// A personal best: the dictation held longest, the fastest held at least 30 s (neither a take
+/// the stuck-key watchdog stopped), the most words in a day, the best week, the longest
+/// meeting, the longest monologue.
+/// </summary>
+[JsonConverter(typeof(StrictEnumConverter<BestId>))]
+public enum BestId
+{
+    [JsonStringEnumMemberName("longest_dictation")]
+    LongestDictation,
+    [JsonStringEnumMemberName("fastest_dictation")]
+    FastestDictation,
+    [JsonStringEnumMemberName("most_words_day")]
+    MostWordsDay,
+    [JsonStringEnumMemberName("best_week")]
+    BestWeek,
+    [JsonStringEnumMemberName("longest_meeting")]
+    LongestMeeting,
+    [JsonStringEnumMemberName("longest_monologue")]
+    LongestMonologue,
+}
+
+/// <summary>
+/// A best just set, for a short note in the Drop (a dictation's) or at the meeting's end (a
+/// meeting's).
+/// </summary>
+public sealed record BestNews
+{
+    /// <summary>
+    /// When, as a BestRow's date.
+    /// </summary>
+    [JsonPropertyName("date")]
+    public required string Date { get; init; }
+
+    /// <summary>
+    /// Which.
+    /// </summary>
+    [JsonPropertyName("id")]
+    public required BestId Id { get; init; }
+
+    /// <summary>
+    /// The best now.
+    /// </summary>
+    [JsonPropertyName("new")]
+    public required long New { get; init; }
+
+    /// <summary>
+    /// The best before.
+    /// </summary>
+    [JsonPropertyName("old")]
+    public required long Old { get; init; }
+
+    /// <summary>
+    /// The take holding it, as a BestRow's record.
+    /// </summary>
+    [JsonPropertyName("record")]
+    public string? Record { get; init; }
+
+    /// <summary>
+    /// What old and new count.
+    /// </summary>
+    [JsonPropertyName("unit")]
+    public required BestUnit Unit { get; init; }
+}
+
+/// <summary>
+/// A personal best held.
+/// </summary>
+public sealed record BestRow
+{
+    /// <summary>
+    /// When, YYYY-MM-DD: the take's local day, the day, or the week's first day.
+    /// </summary>
+    [JsonPropertyName("date")]
+    public required string Date { get; init; }
+
+    /// <summary>
+    /// Which.
+    /// </summary>
+    [JsonPropertyName("id")]
+    public required BestId Id { get; init; }
+
+    /// <summary>
+    /// The take holding it, for a take's best; absent for a day's or a week's.
+    /// </summary>
+    [JsonPropertyName("record")]
+    public string? Record { get; init; }
+
+    /// <summary>
+    /// What value counts.
+    /// </summary>
+    [JsonPropertyName("unit")]
+    public required BestUnit Unit { get; init; }
+
+    /// <summary>
+    /// The best, in its unit.
+    /// </summary>
+    [JsonPropertyName("value")]
+    public required long Value { get; init; }
+}
+
+/// <summary>
+/// What a best's value counts: ms, words a minute, or words.
+/// </summary>
+[JsonConverter(typeof(StrictEnumConverter<BestUnit>))]
+public enum BestUnit
+{
+    [JsonStringEnumMemberName("ms")]
+    Ms,
+    [JsonStringEnumMemberName("wpm")]
+    Wpm,
+    [JsonStringEnumMemberName("words")]
+    Words,
+}
+
+/// <summary>
+/// An app in the call policies' list: one detection has seen hold the microphone for a call, or
+/// one the user chose for. Never shown by its identity: a shell names it and shows its icon
+/// from the identity, as for a mode's apps.
+/// </summary>
+public sealed record CallApp
+{
+    /// <summary>
+    /// Its identity, as detection reports it: a bundle id on the Mac, the executable (or the
+    /// package's app id) on Windows, where it is kept in lowercase.
+    /// </summary>
+    [JsonPropertyName("app")]
+    public required string App { get; init; }
+
+    /// <summary>
+    /// Its name as detection last saw it; absent for an app chosen for that has not been seen.
+    /// </summary>
+    [JsonPropertyName("app_name")]
+    public string? AppName { get; init; }
+
+    /// <summary>
+    /// Whether the user chose its policy; false while it follows the default.
+    /// </summary>
+    [JsonPropertyName("chosen")]
+    public required bool Chosen { get; init; }
+
+    /// <summary>
+    /// What happens for it now: the user's choice, else the default (Always is Ask while the
+    /// stored list could not be read).
+    /// </summary>
+    [JsonPropertyName("policy")]
+    public required CallPolicy Policy { get; init; }
+
+    /// <summary>
+    /// When detection last saw it hold the microphone for a call, Unix ms.
+    /// </summary>
+    [JsonPropertyName("seen_unix_ms")]
+    public long? SeenUnixMs { get; init; }
+}
+
+/// <summary>
+/// What happens when an app holds the microphone for a call: always (recorded at once, visibly,
+/// as by Record), ask (the consent Drop offers it) or never (neither).
+/// </summary>
+[JsonConverter(typeof(StrictEnumConverter<CallPolicy>))]
+public enum CallPolicy
+{
+    [JsonStringEnumMemberName("always")]
+    Always,
+    [JsonStringEnumMemberName("ask")]
+    Ask,
+    [JsonStringEnumMemberName("never")]
+    Never,
 }
 
 /// <summary>
@@ -378,16 +979,31 @@ public sealed record CatalogueEntry
 
     /// <summary>
     /// The jobs it fills, each with its measured error rate. None for a model the core only
-    /// downloads because the shell runs it (the Mac's Parakeet, parakeet-tdt-0.6b-v3-coreml).
+    /// downloads because the shell runs it (the Mac's Parakeet, parakeet-tdt-0.6b-v3-coreml),
+    /// and none for a language model.
     /// </summary>
     [JsonPropertyName("jobs")]
     public required global::System.Collections.Generic.IReadOnlyList<JobScore> Jobs { get; init; }
+
+    /// <summary>
+    /// What it is for. Always sent; a shell built before language models reads its absence as
+    /// speech.
+    /// </summary>
+    [JsonPropertyName("kind")]
+    public ModelKind? Kind { get; init; }
 
     /// <summary>
     /// Its weights' licence.
     /// </summary>
     [JsonPropertyName("licence")]
     public required string Licence { get; init; }
+
+    /// <summary>
+    /// For a language model, its name for the user (Qwen3 4B Instruct); absent for a speech
+    /// model, which the shell names itself.
+    /// </summary>
+    [JsonPropertyName("name")]
+    public string? Name { get; init; }
 
     /// <summary>
     /// Its download size.
@@ -539,6 +1155,12 @@ public sealed record CommandFailed : InkEvent
     public required string Command { get; init; }
 
     /// <summary>
+    /// For not_enough_space: the bytes free to this user on the volume models go on.
+    /// </summary>
+    [JsonPropertyName("free_bytes")]
+    public long? FreeBytes { get; init; }
+
+    /// <summary>
     /// The command's "id", when it had one.
     /// </summary>
     [JsonPropertyName("id")]
@@ -549,6 +1171,13 @@ public sealed record CommandFailed : InkEvent
     /// </summary>
     [JsonPropertyName("message")]
     public required string Message { get; init; }
+
+    /// <summary>
+    /// For not_enough_space: the bytes that must be free, the download's remaining bytes plus
+    /// the 1 GiB margin.
+    /// </summary>
+    [JsonPropertyName("needed_bytes")]
+    public long? NeededBytes { get; init; }
 }
 
 /// <summary>
@@ -656,16 +1285,41 @@ public sealed record CommitmentsListed : InkEvent
 }
 
 /// <summary>
+/// One destination the user agreed a feature may send to.
+/// </summary>
+public sealed record ConsentEntry
+{
+    /// <summary>
+    /// For cloud, its destination: what consent.revoke names to take it away.
+    /// </summary>
+    [JsonPropertyName("endpoint")]
+    public string? Endpoint { get; init; }
+
+    /// <summary>
+    /// For cloud, the provider's name the user agreed to.
+    /// </summary>
+    [JsonPropertyName("name")]
+    public string? Name { get; init; }
+
+    /// <summary>
+    /// Where.
+    /// </summary>
+    [JsonPropertyName("to")]
+    public required LlmDestination To { get; init; }
+}
+
+/// <summary>
 /// A feature that sends the user's words to a language model: its switch, where the model it
 /// would use now sends them, and where the user agreed it may. The feature runs only when on
-/// and allowed. In answer to consent.get and consent.allow, and after the feature's switch is
-/// set to off.
+/// and allowed. In answer to consent.get, consent.allow and consent.revoke, and after the
+/// feature's switch is set to off.
 /// </summary>
 public sealed record ConsentState : InkEvent
 {
     /// <summary>
-    /// Whether that consent covers the model now: false while the feature is on means it is
-    /// paused until the user agrees again.
+    /// Whether a consent covers the model it would use now: false while the feature is on means
+    /// it is paused until the user agrees again. For polish, a mode on its own model is judged
+    /// on that model (modes.listed's polish_models).
     /// </summary>
     [JsonPropertyName("allowed")]
     public required bool Allowed { get; init; }
@@ -677,10 +1331,20 @@ public sealed record ConsentState : InkEvent
     public string? AllowedName { get; init; }
 
     /// <summary>
-    /// Where the user agreed it may send; absent when never agreed (or turned off since).
+    /// Where the user agreed it may send: for polish, the consent covering the model it would
+    /// use now, else the first (all of them are consents); absent when never agreed (or turned
+    /// off since).
     /// </summary>
     [JsonPropertyName("allowed_to")]
     public LlmDestination? AllowedTo { get; init; }
+
+    /// <summary>
+    /// Every destination the user agreed the feature may send to. Polish holds one per
+    /// destination (a mode may polish on a model elsewhere than the AI setting's: consent.allow
+    /// adds one, consent.revoke takes one away); voice edit and meetings hold one at most.
+    /// </summary>
+    [JsonPropertyName("consents")]
+    public global::System.Collections.Generic.IReadOnlyList<ConsentEntry>? Consents { get; init; }
 
     /// <summary>
     /// For cloud, the destination consent.allow must name; absent otherwise.
@@ -1052,6 +1716,139 @@ public sealed record DictationStarted : InkEvent
 }
 
 /// <summary>
+/// The user's dictation, counted on this computer: finished dictations by the local day they
+/// started. Speed and time saved count only dictations that know how long the key was held.
+/// </summary>
+public sealed record DictationStats
+{
+    /// <summary>
+    /// Local days with a dictation since the month started.
+    /// </summary>
+    [JsonPropertyName("active_days_month")]
+    public long? ActiveDaysMonth { get; init; }
+
+    /// <summary>
+    /// Dictations, all time.
+    /// </summary>
+    [JsonPropertyName("dictations_all")]
+    public required long DictationsAll { get; init; }
+
+    /// <summary>
+    /// The heatmap's first local day, YYYY-MM-DD: the first day of the week eleven weeks before
+    /// this one.
+    /// </summary>
+    [JsonPropertyName("heatmap_first_day")]
+    public required string HeatmapFirstDay { get; init; }
+
+    /// <summary>
+    /// Words dictated per local day, from heatmap_first_day to today.
+    /// </summary>
+    [JsonPropertyName("heatmap_words")]
+    public required global::System.Collections.Generic.IReadOnlyList<long> HeatmapWords { get; init; }
+
+    /// <summary>
+    /// The latest streak, running or ended: what it reached. Once a streak has ended, the shell
+    /// shows this and the longest, never a streak as lost.
+    /// </summary>
+    [JsonPropertyName("latest_streak_days")]
+    public long? LatestStreakDays { get; init; }
+
+    /// <summary>
+    /// The longest streak, all time.
+    /// </summary>
+    [JsonPropertyName("longest_streak_days")]
+    public required long LongestStreakDays { get; init; }
+
+    /// <summary>
+    /// The weekdays the streak rests on (stats.rest_days), ISO: 1 Monday to 7 Sunday; empty for
+    /// none. A rest day neither counts nor breaks the streak.
+    /// </summary>
+    [JsonPropertyName("rest_days")]
+    public global::System.Collections.Generic.IReadOnlyList<long>? RestDays { get; init; }
+
+    /// <summary>
+    /// What saved_ms_all is about, as saved_about_week.
+    /// </summary>
+    [JsonPropertyName("saved_about_all")]
+    public global::System.Collections.Generic.IReadOnlyList<TimeEquivalent>? SavedAboutAll { get; init; }
+
+    /// <summary>
+    /// What saved_ms_week is about, largest first ("about two feature films"). Absent when
+    /// there is nothing to picture: time lost, under about 12 minutes, or between two counts.
+    /// </summary>
+    [JsonPropertyName("saved_about_week")]
+    public global::System.Collections.Generic.IReadOnlyList<TimeEquivalent>? SavedAboutWeek { get; init; }
+
+    /// <summary>
+    /// Time saved all time, ms, as saved_ms_week.
+    /// </summary>
+    [JsonPropertyName("saved_ms_all")]
+    public required long SavedMsAll { get; init; }
+
+    /// <summary>
+    /// Time saved this week, ms: the same words typed at typing_wpm less the time spent
+    /// speaking. Negative when speaking took longer.
+    /// </summary>
+    [JsonPropertyName("saved_ms_week")]
+    public required long SavedMsWeek { get; init; }
+
+    /// <summary>
+    /// The current streak: local days with a dictation in a row, one missed day forgiven, two
+    /// ending it. A rest day neither counts nor breaks it, with a dictation or without; a
+    /// paused day without a dictation is not missed, and one with a dictation counts. Running
+    /// while at most one day was missed since the last active one (today is never missed).
+    /// </summary>
+    [JsonPropertyName("streak_days")]
+    public required long StreakDays { get; init; }
+
+    /// <summary>
+    /// Whether the user hid the streak (stats.streak): show no streak line and offer none on
+    /// the share card. The numbers are still counted.
+    /// </summary>
+    [JsonPropertyName("streak_hidden")]
+    public bool? StreakHidden { get; init; }
+
+    /// <summary>
+    /// The first day of the pause running today (streak.pause), YYYY-MM-DD. Absent while none
+    /// runs; a pause ends by itself after 90 days.
+    /// </summary>
+    [JsonPropertyName("streak_paused_since")]
+    public string? StreakPausedSince { get; init; }
+
+    /// <summary>
+    /// Words dictated, all time.
+    /// </summary>
+    [JsonPropertyName("words_all")]
+    public required long WordsAll { get; init; }
+
+    /// <summary>
+    /// Words dictated today.
+    /// </summary>
+    [JsonPropertyName("words_today")]
+    public required long WordsToday { get; init; }
+
+    /// <summary>
+    /// Words dictated since this week started (the shell's first weekday).
+    /// </summary>
+    [JsonPropertyName("words_week")]
+    public required long WordsWeek { get; init; }
+
+    /// <summary>
+    /// Words per minute over the last 30 days, today included: the user's own average. Absent
+    /// with less than a minute of speech in them.
+    /// </summary>
+    [JsonPropertyName("wpm_average")]
+    public long? WpmAverage { get; init; }
+
+    /// <summary>
+    /// Words per minute this week: words over the time the key was held. Absent with less than
+    /// a minute of speech this week.
+    /// </summary>
+    [JsonPropertyName("wpm_week")]
+    public long? WpmWeek { get; init; }
+}
+
+/// <summary>
 /// The take is closed and being processed.
 /// </summary>
 public sealed record DictationStopped : InkEvent
@@ -1084,7 +1881,10 @@ public sealed record DictationVoiceDetection : InkEvent
 /// there and processed. polish_not_allowed: polish is on, but the user has not agreed to send
 /// dictations where its model goes now (never agreed, or the model changed destination since):
 /// nothing was sent, the text went in as said, and message names the model; consent.get says
-/// more.
+/// more. polish_model_missing: polish is on for this mode, and the mode names a language model
+/// of its own that the core does not hold now (let go of, or another provider chosen in
+/// Settings &gt; AI): nothing was sent anywhere and the text went in as said; polish never
+/// falls back to another model.
 /// </summary>
 [JsonConverter(typeof(StrictEnumConverter<DictationWarning>))]
 public enum DictationWarning
@@ -1105,6 +1905,8 @@ public enum DictationWarning
     PolishTimedOut,
     [JsonStringEnumMemberName("polish_not_allowed")]
     PolishNotAllowed,
+    [JsonStringEnumMemberName("polish_model_missing")]
+    PolishModelMissing,
     [JsonStringEnumMemberName("no_mode_for_style")]
     NoModeForStyle,
     [JsonStringEnumMemberName("save_failed")]
@@ -1470,15 +2272,71 @@ public enum FailedStage
 }
 
 /// <summary>
-/// A command.failed a shell acts on: list_unreadable (a snippets.save or voice_commands.save
-/// refused because the stored list cannot be read; send it again with replace_unreadable to
-/// start over).
+/// A command.failed a shell acts on. list_unreadable: a snippets.save, voice_commands.save,
+/// meetings.calls.set, modes.save or modes.delete refused because the stored list cannot be
+/// read (send a save again with replace_unreadable to start over). meeting_recording: an
+/// audio.test refused because a meeting records: the mic test waits until it ends.
+/// delete_window_over: a meeting.discard after the meeting's first minute: only Stop is left,
+/// and the record can be deleted from the library once it is finished. For modes.save and
+/// modes.delete: name_blank (a mode needs a name), name_taken (another mode's name sounds the
+/// same: case and spacing aside), name_is_style (formal, casual and relaxed are the styles'
+/// names in voice commands), too_long (a name over 64 characters, polish instructions over
+/// 2,000, more than 64 apps in a mode or an app identity over 256 characters, or more than 50
+/// modes; a mode the 0.2 import brought with more than 64 apps saves a change to its apps only
+/// once they are 64 or fewer, so the editor says "Shorten to 64 apps or fewer."), default_mode
+/// (the default mode can't be deleted or given apps), app_taken (an app the mode is given is
+/// another mode's: send the save again with take_apps to move it), mode_not_found (no mode has
+/// that id) model_unknown (no language model the core holds has that id: modes.listed lists
+/// them), model_name_invalid (a polish_model_name that is over 128 characters or holds a
+/// control character, or one given for a model that is not a provider's, or without a model),
+/// destination_changed (a polish_model_confirm whose model sends somewhere else now than its
+/// polish_model_confirm_to, the destination the user agreed to: list the modes again and ask
+/// again; nothing was saved) and app_invalid (an app identity with a control character, of one
+/// character, or with no letter: as a substring of the frontmost app's identity it would match
+/// nearly every app). For the models: not_enough_space (a model.update refused before anything
+/// is fetched: the volume models go on has less free than the download still needs plus a 1 GiB
+/// margin; needed_bytes and free_bytes say how much, and nothing on disk changed), model_in_use
+/// (a model.remove refused while a job, a call or an update holds the model: nothing was
+/// deleted; try again once it ends) and not_downloading (a model.cancel naming a model no
+/// download is running or queued for).
 /// </summary>
 [JsonConverter(typeof(StrictEnumConverter<FailureCode>))]
 public enum FailureCode
 {
     [JsonStringEnumMemberName("list_unreadable")]
     ListUnreadable,
+    [JsonStringEnumMemberName("meeting_recording")]
+    MeetingRecording,
+    [JsonStringEnumMemberName("delete_window_over")]
+    DeleteWindowOver,
+    [JsonStringEnumMemberName("name_blank")]
+    NameBlank,
+    [JsonStringEnumMemberName("name_taken")]
+    NameTaken,
+    [JsonStringEnumMemberName("name_is_style")]
+    NameIsStyle,
+    [JsonStringEnumMemberName("too_long")]
+    TooLong,
+    [JsonStringEnumMemberName("default_mode")]
+    DefaultMode,
+    [JsonStringEnumMemberName("app_taken")]
+    AppTaken,
+    [JsonStringEnumMemberName("mode_not_found")]
+    ModeNotFound,
+    [JsonStringEnumMemberName("model_unknown")]
+    ModelUnknown,
+    [JsonStringEnumMemberName("model_name_invalid")]
+    ModelNameInvalid,
+    [JsonStringEnumMemberName("destination_changed")]
+    DestinationChanged,
+    [JsonStringEnumMemberName("app_invalid")]
+    AppInvalid,
+    [JsonStringEnumMemberName("not_enough_space")]
+    NotEnoughSpace,
+    [JsonStringEnumMemberName("model_in_use")]
+    ModelInUse,
+    [JsonStringEnumMemberName("not_downloading")]
+    NotDownloading,
 }
 
 /// <summary>
@@ -1494,6 +2352,47 @@ public enum FarEnd
     App,
     [JsonStringEnumMemberName("everything")]
     Everything,
+}
+
+/// <summary>
+/// Whether this computer can watch a key binding as the dictation key or the edit key, in
+/// answer to hotkey.check. A shell checks a shortcut the user recorded before it stores it with
+/// setting.set; nothing is stored here.
+/// </summary>
+public sealed record HotkeyChecked : InkEvent
+{
+    /// <summary>
+    /// The binding as the command spelled it.
+    /// </summary>
+    [JsonPropertyName("binding")]
+    public required string Binding { get; init; }
+
+    /// <summary>
+    /// When ok: its one spelling, to store with setting.set and to compare keys by (two
+    /// spellings of one chord are one key). For example ctrl+shift+space, right_option or f13.
+    /// </summary>
+    [JsonPropertyName("canonical")]
+    public string? Canonical { get; init; }
+
+    /// <summary>
+    /// Whether this computer can watch it.
+    /// </summary>
+    [JsonPropertyName("ok")]
+    public required bool Ok { get; init; }
+
+    /// <summary>
+    /// When not ok: why not, in plain words starting in lower case and without a full stop, to
+    /// show after "can't use that:". For example "that key on its own would stop working
+    /// everywhere else; add Control, Option or Command".
+    /// </summary>
+    [JsonPropertyName("reason")]
+    public string? Reason { get; init; }
+
+    /// <summary>
+    /// The command's "id", when it had one.
+    /// </summary>
+    [JsonPropertyName("ref")]
+    public string? Ref { get; init; }
 }
 
 /// <summary>
@@ -1799,6 +2698,66 @@ public sealed record KindStats
 }
 
 /// <summary>
+/// A language model a mode can be polished on: one the shell registered, the core's own on this
+/// machine, or the own-key provider chosen in Settings &gt; AI.
+/// </summary>
+public sealed record LanguageModelChoice
+{
+    /// <summary>
+    /// Whether polish may use it now: one of the user's polish consents covers it
+    /// (consent.state's consents) and local-only mode lets it (blocked_local_only false).
+    /// False, a mode on it goes in as said (polish_not_allowed, or polish_failed while
+    /// local-only mode refuses it) until that changes.
+    /// </summary>
+    [JsonPropertyName("allowed")]
+    public required bool Allowed { get; init; }
+
+    /// <summary>
+    /// Local-only mode is on and this model is not on this machine: nothing goes to it,
+    /// whatever the consent (turn local-only off in Settings &gt; AI first).
+    /// </summary>
+    [JsonPropertyName("blocked_local_only")]
+    public bool? BlockedLocalOnly { get; init; }
+
+    /// <summary>
+    /// For a cloud model, the endpoint it sends to, as consent.state names one. To confirm a
+    /// mode's model (polish_model_state moved or unrecorded), show where it sends and send that
+    /// back as polish_model_confirm_to: {"to":"on_device"} or
+    /// {"to":"cloud","endpoint":"&lt;this&gt;"}.
+    /// </summary>
+    [JsonPropertyName("endpoint")]
+    public string? Endpoint { get; init; }
+
+    /// <summary>
+    /// Its id, as a mode names it (polish_model): engine:&lt;id&gt; for a model the shell
+    /// registered (engine:apple-foundation-models), engine:local for the core's own model on
+    /// this machine (whichever size is downloaded), provider:&lt;id&gt; for the chosen own-key
+    /// provider. Show the name, never the id.
+    /// </summary>
+    [JsonPropertyName("id")]
+    public required string Id { get; init; }
+
+    /// <summary>
+    /// The model it asks for: for the own-key provider, the one chosen in Settings &gt; AI,
+    /// which a mode's polish_model_name replaces (the editor's placeholder).
+    /// </summary>
+    [JsonPropertyName("model")]
+    public string? Model { get; init; }
+
+    /// <summary>
+    /// Its name, as consent.state names a model (a shell may name its own engine better).
+    /// </summary>
+    [JsonPropertyName("name")]
+    public required string Name { get; init; }
+
+    /// <summary>
+    /// Where it sends a dictation.
+    /// </summary>
+    [JsonPropertyName("to")]
+    public required LlmDestination To { get; init; }
+}
+
+/// <summary>
 /// One record whole, in answer to record.open. Carries the library's words: never log it.
 /// </summary>
 public sealed record LibraryRecord : InkEvent
@@ -2005,9 +2964,10 @@ public enum LlmFeature
 }
 
 /// <summary>
-/// An own-key (BYOK) language model provider the user can choose: its id, what it uses unless
-/// told otherwise, and whether its API key is stored. The key itself never leaves the OS key
-/// store.
+/// A language model provider the user can choose: an own-key (BYOK) one, or this machine's
+/// model (on_device, listed only where the OS has language models of the core's own: Windows).
+/// Its id, what it uses unless told otherwise, and whether its API key is stored. The key
+/// itself never leaves the OS key store.
 /// </summary>
 public sealed record LlmProviderEntry
 {
@@ -2018,7 +2978,8 @@ public sealed record LlmProviderEntry
     public required bool CustomUrl { get; init; }
 
     /// <summary>
-    /// The model used when llm.choose names none.
+    /// The model used when llm.choose names none; for on_device, the registry id of the
+    /// language model downloaded, else of the one this OS offers (models.listed).
     /// </summary>
     [JsonPropertyName("default_model")]
     public required string DefaultModel { get; init; }
@@ -2039,10 +3000,18 @@ public sealed record LlmProviderEntry
 
     /// <summary>
     /// The provider: openai, groq, anthropic, openrouter or custom (any OpenAI-compatible
-    /// server).
+    /// server), or on_device (the core's own model on this machine, which needs no key and
+    /// keeps local-only mode on).
     /// </summary>
     [JsonPropertyName("id")]
     public required string Id { get; init; }
+
+    /// <summary>
+    /// For on_device, whether a language model is downloaded: llm.choose on_device needs one.
+    /// Absent for the others.
+    /// </summary>
+    [JsonPropertyName("installed")]
+    public bool? Installed { get; init; }
 
     /// <summary>
     /// Whether a call needs its API key (a custom server usually runs without one).
@@ -2052,10 +3021,12 @@ public sealed record LlmProviderEntry
 }
 
 /// <summary>
-/// The own-key language model providers and the one chosen, in answer to llm.providers,
-/// llm.key.save, llm.key.delete and llm.choose. A feature (polish, voice edit, summaries and
-/// Ask) sends to the chosen provider only when no model is registered by the shell, and only
-/// with the user's consent for its endpoint (consent.state).
+/// The own-key language model providers, this machine's model where the OS has one, and the
+/// choice, in answer to llm.providers, llm.key.save, llm.key.delete and llm.choose. The
+/// features (polish, voice edit, summaries and Ask) use the chosen provider; with none chosen,
+/// the core's own model on this machine once one is downloaded (Windows), else the model the
+/// shell registered (Apple's on the Mac). Each only with the user's consent for where it sends
+/// (consent.state).
 /// </summary>
 public sealed record LlmProviders : InkEvent
 {
@@ -2066,7 +3037,8 @@ public sealed record LlmProviders : InkEvent
     public string? BaseUrl { get; init; }
 
     /// <summary>
-    /// The chosen provider's id; absent when none is chosen.
+    /// The chosen provider's id, or on_device for this machine's model; absent when none is
+    /// chosen.
     /// </summary>
     [JsonPropertyName("chosen")]
     public string? Chosen { get; init; }
@@ -2092,7 +3064,8 @@ public sealed record LlmProviders : InkEvent
     public required bool LocalOnly { get; init; }
 
     /// <summary>
-    /// The model the chosen provider is asked for; absent with chosen.
+    /// The model the chosen provider is asked for; for on_device, the registry id of the
+    /// language model downloaded (models.listed), absent while none is. Absent with chosen.
     /// </summary>
     [JsonPropertyName("model")]
     public string? Model { get; init; }
@@ -2105,7 +3078,8 @@ public sealed record LlmProviders : InkEvent
 
     /// <summary>
     /// Whether the chosen provider can be called: its key is stored (when it needs one), and
-    /// local-only mode lets it through. Each feature still needs its own consent.
+    /// local-only mode lets it through; for on_device, whether a language model is downloaded.
+    /// Each feature still needs its own consent.
     /// </summary>
     [JsonPropertyName("ready")]
     public required bool Ready { get; init; }
@@ -2126,10 +3100,18 @@ public sealed record LlmProviders : InkEvent
 
 /// <summary>
 /// The answer to llm.test: one short fixed request (never the user's words) sent to the chosen
-/// provider with its stored key, and whether it answered.
+/// provider with its stored key, or, with none chosen, to the core's own model on this machine
+/// (loaded first if it is not), and whether it answered, timed.
 /// </summary>
 public sealed record LlmTested : InkEvent
 {
+    /// <summary>
+    /// How long the answer took, in milliseconds, the load apart; absent when it did not
+    /// answer. A short request: a dictation's polish reads and writes more.
+    /// </summary>
+    [JsonPropertyName("answer_ms")]
+    public long? AnswerMs { get; init; }
+
     /// <summary>
     /// Why it did not answer, as a sentence starting "couldn't"; absent when ok. Names what
     /// failed, never the key.
@@ -2138,7 +3120,14 @@ public sealed record LlmTested : InkEvent
     public string? Error { get; init; }
 
     /// <summary>
-    /// The model asked.
+    /// For on_device, how long loading the model took, in milliseconds (near 0 when it was
+    /// loaded already). Absent for a provider.
+    /// </summary>
+    [JsonPropertyName("load_ms")]
+    public long? LoadMs { get; init; }
+
+    /// <summary>
+    /// The model asked; for on_device, its registry id (models.listed).
     /// </summary>
     [JsonPropertyName("model")]
     public required string Model { get; init; }
@@ -2150,7 +3139,7 @@ public sealed record LlmTested : InkEvent
     public required bool Ok { get; init; }
 
     /// <summary>
-    /// The provider tested.
+    /// The provider tested; on_device for this machine's model.
     /// </summary>
     [JsonPropertyName("provider")]
     public required string Provider { get; init; }
@@ -2235,7 +3224,11 @@ public sealed record MeetingCommitments : InkEvent
 /// <summary>
 /// An app has held the microphone long enough to be a call, and no meeting is being recorded:
 /// the shell offers to record it (the consent Drop), and records only if the user says so
-/// (meeting.start with this app).
+/// (meeting.start with this app). Its policy is Ask (meetings.calls), or Always when its
+/// recording could not start by itself (message says why: a start that failed, or a far end
+/// that would not be the app's sound alone), when the user stopped a recording by hand during
+/// this call, or when the app was made Always during this call. The Drop can also set the app's
+/// policy (meetings.calls.set): Always (then meeting.start) or Never.
 /// </summary>
 public sealed record MeetingDetected : InkEvent
 {
@@ -2250,13 +3243,24 @@ public sealed record MeetingDetected : InkEvent
     /// </summary>
     [JsonPropertyName("app_name")]
     public required string AppName { get; init; }
+
+    /// <summary>
+    /// Why it is offered rather than recorded, when its policy is Always: its recording could
+    /// not start by itself (the platform's error), or its own sound cannot be recorded alone,
+    /// so the recording would hold everything this computer plays (the Mac's fallback, Windows'
+    /// device loopback): an Always app is recorded by itself only when its sound alone is.
+    /// Never content.
+    /// </summary>
+    [JsonPropertyName("message")]
+    public string? Message { get; init; }
 }
 
 /// <summary>
 /// Whether the core is listening for calls now: sent once at start whatever the state (off
-/// included, with a message when the setting could not be read), then when detection starts,
-/// stops (the meetings.detect setting), fails to start, or stops on its own (the platform
-/// stopped answering). The shell shows this state, not the setting.
+/// included, with a message when the default call policy could not be read), then when
+/// detection starts, stops (the call policies: it listens while any app could be offered or
+/// recorded, so a default of Never with no app chosen for is off), fails to start, or stops on
+/// its own (the platform stopped answering). The shell shows this state, not the setting.
 /// </summary>
 public sealed record MeetingDetection : InkEvent
 {
@@ -2275,7 +3279,8 @@ public sealed record MeetingDetection : InkEvent
 
 /// <summary>
 /// The offer to record an app is over before it was taken: the app released the microphone, or
-/// the user said not this one (meeting.dismiss).
+/// the user said not this one (meeting.dismiss), or its policy became Never
+/// (meetings.calls.set).
 /// </summary>
 public sealed record MeetingDetectionEnded : InkEvent
 {
@@ -2286,7 +3291,8 @@ public sealed record MeetingDetectionEnded : InkEvent
     public required string App { get; init; }
 
     /// <summary>
-    /// Whether the user dismissed it (rather than the app releasing the microphone).
+    /// Whether the user dismissed it, by Not this one or Never (rather than the app releasing
+    /// the microphone).
     /// </summary>
     [JsonPropertyName("dismissed")]
     public required bool Dismissed { get; init; }
@@ -2326,6 +3332,35 @@ public sealed record MeetingDiarized : InkEvent
     /// </summary>
     [JsonPropertyName("substantial")]
     public required long Substantial { get; init; }
+}
+
+/// <summary>
+/// A meeting stopped with meeting.discard (Stop and delete), or one a crash interrupted on its
+/// way to being deleted, is gone as if it had never been made: no final pass ran and nothing
+/// was sent to a language model; its transcript, notes and search entries were deleted with
+/// their words overwritten in the library's files, then its audio. Follows meeting.stopped; no
+/// meeting.finished comes. The screens drop it.
+/// </summary>
+public sealed record MeetingDiscarded : InkEvent
+{
+    /// <summary>
+    /// Its recorded audio is still on disk: it could not be removed, or its folder is outside
+    /// the library and was left alone. The record itself is gone.
+    /// </summary>
+    [JsonPropertyName("audio_left")]
+    public required bool AudioLeft { get; init; }
+
+    /// <summary>
+    /// The record that is gone.
+    /// </summary>
+    [JsonPropertyName("record")]
+    public required string Record { get; init; }
+
+    /// <summary>
+    /// No copy of its words is left in the library's files (as for record.deleted).
+    /// </summary>
+    [JsonPropertyName("scrubbed")]
+    public required bool Scrubbed { get; init; }
 }
 
 /// <summary>
@@ -2646,6 +3681,51 @@ public sealed record MeetingLooksDone : InkEvent
 }
 
 /// <summary>
+/// A recording meeting's mic went (unplugged, switched off) and the meeting records with
+/// another now: the choice as it is now, else Automatic. A meeting never moves to a mic that
+/// was plugged in or made the default mid-call; only its own mic going moves it. The mic_*
+/// fields are meeting.started's, for the mic now.
+/// </summary>
+public sealed record MeetingMicSwitched : InkEvent
+{
+    /// <summary>
+    /// The mic that went, as the OS named it, when known.
+    /// </summary>
+    [JsonPropertyName("from_name")]
+    public string? FromName { get; init; }
+
+    /// <summary>
+    /// How that mic connected, when known.
+    /// </summary>
+    [JsonPropertyName("from_transport")]
+    public MicTransport? FromTransport { get; init; }
+
+    /// <summary>
+    /// The mic it records now.
+    /// </summary>
+    [JsonPropertyName("mic_name")]
+    public required string MicName { get; init; }
+
+    /// <summary>
+    /// Why that mic.
+    /// </summary>
+    [JsonPropertyName("mic_reason")]
+    public required MicReason MicReason { get; init; }
+
+    /// <summary>
+    /// How that mic connects.
+    /// </summary>
+    [JsonPropertyName("mic_transport")]
+    public required MicTransport MicTransport { get; init; }
+
+    /// <summary>
+    /// The meeting's record id.
+    /// </summary>
+    [JsonPropertyName("record")]
+    public required string Record { get; init; }
+}
+
+/// <summary>
 /// Provisional live text; each replaces the last and none is saved. Carries the meeting's
 /// words: never log it.
 /// </summary>
@@ -2752,7 +3832,10 @@ public sealed record MeetingSideState : InkEvent
 
 /// <summary>
 /// A meeting's record exists and its capture is being transcribed live. Names what the shell
-/// shows of it: its title, its app and its mic, when known.
+/// shows of it: its title, its app and its mic, when known. Sent for every meeting, however it
+/// started (Record, the consent Drop's offer, or an app's Always policy): the shell shows the
+/// recording indicator from this event, so a call recorded by its policy shows exactly as one
+/// the user started.
 /// </summary>
 public sealed record MeetingStarted : InkEvent
 {
@@ -2767,6 +3850,24 @@ public sealed record MeetingStarted : InkEvent
     /// </summary>
     [JsonPropertyName("app_name")]
     public string? AppName { get; init; }
+
+    /// <summary>
+    /// True when the app's call policy (Always) started it, without a tap: the shell says so
+    /// where the recording shows, keeps the reminder to tell the others, and offers Stop and
+    /// Stop and delete. Absent for a start the user made. A policy start always records the
+    /// app's own sound alone (far_end app).
+    /// </summary>
+    [JsonPropertyName("auto")]
+    public bool? Auto { get; init; }
+
+    /// <summary>
+    /// Until this moment, Unix ms (a minute after the start), meeting.discard (Stop and delete)
+    /// may delete this meeting as if it had never been made; after it only Stop is offered
+    /// (meeting.discard is refused with delete_window_over). Absent for a meeting that cannot
+    /// be deleted so (a replay).
+    /// </summary>
+    [JsonPropertyName("delete_until_unix_ms")]
+    public long? DeleteUntilUnixMs { get; init; }
 
     /// <summary>
     /// What it records as the other side.
@@ -2804,6 +3905,51 @@ public sealed record MeetingStarted : InkEvent
     /// </summary>
     [JsonPropertyName("title")]
     public string? Title { get; init; }
+}
+
+/// <summary>
+/// Meetings recorded here and finished, counted (imported meetings are left out: their channels
+/// came from elsewhere). Me versus them is stream identity: the mic is the user, the far end
+/// everyone else.
+/// </summary>
+public sealed record MeetingStats
+{
+    /// <summary>
+    /// The user's longest stretch of speech with no one else speaking and no pause over 3
+    /// seconds, ms.
+    /// </summary>
+    [JsonPropertyName("longest_monologue_ms")]
+    public required long LongestMonologueMs { get; init; }
+
+    /// <summary>
+    /// Meetings.
+    /// </summary>
+    [JsonPropertyName("meetings")]
+    public required long Meetings { get; init; }
+
+    /// <summary>
+    /// The user's lines ending in a question mark: a plain count.
+    /// </summary>
+    [JsonPropertyName("questions")]
+    public required long Questions { get; init; }
+
+    /// <summary>
+    /// Their total length, ms.
+    /// </summary>
+    [JsonPropertyName("recorded_ms")]
+    public required long RecordedMs { get; init; }
+
+    /// <summary>
+    /// Everyone else's talk time, ms.
+    /// </summary>
+    [JsonPropertyName("them_ms")]
+    public required long ThemMs { get; init; }
+
+    /// <summary>
+    /// The user's talk time, ms: how long their lines cover.
+    /// </summary>
+    [JsonPropertyName("you_ms")]
+    public required long YouMs { get; init; }
 }
 
 /// <summary>
@@ -3089,6 +4235,43 @@ public sealed record MeetingWorkerFailed : InkEvent
 }
 
 /// <summary>
+/// The call policies: the default for apps not chosen for, and every app seen or chosen for (at
+/// most 64), most recently seen first. In answer to meetings.calls.list, meetings.calls.set and
+/// meetings.calls.remove (with ref), and unasked when the default changed or detection saw a
+/// new app.
+/// </summary>
+public sealed record MeetingsCalls : InkEvent
+{
+    /// <summary>
+    /// The apps.
+    /// </summary>
+    [JsonPropertyName("apps")]
+    public required global::System.Collections.Generic.IReadOnlyList<CallApp> Apps { get; init; }
+
+    /// <summary>
+    /// The policy for apps not chosen for (meetings.calls.default; ask unless set).
+    /// </summary>
+    [JsonPropertyName("default")]
+    public required CallPolicy Default { get; init; }
+
+    /// <summary>
+    /// Why the stored choices could not be read, while they are set aside: every app follows
+    /// the default then, with Always lowered to Ask, and meetings.calls.set is refused
+    /// (list_unreadable) unless it says replace_unreadable, which starts the list over. In the
+    /// answer to that start over under a default of Always: that the default is Ask now
+    /// (written), so the user sets Always again knowingly.
+    /// </summary>
+    [JsonPropertyName("message")]
+    public string? Message { get; init; }
+
+    /// <summary>
+    /// The command's "id", when it had one, so the shell can match the answer to what it sent.
+    /// </summary>
+    [JsonPropertyName("ref")]
+    public string? Ref { get; init; }
+}
+
+/// <summary>
 /// Recovery (meetings.recover) is done.
 /// </summary>
 public sealed record MeetingsRecovered : InkEvent
@@ -3109,16 +4292,60 @@ public sealed record MeetingsRecovered : InkEvent
 }
 
 /// <summary>
-/// Why a meeting records this microphone: the system default input; the built-in mic because
-/// the output is Bluetooth (a headset mic is call-quality audio; on Windows a USB mic may be
-/// the one kept); the headset's own mic because the user's setting says so; the default because
-/// this Mac has no built-in mic (on Windows: every mic is Bluetooth); the first input because
-/// no default is set; it was named; the LE Audio headset's own mic, which keeps full quality
-/// (Windows); or a reason this build of the core does not name (unknown).
+/// The confirmed global meeting shortcut and whether it is held. Suspension acknowledges that
+/// no meeting shortcut can fire while the shell records a new key.
+/// </summary>
+public sealed record MeetingsShortcutState : InkEvent
+{
+    /// <summary>
+    /// The global hook is held and can toggle recording.
+    /// </summary>
+    [JsonPropertyName("active")]
+    public required bool Active { get; init; }
+
+    /// <summary>
+    /// Why the configured shortcut could not be held.
+    /// </summary>
+    [JsonPropertyName("error")]
+    public string? Error { get; init; }
+
+    /// <summary>
+    /// The configured canonical shortcut, or off.
+    /// </summary>
+    [JsonPropertyName("key")]
+    public required string Key { get; init; }
+
+    /// <summary>
+    /// The suspend/resume command id, when answering one.
+    /// </summary>
+    [JsonPropertyName("ref")]
+    public string? Ref { get; init; }
+
+    /// <summary>
+    /// The shell suspended the hook while recording a shortcut.
+    /// </summary>
+    [JsonPropertyName("suspended")]
+    public required bool Suspended { get; init; }
+}
+
+/// <summary>
+/// Why Inkwell records this microphone: the one the user chose in Settings &gt; Sound (chosen,
+/// found by its id or by its name and transport); Automatic standing in for a chosen mic that
+/// is not connected (chosen_missing); or Automatic's reason: the system default input; the
+/// built-in mic because the output is Bluetooth (a headset mic is call-quality audio; on
+/// Windows a USB mic may be the one kept); the headset's own mic because a platform's retired
+/// headset-mic switch is on; the default because this Mac has no built-in mic (on Windows:
+/// every mic is Bluetooth); the first input because no default is set; it was named; the LE
+/// Audio headset's own mic, which keeps full quality (Windows); or a reason this build of the
+/// core does not name (unknown).
 /// </summary>
 [JsonConverter(typeof(StrictEnumConverter<MicReason>))]
 public enum MicReason
 {
+    [JsonStringEnumMemberName("chosen")]
+    Chosen,
+    [JsonStringEnumMemberName("chosen_missing")]
+    ChosenMissing,
     [JsonStringEnumMemberName("default_input")]
     DefaultInput,
     [JsonStringEnumMemberName("built_in_for_bluetooth_output")]
@@ -3138,8 +4365,8 @@ public enum MicReason
 }
 
 /// <summary>
-/// How a microphone connects: built in, Bluetooth (call-quality audio, and zeros while its user
-/// is silent), USB, a virtual or aggregate device, or anything else.
+/// How a device connects: built in, Bluetooth (call-quality audio, and zeros while its user is
+/// silent), USB, a virtual or aggregate device, or anything else.
 /// </summary>
 [JsonConverter(typeof(StrictEnumConverter<MicTransport>))]
 public enum MicTransport
@@ -3157,7 +4384,112 @@ public enum MicTransport
 }
 
 /// <summary>
-/// A mode: how dictation writes in the apps it names.
+/// What a milestone counts: words dictated all time, or the longest streak in days.
+/// </summary>
+[JsonConverter(typeof(StrictEnumConverter<MilestoneKind>))]
+public enum MilestoneKind
+{
+    [JsonStringEnumMemberName("words")]
+    Words,
+    [JsonStringEnumMemberName("streak")]
+    Streak,
+}
+
+/// <summary>
+/// A milestone's name, a key the shells word: first_page (1,000 words), notebook (10,000),
+/// short_novel (50,000), novels_worth (100,000), seven_days, thirty_days and hundred_days
+/// (streaks).
+/// </summary>
+[JsonConverter(typeof(StrictEnumConverter<MilestoneName>))]
+public enum MilestoneName
+{
+    [JsonStringEnumMemberName("first_page")]
+    FirstPage,
+    [JsonStringEnumMemberName("notebook")]
+    Notebook,
+    [JsonStringEnumMemberName("short_novel")]
+    ShortNovel,
+    [JsonStringEnumMemberName("novels_worth")]
+    NovelsWorth,
+    [JsonStringEnumMemberName("seven_days")]
+    SevenDays,
+    [JsonStringEnumMemberName("thirty_days")]
+    ThirtyDays,
+    [JsonStringEnumMemberName("hundred_days")]
+    HundredDays,
+}
+
+/// <summary>
+/// A milestone and whether the library has reached it.
+/// </summary>
+public sealed record MilestoneRow
+{
+    /// <summary>
+    /// Its id: words_1000, words_10000, words_50000, words_100000, streak_7, streak_30,
+    /// streak_100.
+    /// </summary>
+    [JsonPropertyName("id")]
+    public required string Id { get; init; }
+
+    /// <summary>
+    /// What it counts.
+    /// </summary>
+    [JsonPropertyName("kind")]
+    public required MilestoneKind Kind { get; init; }
+
+    /// <summary>
+    /// Its name, worded by the shell: the same on the chip, in the celebration and on the share
+    /// card's seal.
+    /// </summary>
+    [JsonPropertyName("name")]
+    public MilestoneName? Name { get; init; }
+
+    /// <summary>
+    /// Whether it is reached.
+    /// </summary>
+    [JsonPropertyName("reached")]
+    public required bool Reached { get; init; }
+
+    /// <summary>
+    /// The count that reaches it.
+    /// </summary>
+    [JsonPropertyName("threshold")]
+    public required long Threshold { get; init; }
+}
+
+/// <summary>
+/// In answer to milestones.check: the milestones reached since the last check, to celebrate,
+/// and a best the take just set, for a short note. Each milestone is reported once ever; a
+/// library's first check, and any check while stats.celebrate is off, reports none (what is
+/// reached is noted all the same). A hidden streak's milestones are noted, not reported.
+/// </summary>
+public sealed record MilestonesReached : InkEvent
+{
+    /// <summary>
+    /// A best the newest take, today or this week just set: at most one a day, never on a
+    /// library's first check or with stats.celebrate off, and only once it beat at least five
+    /// earlier entries. Absent otherwise.
+    /// </summary>
+    [JsonPropertyName("best")]
+    public BestNews? Best { get; init; }
+
+    /// <summary>
+    /// The newly reached milestones, in the fixed order of stats.counted's; usually none.
+    /// </summary>
+    [JsonPropertyName("milestones")]
+    public required global::System.Collections.Generic.IReadOnlyList<MilestoneRow> Milestones { get; init; }
+
+    /// <summary>
+    /// The id of the command this answers, echoed so the shell can match the answer to its
+    /// question.
+    /// </summary>
+    [JsonPropertyName("ref")]
+    public string? Ref { get; init; }
+}
+
+/// <summary>
+/// A mode: how dictation writes in the apps it names. Carries the user's words (its name,
+/// polish instructions and apps): never log it.
 /// </summary>
 public sealed record ModeInfo
 {
@@ -3185,6 +4517,34 @@ public sealed record ModeInfo
     /// </summary>
     [JsonPropertyName("polish")]
     public required bool Polish { get; init; }
+
+    /// <summary>
+    /// The language model it is polished on, by its id in polish_models; absent for the AI
+    /// setting's (setting_polish_model). Whether a take can use it now is polish_model_state.
+    /// </summary>
+    [JsonPropertyName("polish_model")]
+    public string? PolishModel { get; init; }
+
+    /// <summary>
+    /// A model at the provider polish_model names (provider: ids only), sent as the request's
+    /// model on the same endpoint; absent for the model chosen with the provider in Settings
+    /// &gt; AI. Free text the user typed: never log it.
+    /// </summary>
+    [JsonPropertyName("polish_model_name")]
+    public string? PolishModelName { get; init; }
+
+    /// <summary>
+    /// With polish_model: whether its takes can use it now.
+    /// </summary>
+    [JsonPropertyName("polish_model_state")]
+    public PolishModelState? PolishModelState { get; init; }
+
+    /// <summary>
+    /// Its polish instructions, as the user wrote them; blank for the default (modes.listed's
+    /// default_polish_prompt). The user's words: never log them.
+    /// </summary>
+    [JsonPropertyName("polish_prompt")]
+    public required string PolishPrompt { get; init; }
 
     /// <summary>
     /// Whether fillers and stutters are removed.
@@ -3216,6 +4576,20 @@ public enum ModeStyle
 }
 
 /// <summary>
+/// What a model in the catalogue is for: speech (transcription, live words, voice detection,
+/// the diarizer) or language (polish, voice edit, a meeting's summary and Ask, run by the core
+/// on this computer; Windows only).
+/// </summary>
+[JsonConverter(typeof(StrictEnumConverter<ModelKind>))]
+public enum ModelKind
+{
+    [JsonStringEnumMemberName("speech")]
+    Speech,
+    [JsonStringEnumMemberName("language")]
+    Language,
+}
+
+/// <summary>
 /// A job asked for a model that is held exclusively (being updated), and was refused. The job
 /// fails; nothing was loaded from files being replaced.
 /// </summary>
@@ -3241,10 +4615,18 @@ public sealed record ModelRefused : InkEvent
 }
 
 /// <summary>
-/// A model update ended, and its hold is released.
+/// A model update ended, and its hold is released. A model.cancel of an update still queued
+/// answers with this at once, without a model.update_started before it.
 /// </summary>
 public sealed record ModelUpdateFinished : InkEvent
 {
+    /// <summary>
+    /// Whether model.cancel stopped it. A cancelled download keeps its part files, so the next
+    /// model.update resumes it. Always sent.
+    /// </summary>
+    [JsonPropertyName("cancelled")]
+    public bool? Cancelled { get; init; }
+
     /// <summary>
     /// The model that was to be replaced.
     /// </summary>
@@ -3371,21 +4753,35 @@ public sealed record ModelWarmed : InkEvent
 }
 
 /// <summary>
-/// The catalogue's models for this OS, in answer to models.list. What serves each job now is
-/// engine.route's answer.
+/// The catalogue's models for this OS, in answer to models.list and model.remove. What serves
+/// each job now is engine.route's answer.
 /// </summary>
 public sealed record ModelsListed : InkEvent
 {
+    /// <summary>
+    /// The bytes free to this user on the volume models are installed on; absent when the OS
+    /// could not say.
+    /// </summary>
+    [JsonPropertyName("free_bytes")]
+    public long? FreeBytes { get; init; }
+
     /// <summary>
     /// The models, in the catalogue's order.
     /// </summary>
     [JsonPropertyName("models")]
     public required global::System.Collections.Generic.IReadOnlyList<CatalogueEntry> Models { get; init; }
+
+    /// <summary>
+    /// The command's "id", when it had one.
+    /// </summary>
+    [JsonPropertyName("ref")]
+    public string? Ref { get; init; }
 }
 
 /// <summary>
-/// The user's modes, in answer to modes.list, in the order they are matched: the first mode
-/// naming the frontmost app wins, else the default.
+/// The user's modes, in answer to modes.list, modes.save and modes.delete, in the order they
+/// are matched: the first mode naming the frontmost app wins, else the default. Carries the
+/// user's words: never log it.
 /// </summary>
 public sealed record ModesListed : InkEvent
 {
@@ -3396,10 +4792,43 @@ public sealed record ModesListed : InkEvent
     public required string DefaultId { get; init; }
 
     /// <summary>
+    /// The polish instructions a mode with blank ones uses: the editor's placeholder.
+    /// </summary>
+    [JsonPropertyName("default_polish_prompt")]
+    public required string DefaultPolishPrompt { get; init; }
+
+    /// <summary>
     /// The modes.
     /// </summary>
     [JsonPropertyName("modes")]
     public required global::System.Collections.Generic.IReadOnlyList<ModeInfo> Modes { get; init; }
+
+    /// <summary>
+    /// Every language model a mode can be polished on now, the AI setting's first. Empty when
+    /// the core holds none.
+    /// </summary>
+    [JsonPropertyName("polish_models")]
+    public required global::System.Collections.Generic.IReadOnlyList<LanguageModelChoice> PolishModels { get; init; }
+
+    /// <summary>
+    /// The command's "id", when it had one.
+    /// </summary>
+    [JsonPropertyName("ref")]
+    public string? Ref { get; init; }
+
+    /// <summary>
+    /// In answer to modes.save: the id of the mode saved (a new mode's id is the core's), so
+    /// the editor can select it.
+    /// </summary>
+    [JsonPropertyName("saved")]
+    public string? Saved { get; init; }
+
+    /// <summary>
+    /// The id (in polish_models) of the model a mode without one of its own is polished on now:
+    /// the AI setting's. Absent when there is none.
+    /// </summary>
+    [JsonPropertyName("setting_polish_model")]
+    public string? SettingPolishModel { get; init; }
 }
 
 /// <summary>
@@ -3469,6 +4898,22 @@ public sealed record NoteUpdated : InkEvent
     /// </summary>
     [JsonPropertyName("ref")]
     public string? Ref { get; init; }
+}
+
+/// <summary>
+/// Why a meeting's far end records this output (Windows): the one the user chose (chosen), the
+/// default because the chosen one is not connected (chosen_missing), or the default output,
+/// chosen (default_output).
+/// </summary>
+[JsonConverter(typeof(StrictEnumConverter<OutputReason>))]
+public enum OutputReason
+{
+    [JsonStringEnumMemberName("chosen")]
+    Chosen,
+    [JsonStringEnumMemberName("chosen_missing")]
+    ChosenMissing,
+    [JsonStringEnumMemberName("default_output")]
+    DefaultOutput,
 }
 
 /// <summary>
@@ -3646,6 +5091,60 @@ public enum Phase
 }
 
 /// <summary>
+/// Whether a mode's own language model can polish its takes now: ready (the core holds it, and
+/// it sends where it did when the mode was saved), missing (the core does not hold it now: let
+/// go of, or another provider chosen; its takes go in as said with polish_model_missing) or
+/// moved (it sends somewhere else now than when the mode was saved, such as a custom server
+/// re-pointed from this machine to another: its takes go in as said with polish_model_missing
+/// until the user confirms it there: modes.save with polish_model_confirm and
+/// polish_model_confirm_to, where polish_models says it sends) or unrecorded (where it sends
+/// was never recorded, as for a pin saved by an early build: the same until the user confirms
+/// it).
+/// </summary>
+[JsonConverter(typeof(StrictEnumConverter<PolishModelState>))]
+public enum PolishModelState
+{
+    [JsonStringEnumMemberName("ready")]
+    Ready,
+    [JsonStringEnumMemberName("missing")]
+    Missing,
+    [JsonStringEnumMemberName("moved")]
+    Moved,
+    [JsonStringEnumMemberName("unrecorded")]
+    Unrecorded,
+}
+
+/// <summary>
+/// Promises from meetings (commitments not merged into another), in Owed's states.
+/// </summary>
+public sealed record PromiseStats
+{
+    /// <summary>
+    /// Marked done.
+    /// </summary>
+    [JsonPropertyName("kept")]
+    public required long Kept { get; init; }
+
+    /// <summary>
+    /// Promises made: kept, open and overdue together.
+    /// </summary>
+    [JsonPropertyName("made")]
+    public required long Made { get; init; }
+
+    /// <summary>
+    /// Not done, and not past their due day.
+    /// </summary>
+    [JsonPropertyName("open")]
+    public required long Open { get; init; }
+
+    /// <summary>
+    /// Not done, past their due day (due today is not late).
+    /// </summary>
+    [JsonPropertyName("overdue")]
+    public required long Overdue { get; init; }
+}
+
+/// <summary>
 /// Where a record's audio is: its chunks per side, placed on its timeline.
 /// </summary>
 public sealed record RecordAudio
@@ -3670,6 +5169,49 @@ public sealed record RecordAudio
     /// </summary>
     [JsonPropertyName("timeline")]
     public required AudioTimeline Timeline { get; init; }
+}
+
+/// <summary>
+/// A record was deleted whole, in answer to record.delete: its transcript, notes, summary,
+/// commitments, speaker names and search entries, its words overwritten in the library's files
+/// as the retention setting deletes them, then its audio. The screens drop it.
+/// </summary>
+public sealed record RecordDeleted : InkEvent
+{
+    /// <summary>
+    /// Its recorded audio is still on disk: it could not be removed, or its folder is outside
+    /// the library and was left alone. The record itself is gone.
+    /// </summary>
+    [JsonPropertyName("audio_left")]
+    public required bool AudioLeft { get; init; }
+
+    /// <summary>
+    /// What it was.
+    /// </summary>
+    [JsonPropertyName("kind")]
+    public required RecordKind Kind { get; init; }
+
+    /// <summary>
+    /// The record that is gone.
+    /// </summary>
+    [JsonPropertyName("record")]
+    public required string Record { get; init; }
+
+    /// <summary>
+    /// The command's "id", when it had one, so the shell can match the answer to what it sent.
+    /// </summary>
+    [JsonPropertyName("ref")]
+    public string? Ref { get; init; }
+
+    /// <summary>
+    /// No copy of its words is left in the library's files. False, as for
+    /// deleted_text_not_scrubbed, while another process reading the database keeps them in its
+    /// log: the deletion is saved, and the library keeps trying; a dictation's or meeting's
+    /// deleted_text_scrubbed says when it has. This answer counts as that change's report: each
+    /// change reaches the shell once.
+    /// </summary>
+    [JsonPropertyName("scrubbed")]
+    public required bool Scrubbed { get; init; }
 }
 
 /// <summary>
@@ -4086,6 +5628,117 @@ public sealed record SpeakerName
 }
 
 /// <summary>
+/// A far-end speaker of a record was named, renamed or cleared, in answer to speaker.name. The
+/// name stays with the shell that sent it: record.open carries it.
+/// </summary>
+public sealed record SpeakerNamed : InkEvent
+{
+    /// <summary>
+    /// Whether the speaker has a name now: false when it was cleared, and reads as numbered
+    /// again.
+    /// </summary>
+    [JsonPropertyName("named")]
+    public required bool Named { get; init; }
+
+    /// <summary>
+    /// The record.
+    /// </summary>
+    [JsonPropertyName("record")]
+    public required string Record { get; init; }
+
+    /// <summary>
+    /// The command's "id", when it had one, so the shell can match the answer to what it sent.
+    /// </summary>
+    [JsonPropertyName("ref")]
+    public string? Ref { get; init; }
+
+    /// <summary>
+    /// The diarizer's label.
+    /// </summary>
+    [JsonPropertyName("speaker")]
+    public required string Speaker { get; init; }
+}
+
+/// <summary>
+/// The Stats screen's numbers, in answer to stats.get, streak.pause or streak.resume: counted
+/// on this computer from the library, on the user's calendar. Nothing here is sent anywhere or
+/// drawn from what was said.
+/// </summary>
+public sealed record StatsCounted : InkEvent
+{
+    /// <summary>
+    /// The user's personal bests, from takes made here (never an import's), in a fixed order:
+    /// longest_dictation, fastest_dictation, most_words_day, best_week, longest_meeting,
+    /// longest_monologue. A best not held yet is absent: nothing to show, never a zero.
+    /// </summary>
+    [JsonPropertyName("bests")]
+    public global::System.Collections.Generic.IReadOnlyList<BestRow>? Bests { get; init; }
+
+    /// <summary>
+    /// Dictation.
+    /// </summary>
+    [JsonPropertyName("dictation")]
+    public required DictationStats Dictation { get; init; }
+
+    /// <summary>
+    /// Meetings, all time.
+    /// </summary>
+    [JsonPropertyName("meetings_all")]
+    public required MeetingStats MeetingsAll { get; init; }
+
+    /// <summary>
+    /// Meetings that started this month.
+    /// </summary>
+    [JsonPropertyName("meetings_month")]
+    public required MeetingStats MeetingsMonth { get; init; }
+
+    /// <summary>
+    /// Every milestone, in a fixed order; with the streak hidden, the words milestones only.
+    /// </summary>
+    [JsonPropertyName("milestones")]
+    public required global::System.Collections.Generic.IReadOnlyList<MilestoneRow> Milestones { get; init; }
+
+    /// <summary>
+    /// Promises, all time.
+    /// </summary>
+    [JsonPropertyName("promises_all")]
+    public required PromiseStats PromisesAll { get; init; }
+
+    /// <summary>
+    /// Promises made in meetings that started this month.
+    /// </summary>
+    [JsonPropertyName("promises_month")]
+    public required PromiseStats PromisesMonth { get; init; }
+
+    /// <summary>
+    /// The id of the command this answers, echoed so the shell can match the answer to its
+    /// question.
+    /// </summary>
+    [JsonPropertyName("ref")]
+    public string? Ref { get; init; }
+
+    /// <summary>
+    /// Today on the user's calendar, YYYY-MM-DD.
+    /// </summary>
+    [JsonPropertyName("today")]
+    public required string Today { get; init; }
+
+    /// <summary>
+    /// The typing speed time saved is measured against (stats.typing_wpm, 40 unless set).
+    /// </summary>
+    [JsonPropertyName("typing_wpm")]
+    public required long TypingWpm { get; init; }
+
+    /// <summary>
+    /// Last week, reviewed, to lead the screen with until the user dismisses it
+    /// (stats.review_dismissed, its week's first day). Absent when last week had no dictation
+    /// and no meeting, or once dismissed.
+    /// </summary>
+    [JsonPropertyName("week_review")]
+    public WeekReview? WeekReview { get; init; }
+}
+
+/// <summary>
 /// Whether a summary item is a decision or an action.
 /// </summary>
 [JsonConverter(typeof(StrictEnumConverter<SummaryItemKind>))]
@@ -4119,6 +5772,44 @@ public sealed record SummaryItemRow
     /// </summary>
     [JsonPropertyName("text")]
     public required string Text { get; init; }
+}
+
+/// <summary>
+/// Time saved, pictured: about count of key, the nearest whole number, within a fifth of the
+/// time. Always said with "about".
+/// </summary>
+public sealed record TimeEquivalent
+{
+    /// <summary>
+    /// How many: 1 to 5, or any number of the largest (working_week).
+    /// </summary>
+    [JsonPropertyName("count")]
+    public required long Count { get; init; }
+
+    /// <summary>
+    /// What it is about.
+    /// </summary>
+    [JsonPropertyName("key")]
+    public required TimeEquivalentKey Key { get; init; }
+}
+
+/// <summary>
+/// Something time saved is about, as long as: working_week 40 h, working_day 8 h, feature_film
+/// 2 h, lunch_hour 1 h, coffee_break 15 min.
+/// </summary>
+[JsonConverter(typeof(StrictEnumConverter<TimeEquivalentKey>))]
+public enum TimeEquivalentKey
+{
+    [JsonStringEnumMemberName("working_week")]
+    WorkingWeek,
+    [JsonStringEnumMemberName("working_day")]
+    WorkingDay,
+    [JsonStringEnumMemberName("feature_film")]
+    FeatureFilm,
+    [JsonStringEnumMemberName("lunch_hour")]
+    LunchHour,
+    [JsonStringEnumMemberName("coffee_break")]
+    CoffeeBreak,
 }
 
 /// <summary>
@@ -4216,4 +5907,79 @@ public sealed record VoiceCommandsListed : InkEvent
     /// </summary>
     [JsonPropertyName("wake_prefix")]
     public required string WakePrefix { get; init; }
+}
+
+/// <summary>
+/// Last week, reviewed: gains and plain facts only, nothing said to be down.
+/// </summary>
+public sealed record WeekReview
+{
+    /// <summary>
+    /// The day with the most words, YYYY-MM-DD (the earliest on a tie). Absent without words.
+    /// </summary>
+    [JsonPropertyName("best_day")]
+    public string? BestDay { get; init; }
+
+    /// <summary>
+    /// Its words.
+    /// </summary>
+    [JsonPropertyName("best_day_words")]
+    public long? BestDayWords { get; init; }
+
+    /// <summary>
+    /// Their length, ms.
+    /// </summary>
+    [JsonPropertyName("meeting_ms")]
+    public required long MeetingMs { get; init; }
+
+    /// <summary>
+    /// Meetings recorded here.
+    /// </summary>
+    [JsonPropertyName("meetings")]
+    public required long Meetings { get; init; }
+
+    /// <summary>
+    /// Of the promises made in its meetings, those done now (no time is kept for when one was
+    /// done). Absent when none.
+    /// </summary>
+    [JsonPropertyName("promises_kept")]
+    public long? PromisesKept { get; init; }
+
+    /// <summary>
+    /// What saved_ms is about, as saved_about_week.
+    /// </summary>
+    [JsonPropertyName("saved_about")]
+    public global::System.Collections.Generic.IReadOnlyList<TimeEquivalent>? SavedAbout { get; init; }
+
+    /// <summary>
+    /// Time saved, ms, as saved_ms_week. Absent unless there was some.
+    /// </summary>
+    [JsonPropertyName("saved_ms")]
+    public long? SavedMs { get; init; }
+
+    /// <summary>
+    /// Its first day, YYYY-MM-DD: what stats.review_dismissed takes to dismiss it (kept
+    /// dismissed if the week's first day changes later).
+    /// </summary>
+    [JsonPropertyName("week")]
+    public required string Week { get; init; }
+
+    /// <summary>
+    /// Words dictated.
+    /// </summary>
+    [JsonPropertyName("words")]
+    public required long Words { get; init; }
+
+    /// <summary>
+    /// Words per minute, with at least a minute of speech.
+    /// </summary>
+    [JsonPropertyName("wpm")]
+    public long? Wpm { get; init; }
+
+    /// <summary>
+    /// How many words a minute faster than the four weeks before it. Absent unless it was
+    /// faster: a slower week is never compared.
+    /// </summary>
+    [JsonPropertyName("wpm_gain")]
+    public long? WpmGain { get; init; }
 }

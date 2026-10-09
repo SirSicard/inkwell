@@ -54,7 +54,7 @@ public class GlowTests
         var sent = new Sent();
         var appearance = new AppearanceModel(sent.Send, new Logged().Log);
         appearance.Load();
-        Assert.Equal(9, sent.Commands.Count(c => c is CoreCommand.SettingGet));
+        Assert.Equal(10, sent.Commands.Count(c => c is CoreCommand.SettingGet));
         Assert.Equal(AppearanceMode.System, appearance.Mode);
         Assert.True(appearance.EdgeGlow);
         Assert.True(appearance.IsDark(systemDark: true));
@@ -69,6 +69,32 @@ public class GlowTests
         Assert.Equal(GlowRgb.FromInt(0x112233), appearance.Custom(dark: true, you: true));
         Assert.False(appearance.EdgeGlow);
         Assert.Equal(AppearanceMotion.Still, appearance.Motion);
+    }
+
+    /// <summary>The orb's strength: 70 unless set, only 10 to 100 in tens read, a slider's value saved at its nearest step and once per step.</summary>
+    [Fact]
+    public void TheOrbsStrengthReadsAndSavesInTens()
+    {
+        var sent = new Sent();
+        var appearance = new AppearanceModel(sent.Send, new Logged().Log);
+        Assert.Equal(70, appearance.OrbStrength);
+        appearance.Apply(Ev.Of("""{"type":"setting.value","key":"appearance.orb","value":"90"}"""));
+        Assert.Equal(90, appearance.OrbStrength);
+        foreach (var odd in new[] { "75", "0", "110", "abc", "+90", " 90" })
+        {
+            appearance.Apply(Ev.Of($$"""{"type":"setting.value","key":"appearance.orb","value":"{{odd}}"}"""));
+            Assert.Equal(70, appearance.OrbStrength);
+        }
+        appearance.SetOrbStrength(42.4);
+        Assert.Equal(40, appearance.OrbStrength);
+        Assert.Equal(new CoreCommand.SettingSet(ShellSetting.AppearanceOrb, "40"), sent.Commands[^1]);
+        var count = sent.Commands.Count;
+        appearance.SetOrbStrength(38); // the same step
+        Assert.Equal(count, sent.Commands.Count);
+        appearance.SetOrbStrength(250);
+        Assert.Equal(100, appearance.OrbStrength);
+        appearance.SetOrbStrength(double.NaN);
+        Assert.Equal(70, appearance.OrbStrength);
     }
 
     [Fact]

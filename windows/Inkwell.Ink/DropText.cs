@@ -2,7 +2,8 @@
 // (mac/Sources/Inkwell/ShellInk.swift). What is live comes from the shell (the app's ShellInk, from
 // Inkwell.Core's DropModel): while a key is held the second line is its live words, one line with
 // the head cut and the newest words wet; during a meeting its app and latest line; and the consent
-// offer's two buttons (DropButtons), which widen the panel as on the Mac.
+// offer's buttons (DropButtons: Record, Not this one, Always for and Never for an app; an Always
+// call's Stop and Stop and delete), which widen and deepen the panel as on the Mac.
 namespace Inkwell.Ink;
 
 /// <summary>How the Drop colours its title and border.</summary>
@@ -26,6 +27,9 @@ public sealed record DropText(string Title, string Detail, DropTone Tone = DropT
     /// <summary>The buttons under the lines (the consent offer), or none.</summary>
     public DropButtons? Buttons { get; init; }
 
+    /// <summary>With buttons, the most lines the detail takes: 2, or 3 where an Always app asked instead says why.</summary>
+    public int DetailLines { get; init; } = 2;
+
     /// <summary>
     /// The Drop window's title, which any process can read (GetWindowText): "Inkwell: " and the
     /// title only. The detail can hold the user's live words, so it never goes into it.
@@ -39,7 +43,10 @@ public sealed record DropText(string Title, string Detail, DropTone Tone = DropT
     /// any accessibility client can read the Mac's label. What stays word-free is the window's
     /// title and the logs.
     /// </summary>
-    public string AccessibleName => $"Inkwell: {Title}, {Detail}";
+    public string AccessibleName => Buttons is null
+        ? $"Inkwell: {Title}, {Detail}"
+        // The buttons are drawn, not controls of their own: Narrator hears what they are here.
+        : $"Inkwell: {Title}, {Detail}{(Detail.EndsWith('.') ? "" : ".")} Buttons: {string.Join(", ", Buttons.Titles)}";
 
     /// <summary>How many of the newest live words are shown wet, as on the canvas.</summary>
     public const int WetWords = 2;
@@ -133,16 +140,20 @@ public sealed record DropText(string Title, string Detail, DropTone Tone = DropT
 }
 
 /// <summary>The Drop's buttons' words, in order: the first is the answer, drawn in ink.</summary>
-public sealed record DropButtons(string First, string? Second = null)
+public sealed record DropButtons(IReadOnlyList<string> Titles)
 {
+    public DropButtons(params string[] titles)
+        : this((IReadOnlyList<string>)titles)
+    {
+    }
+
     /// <summary>How many there are.</summary>
-    public int Count => Second is null ? 1 : 2;
+    public int Count => Titles.Count;
 
     /// <summary>The words of the button at <paramref name="index"/>.</summary>
-    public string this[int index] => index switch
-    {
-        0 => First,
-        1 when Second is not null => Second,
-        _ => throw new ArgumentOutOfRangeException(nameof(index)),
-    };
+    public string this[int index] => index >= 0 && index < Titles.Count ? Titles[index] : throw new ArgumentOutOfRangeException(nameof(index));
+
+    public bool Equals(DropButtons? other) => other is not null && Titles.SequenceEqual(other.Titles);
+
+    public override int GetHashCode() => Titles.Count;
 }

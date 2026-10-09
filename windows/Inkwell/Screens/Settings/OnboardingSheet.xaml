@@ -16,8 +16,11 @@
     <ContentDialog.Resources>
         <x:Double x:Key="ContentDialogMaxWidth">720</x:Double>
         <x:Double x:Key="ContentDialogMaxHeight">760</x:Double>
+        <!-- One fill under the sheet's content, the dialog's own (no translucent layer over it): the
+             orbs paint it as their backdrop, since a SwapChainPanel hides what is under it. -->
+        <SolidColorBrush x:Key="ContentDialogTopOverlay" Color="Transparent" />
     </ContentDialog.Resources>
-    <Grid Width="620" MinHeight="460" RowSpacing="20">
+    <Grid Width="620" RowSpacing="20">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
@@ -34,13 +37,19 @@
             <Ellipse x:Name="Dot6" Width="7" Height="7" AutomationProperties.AccessibilityView="Raw" Fill="{ThemeResource InkTextBrush}" />
         </StackPanel>
 
-        <Grid Grid.Row="1">
+        <!-- The steps scroll when the window is too short for them, the dots and buttons staying put;
+             the right padding keeps the step's buttons and lines clear of the scroll bar. The
+             height a step keeps (so the sheet doesn't jump between steps) is inside it, so the
+             sheet itself can shrink to the window. -->
+        <ScrollViewer x:Name="StepScroller" Grid.Row="1" Padding="0,0,16,0" VerticalScrollBarVisibility="Auto">
+        <Grid MinHeight="375">
             <StackPanel x:Name="WelcomeStep" Spacing="14">
                 <!-- The orb as the hero: a short demo, dictating then a call. Decorative. -->
                 <local:InkPanel
                     x:Name="WelcomeOrb"
                     Height="190"
                     AutomationProperties.AccessibilityView="Raw"
+                    Backdrop="{ThemeResource ContentDialogBackground}"
                     IsHitTestVisible="False" />
                 <!-- The same scale as every other step's title. -->
                 <TextBlock AutomationProperties.HeadingLevel="Level1" Style="{StaticResource InkHeadingStyle}" Text="Inkwell" />
@@ -55,17 +64,20 @@
                 <ContentPresenter x:Name="CardsHost" />
             </StackPanel>
 
-            <!-- The models not on this PC yet. Nothing downloads before the step's Download, which
-                 names them, how much in all and from where; Continue never waits for it. -->
+            <!-- What Inkwell should be able to do, as choices (ModelChoices): the first always, the
+                 others when ticked, each with the models it takes in a small line. Download carries
+                 the total; nothing downloads before it, and Continue never waits for it. -->
             <StackPanel x:Name="ModelsStep" Spacing="12">
                 <TextBlock x:Name="ModelsTitle" AutomationProperties.HeadingLevel="Level1" Style="{StaticResource InkHeadingStyle}" />
                 <TextBlock x:Name="ModelsNote" Style="{StaticResource InkBodyStyle}" />
-                <ContentPresenter x:Name="ModelRowsHost" />
-                <TextBlock x:Name="DownloadLine" Style="{StaticResource InkCaptionStyle}" />
+                <StackPanel x:Name="ChoiceList" Spacing="12" />
                 <StackPanel Orientation="Horizontal" Spacing="8">
                     <Button x:Name="DownloadButton" Click="OnDownload" Style="{StaticResource InkAccentButtonStyle}" />
                     <Button x:Name="ModelsTryAgain" Click="OnModelsTryAgain" />
                 </StackPanel>
+                <TextBlock x:Name="DownloadLine" Style="{StaticResource InkCaptionStyle}" />
+                <!-- The free space on the volume models go on (models.listed's free_bytes). -->
+                <TextBlock x:Name="FreeSpaceLine" Style="{StaticResource InkCaptionStyle}" />
                 <TextBlock x:Name="ModelsGoOn" Style="{StaticResource InkCaptionStyle}" />
             </StackPanel>
 
@@ -102,22 +114,80 @@
                     OnContent=""
                     Toggled="OnPolishToggled" />
                 <TextBlock x:Name="PolishStatus" AutomationProperties.AccessibilityView="Raw" Style="{StaticResource InkCaptionStyle}" />
-                <!-- Polish's consent step, inside the sheet. Only its agreeing button sends anything. -->
-                <Border x:Name="ConsentCard" Style="{StaticResource InkCardStyle}">
-                    <StackPanel Spacing="10">
-                        <TextBlock x:Name="ConsentTitle" AutomationProperties.HeadingLevel="Level2" FontWeight="SemiBold" Style="{StaticResource InkBodyStyle}" />
-                        <TextBlock x:Name="ConsentMessage" Style="{StaticResource InkBodyStyle}" />
-                        <StackPanel HorizontalAlignment="Right" Orientation="Horizontal" Spacing="8">
-                            <Button x:Name="ConsentCancel" Click="OnConsentCancel" Content="Cancel" />
-                            <Button x:Name="ConsentAllow" Click="OnConsentAllow" Style="{StaticResource InkAccentButtonStyle}" />
+                <!-- Polish's consent step: the Mac's modal alert, inline (the sheet is a ContentDialog,
+                     and WinUI shows one at a time). It moves to the slot under what asked (this one,
+                     GroqStepSlot or the other providers' StepSlot); the sheet's buttons wait while it
+                     is up. Only its agreeing button sends anything. -->
+                <StackPanel x:Name="SwitchStepSlot">
+                    <Border
+                        x:Name="ConsentCard"
+                        BorderBrush="{ThemeResource AccentFillColorDefaultBrush}"
+                        BorderThickness="2"
+                        Style="{StaticResource InkCardStyle}">
+                        <StackPanel Spacing="10">
+                            <TextBlock x:Name="ConsentTitle" AutomationProperties.HeadingLevel="Level2" FontWeight="SemiBold" Style="{StaticResource InkBodyStyle}" />
+                            <TextBlock x:Name="ConsentMessage" Style="{StaticResource InkBodyStyle}" />
+                            <StackPanel HorizontalAlignment="Right" Orientation="Horizontal" Spacing="8">
+                                <Button x:Name="ConsentCancel" Click="OnConsentCancel" Content="Cancel" />
+                                <Button x:Name="ConsentAllow" Click="OnConsentAllow" Style="{StaticResource InkAccentButtonStyle}" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+                <!-- This PC's own model, once it is ticked in Models, downloading or in: what the
+                     switch uses, or when it can. Groq's free key below is then the alternative. -->
+                <TextBlock x:Name="PolishLocalLine" Style="{StaticResource InkBodyStyle}" TextWrapping="Wrap" />
+                <!-- The own key as one choice (the Mac's): Groq's free model behind a disclosure, how
+                     to get its key (GroqKeyGuideView), the key with Save (stored, nothing more), and
+                     Use Groq, which asks polish's consent before it chooses Groq
+                     (PolishModel.UseOwnKey). Another provider or model is behind "Other providers or
+                     models…": Settings > AI's rows, with the same consent. -->
+                <Expander
+                    x:Name="OwnKeyExpander"
+                    HorizontalAlignment="Stretch"
+                    HorizontalContentAlignment="Stretch"
+                    Collapsed="OnOwnKeyCollapsed"
+                    Expanding="OnOwnKeyExpanding">
+                    <StackPanel Spacing="8">
+                        <StackPanel x:Name="GroqRows" Spacing="8">
+                            <ContentPresenter x:Name="OwnKeyGuideHost" />
+                            <Grid ColumnSpacing="8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <PasswordBox x:Name="OwnKeyBox" />
+                                <Button x:Name="OwnKeySave" Grid.Column="1" Click="OnOwnKeySave" />
+                            </Grid>
+                            <TextBlock x:Name="OwnKeyStatus" Style="{StaticResource InkCaptionStyle}" />
+                            <Grid ColumnSpacing="8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Button x:Name="OwnKeyUse" VerticalAlignment="Top" Click="OnOwnKeyUse" Style="{StaticResource InkAccentButtonStyle}" />
+                                <TextBlock x:Name="OwnKeyUseNote" Grid.Column="1" VerticalAlignment="Center" Style="{StaticResource InkCaptionStyle}" />
+                            </Grid>
+                            <!-- Polish's step when Use Groq asked (ConsentCard moves here). -->
+                            <StackPanel x:Name="GroqStepSlot" />
+                            <TextBlock x:Name="OwnKeyCloudStatus" Style="{StaticResource InkCaptionStyle}" />
+                            <HyperlinkButton x:Name="OthersLink" Padding="0" Click="OnOthers" />
+                        </StackPanel>
+                        <StackPanel x:Name="OthersRows" Spacing="8">
+                            <ContentPresenter x:Name="OthersHost" />
+                            <HyperlinkButton x:Name="BackToGroqLink" Padding="0" Click="OnBackToGroq" />
                         </StackPanel>
                     </StackPanel>
-                </Border>
+                </Expander>
             </StackPanel>
 
             <StackPanel x:Name="ReadyStep" Spacing="14">
                 <TextBlock x:Name="ReadyTitle" AutomationProperties.HeadingLevel="Level1" Style="{StaticResource InkHeadingStyle}" />
                 <TextBlock x:Name="ReadyLine" Style="{StaticResource InkReadingStyle}" />
+                <!-- With no speech model: Today's one action, or that the download runs. -->
+                <Button x:Name="ReadyDownload" Click="OnReadyDownload" Style="{StaticResource InkAccentButtonStyle}" />
+                <TextBlock x:Name="ReadyDownloading" Style="{StaticResource InkCaptionStyle}" />
+                <TextBlock x:Name="ReadyTrayLine" Style="{StaticResource InkReadingStyle}" />
                 <!-- Try it: the orb answers the voice, and the words land in the box. -->
                 <Grid ColumnSpacing="16">
                     <Grid.ColumnDefinitions>
@@ -128,6 +198,7 @@
                         x:Name="ReadyOrb"
                         Height="120"
                         AutomationProperties.AccessibilityView="Raw"
+                        Backdrop="{ThemeResource ContentDialogBackground}"
                         IsHitTestVisible="False" />
                     <TextBox
                         x:Name="TryIt"
@@ -138,9 +209,16 @@
                         MinHeight="80"
                         TextWrapping="Wrap" />
                 </Grid>
+                <!-- The try-it heard nothing: where the microphone is picked (read when it shows). -->
+                <TextBlock
+                    x:Name="NotHearingLine"
+                    AutomationProperties.LiveSetting="Assertive"
+                    Style="{StaticResource InkCaptionStyle}"
+                    TextWrapping="Wrap" />
                 <TextBlock x:Name="StillOffLine" Foreground="{ThemeResource InkAlertBrush}" Style="{StaticResource InkReadingStyle}" />
             </StackPanel>
         </Grid>
+        </ScrollViewer>
 
         <Grid Grid.Row="2" ColumnSpacing="8">
             <Grid.ColumnDefinitions>

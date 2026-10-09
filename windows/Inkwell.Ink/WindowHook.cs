@@ -1,0 +1,199 @@
+// The main window's messages the WinUI window does not hand on: the taskbar's (its button made,
+// a thumbnail button clicked) and the session's (the screen locked or unlocked, the session
+// disconnected from its screen or connected again, the display on or off). A subclass of the
+// window's procedure (SetWindowSubclass) on the UI thread; it raises an event for each and passes
+// every message on. The session's are asked for here (WTSRegisterSessionNotification,
+// RegisterPowerSettingNotification for the session's display), so the live icon draws nothing
+// while nobody can see the screen: nothing polls.
+using System.Runtime.InteropServices;
+using TerraFX.Interop.Windows;
+using static TerraFX.Interop.Windows.Windows;
+
+namespace Inkwell.Ink;
+
+public sealed unsafe partial class WindowHook : IDisposable
+{
+    private const uint WmCommand = 0x0111;
+    private const uint WmPowerBroadcast = 0x0218;
+    private const uint WmWtsSessionChange = 0x02B1;
+    private const uint PbtPowerSettingChange = 0x8013;
+    private const int WtsConsoleConnect = 1;
+    private const int WtsConsoleDisconnect = 2;
+    private const int WtsRemoteConnect = 3;
+    private const int WtsRemoteDisconnect = 4;
+    private const int WtsSessionLock = 7;
+    private const int WtsSessionUnlock = 8;
+    private const int ThbnClicked = 0x1800;
+
+    /// <summary>GUID_SESSION_DISPLAY_STATUS: this session's display, off (0), on (1) or dimmed (2).</summary>
+    private static readonly Guid SessionDisplayStatus = new("2B84C20E-AD23-4DDF-93DB-05FFBD7EFCA5");
+
+    private readonly HWND window;
+    private readonly GCHandle self;
+    private readonly uint taskbarCreated;
+    private readonly HPOWERNOTIFY display;
+    private bool disposed;
+
+    /// <summary>UI thread: subclasses <paramref name="window"/> until disposed.</summary>
+    public WindowHook(nint window)
+    {
+        this.window = (HWND)window;
+        self = GCHandle.Alloc(this);
+        fixed (char* name = "TaskbarButtonCreated")
+        {
+            taskbarCreated = RegisterWindowMessageW(name);
+        }
+        if (!SetWindowSubclass(this.window, &Procedure, 1, (nuint)(nint)GCHandle.ToIntPtr(self)))
+        {
+            self.Free();
+            throw new InkRendererException($"couldn't watch the window's messages (error {GetLastError()})");
+        }
+        // Best effort: without them the live icon draws while locked, which it never needs to.
+        if (!WTSRegisterSessionNotification(window, 0))
+        {
+            InkLog.Write("couldn't hear the screen lock: the live icon draws while it is locked");
+        }
+        var guid = SessionDisplayStatus;
+        display = RegisterPowerSettingNotification((HANDLE)this.window.Value, &guid, 0);
+        if (display == HPOWERNOTIFY.NULL)
+        {
+            InkLog.Write("couldn't hear the display go off: the live icon draws while it is off");
+        }
+    }
+
+    /// <summary>The window's taskbar button was made (at start, and again when Explorer restarts).</summary>
+    public event Action? TaskbarButtonCreated;
+
+    /// <summary>A thumbnail toolbar button was clicked: its id.</summary>
+    public event Action<int>? ThumbnailClicked;
+
+    /// <summary>The screen was locked (true) or unlocked.</summary>
+    public event Action<bool>? Locked;
+
+    /// <summary>
+    /// This session was connected to a screen again (true), at the console or remote, or
+    /// disconnected from it: fast user switching to another user, or a remote desktop closed or
+    /// taken over at the console. Nobody sees a disconnected session, locked or not.
+    /// </summary>
+    public event Action<bool>? Connected;
+
+    /// <summary>This session's display went off (false) or on again, dimmed counting as on.</summary>
+    public event Action<bool>? DisplayOn;
+
+    [UnmanagedCallersOnly]
+    private static LRESULT Procedure(HWND hwnd, uint message, WPARAM wParam, LPARAM lParam, nuint id, nuint data)
+    {
+        if (GCHandle.FromIntPtr((nint)data).Target is WindowHook hook)
+        {
+            try
+            {
+                hook.Handle(message, wParam, lParam);
+            }
+            catch (Exception e)
+            {
+                // Never into the window's procedure: named by its type (never its message, which
+                // the log must not hold), and the message goes on.
+                InkLog.Write($"the window's message hook failed: {e.GetType().Name}");
+            }
+        }
+        return DefSubclassProc(hwnd, message, wParam, lParam);
+    }
+
+    private void Handle(uint message, WPARAM wParam, LPARAM lParam)
+    {
+        if (message == taskbarCreated)
+        {
+            TaskbarButtonCreated?.Invoke();
+        }
+        else if (message == WmCommand && (int)((nuint)wParam >> 16 & 0xFFFF) == ThbnClicked)
+        {
+            ThumbnailClicked?.Invoke((int)((nuint)wParam & 0xFFFF));
+        }
+        else if (message == WmWtsSessionChange)
+        {
+            var reason = (int)(nuint)wParam;
+            if (reason == WtsSessionLock)
+            {
+                Locked?.Invoke(true);
+            }
+            else if (reason == WtsSessionUnlock)
+            {
+                Locked?.Invoke(false);
+            }
+            else if (reason is WtsConsoleDisconnect or WtsRemoteDisconnect)
+            {
+                Connected?.Invoke(false);
+            }
+            else if (reason is WtsConsoleConnect or WtsRemoteConnect)
+            {
+                Connected?.Invoke(true);
+            }
+        }
+        else if (message == WmPowerBroadcast && (nuint)wParam == PbtPowerSettingChange && lParam != 0)
+        {
+            var setting = (POWERBROADCAST_SETTING*)(nint)lParam;
+            if (setting->PowerSetting == SessionDisplayStatus && setting->DataLength >= sizeof(uint))
+            {
+                DisplayOn?.Invoke(*(uint*)&setting->Data != 0);
+            }
+        }
+    }
+
+    /// <summary>A session as Windows says it is: its id, its WTS_CONNECTSTATE_CLASS and its lock flags (WTSINFOEX_LEVEL1).</summary>
+    public readonly record struct SessionNow(uint Id, int State, int Flags);
+
+    private const uint WtsCurrentSession = uint.MaxValue;
+    private const int WtsSessionInfoEx = 25;
+
+    /// <summary>This process's session now (WTSQuerySessionInformation, WTSSessionInfoEx), or null if Windows can't say.</summary>
+    public static SessionNow? QuerySession()
+    {
+        if (!WTSQuerySessionInformationW(0, WtsCurrentSession, WtsSessionInfoEx, out var buffer, out var bytes) || buffer == 0)
+        {
+            return null;
+        }
+        try
+        {
+            // WTSINFOEXW: Level (1), then its WTSINFOEX_LEVEL1_W at 8 (the union holds
+            // LARGE_INTEGERs): SessionId, SessionState, SessionFlags. Nothing else is read.
+            return bytes >= 20 && Marshal.ReadInt32(buffer) == 1
+                ? new SessionNow((uint)Marshal.ReadInt32(buffer, 8), Marshal.ReadInt32(buffer, 12), Marshal.ReadInt32(buffer, 16))
+                : null;
+        }
+        finally
+        {
+            WTSFreeMemory(buffer);
+        }
+    }
+
+    [LibraryImport("wtsapi32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool WTSQuerySessionInformationW(nint server, uint session, int infoClass, out nint buffer, out uint bytes);
+
+    [LibraryImport("wtsapi32.dll")]
+    private static partial void WTSFreeMemory(nint memory);
+
+    [LibraryImport("wtsapi32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool WTSRegisterSessionNotification(nint window, uint flags);
+
+    [LibraryImport("wtsapi32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool WTSUnRegisterSessionNotification(nint window);
+
+    public void Dispose()
+    {
+        if (disposed)
+        {
+            return;
+        }
+        disposed = true;
+        _ = RemoveWindowSubclass(window, &Procedure, 1);
+        _ = WTSUnRegisterSessionNotification((nint)window.Value);
+        if (display != HPOWERNOTIFY.NULL)
+        {
+            _ = UnregisterPowerSettingNotification(display);
+        }
+        self.Free();
+    }
+}

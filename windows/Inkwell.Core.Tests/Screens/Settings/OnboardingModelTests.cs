@@ -157,8 +157,8 @@ public class OnboardingModelTests
     }
 
     /// <summary>
-    /// The models step names each model not installed (size, licence), how much in all and from
-    /// where; going through the whole first run without pressing its Download downloads nothing.
+    /// The models step offers its choices with the total on Download; going through the whole
+    /// first run without pressing it downloads nothing.
     /// </summary>
     [Fact]
     public void TheModelsStepNamesWhatIsMissingAndNothingDownloadsWithoutItsButton()
@@ -169,21 +169,19 @@ public class OnboardingModelTests
         var onboarding = screens.Onboarding;
         var catalogue = screens.Catalogue;
         Assert.Equal("Checking which models are on this PC…", OnboardingModel.ModelsNote(catalogue));
-        Assert.Null(OnboardingModel.DownloadLine(catalogue, CultureInfo.InvariantCulture)); // no Download before the list
+        Assert.Null(onboarding.Choices.DownloadTitle(catalogue, CultureInfo.InvariantCulture)); // no Download before the list
         screens.Apply([CatalogueDownloadTests.Listed()]);
         onboarding.Next();
         onboarding.Next();
         Assert.Equal(OnboardingStep.Models, onboarding.Step);
-        var rows = OnboardingModel.ModelRows(catalogue);
-        Assert.Equal(["qwen3-asr-1.7b-q8", "silero-vad-v6-16k"], rows.Select(r => r.Id)); // not the installed one
-        Assert.Equal("Qwen3-ASR 1.7B · Apache-2.0 · 2.32 GB · not installed", rows[0].Text(CultureInfo.InvariantCulture));
-        Assert.Equal("Inkwell turns speech into text with models that run on this PC. These are not on it yet:", OnboardingModel.ModelsNote(catalogue));
+        // This catalogue lists Silero VAD, Qwen3-ASR and the diarizer (installed), no Parakeet.
+        Assert.Equal(["speech", "accuracy", "speakers"], ModelChoices.Shown(catalogue).Select(c => c.Id));
+        Assert.Equal("Installed", ModelChoices.Status(ModelChoices.Speakers, catalogue, CultureInfo.InvariantCulture));
+        Assert.StartsWith("Inkwell writes down speech with models that run on this PC.", OnboardingModel.ModelsNote(catalogue), StringComparison.Ordinal);
+        Assert.Equal("Download 1.22 MB", onboarding.Choices.DownloadTitle(catalogue, CultureInfo.InvariantCulture));
         Assert.Equal(
-            "2.32 GB in all, from huggingface.co and raw.githubusercontent.com. Nothing downloads until you press Download.",
-            OnboardingModel.DownloadLine(catalogue, CultureInfo.InvariantCulture));
-        Assert.Equal(
-            "Download Qwen3-ASR 1.7B and Silero VAD: 2.32 GB in all, from huggingface.co and raw.githubusercontent.com",
-            OnboardingModel.DownloadName(catalogue, CultureInfo.InvariantCulture));
+            "Download Silero VAD: 1.22 MB in all, from raw.githubusercontent.com",
+            onboarding.Choices.DownloadName(catalogue, CultureInfo.InvariantCulture));
         foreach (var _ in Enum.GetValues<OnboardingStep>())
         {
             onboarding.Next();
@@ -203,9 +201,10 @@ public class OnboardingModelTests
         var catalogue = screens.Catalogue;
         onboarding.Next();
         onboarding.Next();
-        catalogue.DownloadMissing(); // the step's Download
+        onboarding.Choices.Tick(ModelChoices.Accuracy, on: true); // Fewer mistakes
+        onboarding.Choices.Download(catalogue); // the step's Download
         Assert.Equal(["silero-vad-v6-16k"], sent.Commands.OfType<CoreCommand.ModelUpdate>().Select(u => u.Next)); // the smallest first
-        Assert.Null(OnboardingModel.DownloadLine(catalogue, CultureInfo.InvariantCulture)); // nothing left to ask for: the button goes
+        Assert.Null(onboarding.Choices.DownloadTitle(catalogue, CultureInfo.InvariantCulture)); // nothing left to ask for: the button goes
         Assert.True(catalogue.Downloading); // "You can go on…" shows
         onboarding.Next();
         Assert.Equal(OnboardingStep.Appearance, onboarding.Step); // Continue does not wait
@@ -220,9 +219,9 @@ public class OnboardingModelTests
         ]);
         // The next one went after the sheet had gone.
         Assert.Equal(["silero-vad-v6-16k", "qwen3-asr-1.7b-q8"], sent.Commands.OfType<CoreCommand.ModelUpdate>().Select(u => u.Next));
-        // A model installed this run stays on the step, as installed.
-        Assert.Equal(["qwen3-asr-1.7b-q8", "silero-vad-v6-16k"], OnboardingModel.ModelRows(catalogue).Select(r => r.Id));
-        Assert.Contains("These are not on it yet", OnboardingModel.ModelsNote(catalogue), StringComparison.Ordinal);
+        // A choice installed this run says so.
+        Assert.Equal("Installed", ModelChoices.Status(ModelChoices.Speech, catalogue, CultureInfo.InvariantCulture));
+        Assert.StartsWith("Inkwell writes down speech", OnboardingModel.ModelsNote(catalogue), StringComparison.Ordinal);
         screens.Apply([CatalogueDownloadTests.Finished("qwen3-asr-1.7b-q8", ok: true)]);
         Assert.Equal("Every model Inkwell uses is on this PC.", OnboardingModel.ModelsNote(catalogue));
         Assert.False(catalogue.Downloading);
@@ -236,7 +235,108 @@ public class OnboardingModelTests
         Assert.Equal(CatalogueModel.FailedText, OnboardingModel.ModelsNote(catalogue)); // with Try again
         catalogue.Apply(CatalogueDownloadTests.Listed(qwenInstalled: true, sileroInstalled: true));
         Assert.Equal("Every model Inkwell uses is on this PC.", OnboardingModel.ModelsNote(catalogue));
-        Assert.Empty(OnboardingModel.ModelRows(catalogue));
-        Assert.Null(OnboardingModel.DownloadLine(catalogue, CultureInfo.InvariantCulture));
+        Assert.Null(new ModelChoices().DownloadTitle(catalogue, CultureInfo.InvariantCulture));
+    }
+
+    /// <summary>The own key is one choice, in the Mac's words (how to get the key: GroqKeyGuideTests).</summary>
+    [Fact]
+    public void TheOwnKeyIsOneChoiceInTheMacsWords()
+    {
+        Assert.Equal("Use Groq's free model", OnboardingModel.OwnKeyTitle);
+        Assert.Equal("Paste your Groq key", OnboardingModel.OwnKeyPlaceholder);
+        Assert.Equal("Save", OnboardingModel.OwnKeySave);
+        Assert.Equal("Other providers or models\u2026", OnboardingModel.OtherProviders);
+        Assert.Equal("Back to Groq's free model", OnboardingModel.BackToGroq);
+    }
+
+
+    /// <summary>With no speech model the last step never says "Hold … and speak": it says one is needed.</summary>
+    [Fact]
+    public void TheLastStepWithNoSpeechModelSaysOneIsNeeded()
+    {
+        Assert.StartsWith("Hold Right Ctrl, say something, and let go.", OnboardingModel.ReadyLine("Right Ctrl"), StringComparison.Ordinal);
+        var line = OnboardingModel.ReadyLine("Right Ctrl", noSpeechModel: true);
+        Assert.Equal("Inkwell needs a speech model before it can type what you say.", line);
+        Assert.Equal("Inkwell lives in the notification area; this window opens from there.", OnboardingModel.TrayLine);
+        Assert.EndsWith(OnboardingModel.TrayLine, OnboardingModel.ReadyLine("Right Ctrl"), StringComparison.Ordinal);
+        Assert.DoesNotContain("Hold", line, StringComparison.Ordinal);
+        Assert.Equal("Download recommended models", NeedsYou.DownloadModelsTitle);
+    }
+
+
+    private sealed class HeldWakes : IWakeScheduler
+    {
+        public List<Action> Waiting { get; } = [];
+
+        public IDisposable After(TimeSpan delay, Action wake)
+        {
+            Assert.Equal(OnboardingModel.NotHearingAfter, delay);
+            Waiting.Add(wake);
+            return new Cancel(() => Waiting.Remove(wake));
+        }
+
+        private sealed class Cancel(Action cancel) : IDisposable
+        {
+            public void Dispose() => cancel();
+        }
+    }
+
+    /// <summary>
+    /// The Ready step's hint (as the Mac's TryItHint): after a take that heard no speech or only
+    /// silence, or 5 s into a held take with no live words (only where a live model gives words);
+    /// gone when words come or a take types something.
+    /// </summary>
+    [Fact]
+    public void TheTryItSaysWhereToPickTheMicrophoneWhenItHearsNothing()
+    {
+        var wakes = new HeldWakes();
+        var live = true;
+        var onboarding = new OnboardingModel(new Sent().Send) { Wake = wakes, HasLiveWords = () => live };
+        onboarding.Apply(Ev.Of("""{"type":"setting.value","key":"onboarding.done"}"""));
+        // On another step a take is not the try-it: no look, no hint.
+        onboarding.Apply(Ev.Of("""{"type":"dictation.started","take":0,"edit":false}"""));
+        onboarding.Apply(Ev.Of("""{"type":"dictation.discarded","reason":"no_speech"}"""));
+        Assert.Empty(wakes.Waiting);
+        Assert.False(onboarding.NotHearing);
+        while (onboarding.Step != OnboardingStep.Ready)
+        {
+            onboarding.Next();
+        }
+        onboarding.Apply(Ev.Of("""{"type":"dictation.started","take":1,"edit":false}"""));
+        Assert.Single(wakes.Waiting);
+        wakes.Waiting[0]();
+        Assert.True(onboarding.NotHearing);
+        Assert.Contains("Settings > Sound", OnboardingModel.NotHearingText, StringComparison.Ordinal);
+        onboarding.Apply(Ev.Of("""{"type":"dictation.partial","take":1,"text":"so"}"""));
+        Assert.False(onboarding.NotHearing); // words after a pause
+        onboarding.Apply(Ev.Of("""{"type":"dictation.stopped"}"""));
+        Assert.Empty(wakes.Waiting); // the look goes with the take
+
+        // A take that heard words in time: the look finds them.
+        onboarding.Apply(Ev.Of("""{"type":"dictation.started","take":2,"edit":false}"""));
+        onboarding.Apply(Ev.Of("""{"type":"dictation.partial","take":2,"text":"hello"}"""));
+        wakes.Waiting[0]();
+        Assert.False(onboarding.NotHearing);
+        onboarding.Apply(Ev.Of("""{"type":"dictation.discarded","reason":"no_speech"}"""));
+        Assert.True(onboarding.NotHearing);
+        onboarding.Apply(Ev.Of("""{"type":"dictation.inserted","text":"hi there","outcome":"pasted"}"""));
+        Assert.False(onboarding.NotHearing); // it heard you
+
+        // No live model: a held take shows no words until it ends, so the 5 s says nothing.
+        live = false;
+        onboarding.Apply(Ev.Of("""{"type":"dictation.started","take":4,"edit":false}"""));
+        wakes.Waiting[^1]();
+        Assert.False(onboarding.NotHearing);
+        onboarding.Apply(Ev.Of("""{"type":"dictation.discarded","reason":"too_short"}"""));
+        Assert.False(onboarding.NotHearing); // a tap says nothing about the mic
+        // A voice edit is not the try-it.
+        onboarding.Apply(Ev.Of("""{"type":"dictation.started","take":5,"edit":true}"""));
+        Assert.Empty(wakes.Waiting);
+        // Once the first run is done, takes are none of its business.
+        onboarding.Apply(Ev.Of("""{"type":"dictation.discarded","reason":"silence"}"""));
+        Assert.True(onboarding.NotHearing);
+        onboarding.Next(); // Start
+        onboarding.Apply(Ev.Of("""{"type":"dictation.started","take":6,"edit":false}"""));
+        Assert.Empty(wakes.Waiting);
     }
 }

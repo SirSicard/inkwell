@@ -1,37 +1,56 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Settings > Models: which engine does each job now, and how accurate it measured, as the Mac's
-     ModelsSection; and the catalogue's models, each not installed with its own Download. -->
+     ModelsSection; and the catalogue's models (speech, and Windows' language model), each with its
+     own Download, Cancel or Remove, and the free space under them. -->
 <UserControl
     x:Class="Inkwell.Screens.ModelsSection"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:local="using:Inkwell.Screens"
     Loaded="OnLoaded">
-    <StackPanel Spacing="10">
+    <StackPanel Spacing="14">
         <TextBlock AutomationProperties.HeadingLevel="Level2" Style="{StaticResource InkHeadingStyle}" Text="Models" />
         <TextBlock Style="{StaticResource InkAlertTextStyle}" FontSize="14" Text="{x:Bind local:ModelsSection.FailedText}" Visibility="{x:Bind Model.Failed, Mode=OneWay}" />
         <ItemsRepeater x:Name="Lines">
             <ItemsRepeater.ItemTemplate>
                 <DataTemplate x:DataType="local:CatalogueLineItem">
-                    <Grid Padding="0,6" ColumnSpacing="12">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="150" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
+                    <local:SettingColumnsPanel Margin="0,6">
                         <TextBlock Style="{StaticResource InkBodyStyle}" FontWeight="SemiBold" Text="{x:Bind Title}" />
-                        <StackPanel Grid.Column="1" Spacing="2">
+                        <StackPanel Spacing="2">
                             <TextBlock Style="{StaticResource InkBodyStyle}" Text="{x:Bind Engine}" Visibility="{x:Bind HasEngine}" />
                             <TextBlock Style="{StaticResource InkBodyStyle}" Foreground="{ThemeResource InkSecondaryTextBrush}" Text="{x:Bind Engine}" Visibility="{x:Bind local:SettingsFormat.HidesIf(HasEngine)}" />
-                            <TextBlock Style="{StaticResource InkCaptionStyle}" Text="{x:Bind Accuracy}" Visibility="{x:Bind local:SettingsFormat.Shows(Accuracy)}" />
                         </StackPanel>
-                    </Grid>
+                    </local:SettingColumnsPanel>
                 </DataTemplate>
             </ItemsRepeater.ItemTemplate>
         </ItemsRepeater>
         <StackPanel x:Name="DownloadablePanel" Margin="0,6,0,0" Spacing="4">
-            <TextBlock Style="{StaticResource InkEyebrowStyle}" Text="Downloadable" />
+            <TextBlock Style="{StaticResource InkEyebrowStyle}" Text="Available models" />
             <ContentPresenter x:Name="DownloadableHost" />
+            <!-- The free space on the volume models go on (models.listed's free_bytes). -->
+            <TextBlock x:Name="FreeSpaceLine" Margin="0,4,0,0" Style="{StaticResource InkCaptionStyle}" />
         </StackPanel>
-        <TextBlock x:Name="SourceLine" Style="{StaticResource InkCaptionStyle}" Text="{x:Bind local:ModelsSection.SourceText}" />
+        <Expander x:Name="AccuracyDetails" HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch">
+            <Expander.Header>
+                <TextBlock Style="{StaticResource InkBodyStyle}" Text="Accuracy details" />
+            </Expander.Header>
+            <StackPanel Spacing="12">
+                <ItemsRepeater x:Name="AccuracyLines">
+                    <ItemsRepeater.Layout>
+                        <StackLayout Spacing="10" />
+                    </ItemsRepeater.Layout>
+                    <ItemsRepeater.ItemTemplate>
+                        <DataTemplate x:DataType="local:CatalogueLineItem">
+                            <StackPanel Spacing="2" Visibility="{x:Bind local:SettingsFormat.Shows(Accuracy)}">
+                                <TextBlock Style="{StaticResource InkBodyStyle}" FontWeight="SemiBold" Text="{x:Bind Title}" />
+                                <TextBlock Style="{StaticResource InkCaptionStyle}" Text="{x:Bind Engine}" />
+                                <TextBlock Style="{StaticResource InkCaptionStyle}" Text="{x:Bind Accuracy}" />
+                            </StackPanel>
+                        </DataTemplate>
+                    </ItemsRepeater.ItemTemplate>
+                </ItemsRepeater>
+                <TextBlock Style="{StaticResource InkCaptionStyle}" Text="{x:Bind local:ModelsSection.SourceText}" />
+            </StackPanel>
+        </Expander>
     </StackPanel>
 </UserControl>

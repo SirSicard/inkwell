@@ -198,15 +198,34 @@ final class CatalogueModel {
 
     /// What the first run lists: the models not on this Mac, and those asked for since launch (so
     /// one that finished stays listed, as downloaded). Smallest first, the order Download fetches
-    /// them in: the small ones (voice detection, Parakeet's live words and finals) make dictation
-    /// work long before Qwen3-ASR's gigabytes are in.
+    /// them in.
     var firstRunModels: [CatalogueEntry] {
         models.filter { !$0.installed || asked.contains($0.id) }.sorted { $0.sizeBytes < $1.sizeBytes }
     }
 
-    /// The first run's Download: every model it lists that is not here and not asked for yet.
-    func downloadFirstRunModels() {
-        download(firstRunModels.filter { download(of: $0) == .notInstalled }.map(\.id))
+    /// The recommended set, about 484 MB: voice detection and the Mac's Parakeet, smallest first,
+    /// the order they download in. The first run always includes it (ModelChoices.swift), and Today
+    /// offers it while no speech model is installed (SpeechModels.swift). They serve every job on
+    /// their own: Parakeet registers for the live words and, while Qwen3-ASR is not installed, for
+    /// the dictation and meeting finals (ParakeetOfflineEngine), and the router hands those to
+    /// Qwen3-ASR once it is in. So Qwen3-ASR's 2.5 GB and the diarizer are choices of their own,
+    /// each with what it adds, never fetched by the set's Download.
+    nonisolated static let recommended = ["silero-vad-v6-16k", "parakeet-tdt-0.6b-v3-coreml"]
+
+    /// The set's Download (Today's and its Try again while no speech model is installed): every recommended model the list names that is not on this Mac, queued behind
+    /// any download under way. One whose last download failed is tried again; one downloading or
+    /// waiting is not queued twice (`download`).
+    func downloadRecommended() {
+        download(Self.recommended.filter { id in models.contains { $0.id == id } && !isOnThisMac(id) })
+    }
+
+    /// On this Mac, by the list or by an install that finished since it was read. The list is
+    /// asked for again when an install ends (model.update_finished), but its answer comes later:
+    /// until then a model that just finished still reads as not installed, and a press in between
+    /// must not fetch it again.
+    func isOnThisMac(_ id: String) -> Bool {
+        if models.first(where: { $0.id == id })?.installed == true { return true }
+        return asked.contains(id) && failures[id] == nil && id != installing && !waiting.contains(id)
     }
 
     /// Where a model's files come from: the host of every URL its row names in the core's registry
@@ -289,6 +308,9 @@ final class CatalogueModel {
             shellEngines = [:]
             serving = [:]
             routeFailed = []
+            // What the stop interrupted, or never started, is not on this Mac: out of `asked`, or
+            // isOnThisMac would read it as installed until the list is read again.
+            asked.subtract(waiting + [installing].compactMap { $0 })
             (installing, installRef, progress, waiting) = (nil, nil, nil, [])
         default:
             break

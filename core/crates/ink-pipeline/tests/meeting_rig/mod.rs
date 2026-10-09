@@ -766,6 +766,10 @@ impl Store for FlakyStore {
         self.check("finish_record")?;
         self.inner.finish_record(id, at)
     }
+    fn mark_stuck(&self, id: &RecordId) -> Result<(), StoreError> {
+        self.check("mark_stuck")?;
+        self.inner.mark_stuck(id)
+    }
     fn delete_record(&self, id: &RecordId) -> Result<(), StoreError> {
         self.check("delete_record")?;
         self.inner.delete_record(id)
@@ -826,6 +830,10 @@ impl Store for FlakyStore {
     fn set_speaker_name(&self, id: &RecordId, s: &SpeakerId, name: &str) -> Result<(), StoreError> {
         self.check("set_speaker_name")?;
         self.inner.set_speaker_name(id, s, name)
+    }
+    fn clear_speaker_name(&self, id: &RecordId, s: &SpeakerId) -> Result<(), StoreError> {
+        self.check("clear_speaker_name")?;
+        self.inner.clear_speaker_name(id, s)
     }
     fn speaker_names(&self, id: &RecordId) -> Result<Vec<(SpeakerId, String)>, StoreError> {
         self.check("speaker_names")?;

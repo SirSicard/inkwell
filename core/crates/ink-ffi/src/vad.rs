@@ -26,6 +26,11 @@ pub fn installed(shared: &Shared, models: &ModelDir) -> Vad {
         if !models.is_installed(row) {
             return Vad::Unavailable(VadUnavailable::ModelMissing);
         }
+        // Through the gate for the read only: the model is in memory after it, and dictation's
+        // voice detection must not keep the model from being removed while dictation is on.
+        let Ok(_reading) = shared.gate.enter(&row.id) else {
+            return Vad::Unavailable(VadUnavailable::LoadFailed);
+        };
         match ink_engines::SileroLoader::new(models.clone())
             .load(row)
             .and_then(|model| model.vad())

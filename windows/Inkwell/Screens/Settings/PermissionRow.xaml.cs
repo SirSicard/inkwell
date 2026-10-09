@@ -25,8 +25,8 @@ public sealed partial class PermissionRow : UserControl
         AutomationProperties.SetHelpText(ActionButton, card.Title());
     }
 
-    /// <summary>Shows <paramref name="state"/>.</summary>
-    public void Show(CardState state)
+    /// <summary>Shows <paramref name="state"/>, and that its request failed when <paramref name="requestFailed"/>.</summary>
+    public void Show(CardState state, bool requestFailed = false)
     {
         var off = state.IsAlert();
         AlertFill.Visibility = Visible(off);
@@ -38,11 +38,13 @@ public sealed partial class PermissionRow : UserControl
         CheckingRing.IsActive = state == CardState.Checking;
         CheckingRing.Visibility = Visible(state == CardState.Checking);
 
-        var line = card.Line(state);
+        // A request that failed says so where the button is read, in the alert colour.
+        var line = requestFailed ? PermissionCards.RequestFailedLine : card.Line(state);
         LineText.Text = line;
         OffLineText.Text = line;
-        LineText.Visibility = Visible(!off);
-        OffLineText.Visibility = Visible(off);
+        LineText.Style = (Style)Application.Current.Resources[requestFailed ? "InkAlertTextStyle" : "InkCaptionStyle"];
+        LineText.Visibility = Visible(!off || requestFailed);
+        OffLineText.Visibility = Visible(off && !requestFailed);
 
         if (card.ActionTitle(state) is string action)
         {
@@ -57,7 +59,9 @@ public sealed partial class PermissionRow : UserControl
             StateText.Text = PermissionCards.StateLabel(state);
             StateText.Visibility = Visibility.Visible;
         }
-        AutomationProperties.SetName(Root, $"{card.Title()}: {card.Spoken(state)}");
+        AutomationProperties.SetName(Root, requestFailed
+            ? $"{card.Title()}: {card.Spoken(state)}. {PermissionCards.RequestFailedLine}"
+            : $"{card.Title()}: {card.Spoken(state)}");
     }
 
     private void OnAction(object sender, RoutedEventArgs e) => request(card);

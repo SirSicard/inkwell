@@ -1,19 +1,32 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <!-- The WinUI 3 shell: an unpackaged, self-contained app (nothing is installed system-wide:
-       the Windows App SDK's runtime is copied next to the exe), published with NativeAOT. -->
+       the Windows App SDK's runtime and .NET's are copied next to the exe), published ReadyToRun. -->
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
     <TargetPlatformMinVersion>10.0.26100.0</TargetPlatformMinVersion>
     <UseWinUI>true</UseWinUI>
     <WindowsPackageType>None</WindowsPackageType>
+    <!-- The app's own resources (Inkwell.pri, with every page's compiled XAML) are published beside
+         the exe only with the MSIX tooling on, though nothing is packaged as MSIX: without it a
+         dotnet publish has none, and the first window fails with "Cannot locate resource from
+         'ms-appx:///TermsWindow.xaml'". dotnet build copies it either way. -->
+    <EnableMsixTooling>true</EnableMsixTooling>
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
     <SelfContained>true</SelfContained>
     <ApplicationIcon>Assets\Inkwell.ico</ApplicationIcon>
+    <!-- Per-monitor DPI awareness (app.manifest says why). -->
+    <ApplicationManifest>app.manifest</ApplicationManifest>
     <RootNamespace>Inkwell</RootNamespace>
-    <!-- NativeAOT on publish (dotnet publish -c Release). The fallback, if a NativeAOT build
-         breaks: -p:PublishAot=false -p:PublishReadyToRun=true. -->
-    <PublishAot>true</PublishAot>
+    <!-- ReadyToRun on publish (dotnet publish -c Release), not NativeAOT. Under NativeAOT, CsWinRT
+         has no list it can hand to WinUI: every ItemsSource (the terms' licences, the Library,
+         Settings, Owed, Live) fails with "Value does not fall within the expected range", because
+         its source generator emits no interface table for List<T> or arrays with this WinUI
+         package, even when asked to (GeneratedWinRTExposedExternalType, CsWinRTAotOptimizerEnabled).
+         With dynamic code, CsWinRT makes them at run time. The library projects keep the trim and
+         AOT analyzers. -->
+    <PublishAot>false</PublishAot>
+    <PublishReadyToRun>true</PublishReadyToRun>
     <!-- Program.cs is the entry point: Velopack's install and update hooks run before WinUI starts. -->
     <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
     <!-- Inkwell's copyright notice in Inkwell.exe's file properties, as About shows it under the

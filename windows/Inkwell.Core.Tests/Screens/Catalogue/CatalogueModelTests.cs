@@ -33,6 +33,22 @@ public class CatalogueModelTests
         Assert.Equal(4, catalogue.Requeries);
     }
 
+    /// <summary>
+    /// The on-device language model is a row like the speech models (Settings > Models lists it,
+    /// with its name), but Download all fetches speech models only: the language model is the
+    /// user's own choice.
+    /// </summary>
+    [Fact]
+    public void TheLanguageModelIsARowButNotPartOfDownloadAll()
+    {
+        var catalogue = new CatalogueModel(_ => { });
+        catalogue.Apply(Ev.Of("""{"type":"models.listed","models":[{"id":"silero-vad-v6-16k","kind":"speech","licence":"MIT","size_bytes":1289603,"installed":false,"jobs":[{"job":"voice_activity","wer":1.5}]},{"id":"qwen3-4b-instruct-2507-q4km","kind":"language","name":"Qwen3 4B Instruct","licence":"Apache-2.0","size_bytes":2497281120,"installed":false,"jobs":[]},{"id":"qwen3-asr-1.7b-q8","licence":"Apache-2.0","size_bytes":2500000000,"installed":true,"jobs":[{"job":"dictation_final","wer":4.59}]}]}"""));
+        Assert.Equal(["silero-vad-v6-16k", "qwen3-4b-instruct-2507-q4km", "qwen3-asr-1.7b-q8"], catalogue.Models.Select(m => m.Id));
+        Assert.Equal("Qwen3 4B Instruct", catalogue.LanguageRow?.Name);
+        catalogue.DownloadMissing();
+        Assert.Equal(["silero-vad-v6-16k"], catalogue.Rows.Where(r => r.Download is not null).Select(r => r.Id)); // what Download all fetches
+    }
+
     [Fact]
     public void AFailedListReadsAsFailedNotAsNothingInstalled()
     {
@@ -89,4 +105,23 @@ public class CatalogueModelTests
         catalogue.Apply(Ev.Of("""{"type":"engine.routed","job":"meeting_final"}"""));
         Assert.Equal("Nothing installed yet", catalogue.Line(Job.MeetingFinal).EngineText);
     }
+
+    /// <summary>
+    /// Whether a speech model is installed: any of dictation, meeting transcript and live words
+    /// routed to a model. Not known until all three have answered; none routed is "no model".
+    /// </summary>
+    [Fact]
+    public void ASpeechModelIsInstalledWhenAnySpeechJobHasOne()
+    {
+        var catalogue = new CatalogueModel(_ => { });
+        Assert.Null(catalogue.HasSpeechModel);
+        catalogue.Apply(Ev.Of("""{"type":"engine.routed","job":"dictation_final"}"""));
+        catalogue.Apply(Ev.Of("""{"type":"engine.routed","job":"meeting_final"}"""));
+        Assert.Null(catalogue.HasSpeechModel); // live words not answered yet
+        catalogue.Apply(Ev.Of("""{"type":"engine.routed","job":"live_partials"}"""));
+        Assert.False(catalogue.HasSpeechModel);
+        catalogue.Apply(Ev.Of("""{"type":"engine.routed","job":"live_partials","id":"parakeet-tdt-0.6b-v3-int8","source":"registry"}"""));
+        Assert.True(catalogue.HasSpeechModel);
+    }
+
 }

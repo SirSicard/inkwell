@@ -84,7 +84,7 @@ public class CoreCommandTests
         Assert.Equal("meeting.ask", failed.Command);
         Assert.Equal("ask:3", failed.Id);
         Assert.DoesNotContain("private", failed.Message);
-        Assert.Null(new CoreCommand.ModesList().NotSent("x").Id);
+        Assert.Null(new CoreCommand.MeetingsRecover().NotSent("x").Id);
         Assert.Equal("engine.route:live_partials", new CoreCommand.EngineRoute(Job.LivePartials).CommandId);
     }
 }

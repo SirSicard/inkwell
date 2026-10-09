@@ -14,6 +14,10 @@
 //! - **Budget.** An answer that has not ended when [`LlmRequest::max_tokens`] runs out is an
 //!   error, not a shorter answer: a cut-off answer must not look like a finished one.
 //! - **Errors.** Failures of this model are [`LlmError::Engine`], naming the step, never the text.
+//! - **No reasoning in the answer.** A think block at the start of an answer is taken off, and one
+//!   never closed is an error ([`crate::chat`]). A hybrid thinking model loaded with
+//!   [`ChatQuirks::no_think`] also gets the empty think block its own template writes for
+//!   `enable_thinking=false` at the start of its answer.
 
 use std::path::Path;
 
@@ -28,10 +32,12 @@ use llama_cpp_2::sampling::LlamaSampler;
 use llama_cpp_2::token::LlamaToken;
 
 use super::{
-    GenerateError, Stop, backend, compute, context_params, file_name, generate, model_params,
-    require_file, with_cpu_fallback,
+    GenerateError, GrammarOnRejection, NextToken, Stop, backend, compute, context_params,
+    file_name, generate, model_params, require_file, with_cpu_fallback,
 };
+use crate::chat::{ThinkError, strip_think, with_no_think};
 use crate::compute::{Compute, physical_cores};
+use crate::registry::ChatQuirks;
 
 /// A grammar (llama.cpp's GBNF) for exactly one JSON object, with bounded whitespace so a model
 /// cannot spend its budget on blank lines. Written for this crate from the JSON specification
@@ -58,6 +64,7 @@ pub struct LlamaLlm {
     info: LlmInfo,
     backend: &'static LlamaBackend,
     compute: Compute,
+    chat: ChatQuirks,
 }
 
 impl LlamaLlm {
@@ -65,6 +72,12 @@ impl LlamaLlm {
     /// CPU on every physical core ([`super::compute`]). `model_id` is what [`Llm::info`] reports.
     /// Refuses a model with no chat template, or one llama.cpp cannot apply.
     pub fn load(path: &Path, model_id: &str) -> Result<Self, EngineError> {
+        Self::load_with(path, model_id, ChatQuirks::default())
+    }
+
+    /// **Worker.** [`load`](Self::load), with what the model's chat format needs beyond llama.cpp's
+    /// built-in template (a registry language row's [`ChatQuirks`]).
+    pub fn load_with(path: &Path, model_id: &str, chat: ChatQuirks) -> Result<Self, EngineError> {
         require_file(path, model_id)?;
         let backend = backend()?;
         let failed = |what: String| EngineError::Failed(format!("{model_id}: {what}"));
@@ -94,6 +107,7 @@ impl LlamaLlm {
             },
             backend,
             compute,
+            chat,
         })
     }
 
@@ -139,20 +153,38 @@ impl Llm for LlamaLlm {
         match generate(
             &self.model,
             &mut ctx,
-            &mut sampler,
+            sampler.as_mut(),
             n_past,
             request.max_tokens,
             cancel,
         ) {
-            Ok((text, Stop::EndOfText)) => Ok(LlmResponse { text }),
+            Ok((text, Stop::EndOfText)) => self.answer(text),
             Ok((_, Stop::Budget)) => Err(engine("output hit the token budget")),
             Err(GenerateError::Cancelled) => Err(LlmError::Cancelled),
             Err(GenerateError::Failed(e)) => Err(engine(e)),
+            // As a malformed answer: this request's problem, so a summary goes on with its other
+            // parts.
+            Err(GenerateError::NoAllowedToken) => Err(LlmError::BadResponse(
+                "local model: the JSON grammar allows no next token".into(),
+            )),
         }
     }
 }
 
 impl LlamaLlm {
+    /// The answer as the caller gets it: without a think block at its start. A model that should
+    /// not think (Qwen3-4B-Instruct-2507 never does, a hybrid one has it turned off) may still
+    /// write one, and reasoning must never be typed into the user's text.
+    fn answer(&self, text: String) -> Result<LlmResponse, LlmError> {
+        match strip_think(&text) {
+            Ok(answer) if answer.len() == text.len() => Ok(LlmResponse { text }),
+            Ok(answer) => Ok(LlmResponse {
+                text: answer.to_owned(),
+            }),
+            Err(ThinkError::Unclosed) => Err(engine("the answer was reasoning that never ended")),
+        }
+    }
+
     /// The request in the model's chat format, as tokens. Never empty.
     fn prompt(&self, request: &LlmRequest) -> Result<Vec<LlamaToken>, LlmError> {
         // User text with a NUL byte cannot cross into C; the error names the role, not the text.
@@ -165,10 +197,15 @@ impl LlamaLlm {
             chat.push(chat_message("system", &request.system)?);
         }
         chat.push(chat_message("user", &request.user)?);
-        let prompt = self
+        let mut prompt = self
             .model
             .apply_chat_template(&self.template, &chat, true)
             .map_err(|e| engine(format!("chat template: {e}")))?;
+        if self.chat.no_think {
+            // After the assistant's turn opens, as the model's own template does with thinking
+            // off.
+            prompt = with_no_think(prompt);
+        }
         // `Always` asks for the start token only where the model's vocabulary wants one.
         let tokens = self
             .model
@@ -229,27 +266,28 @@ impl LlamaLlm {
         Ok(())
     }
 
-    fn sampler(&self, request: &LlmRequest) -> Result<LlamaSampler, LlmError> {
-        let mut chain = Vec::with_capacity(6);
-        if request.json_schema.is_some() {
-            // First, so the others only ever see tokens the grammar allows.
-            chain.push(
-                LlamaSampler::grammar(&self.model, JSON_OBJECT_GRAMMAR, "root")
-                    .map_err(|e| engine(format!("JSON grammar: {e}")))?,
-            );
-        }
+    /// How the answer's tokens are picked. A structured answer is held to [`JSON_OBJECT_GRAMMAR`],
+    /// applied only to a token sampled freely that breaks it ([`GrammarOnRejection`]): measured
+    /// on Qwen3-4B-Instruct-2507 with the grammar on every token, an answer came at about 20
+    /// tokens a second against 108 without it.
+    fn sampler(&self, request: &LlmRequest) -> Result<Box<dyn NextToken>, LlmError> {
         let t = request.temperature;
-        if t.is_finite() && t > 0.0 {
-            chain.extend([
+        let chain = if t.is_finite() && t > 0.0 {
+            LlamaSampler::chain_simple([
                 LlamaSampler::top_k(40),
                 LlamaSampler::top_p(0.95, 1),
                 LlamaSampler::min_p(0.05, 1),
                 LlamaSampler::temp(t),
                 LlamaSampler::dist(SEED),
-            ]);
+            ])
         } else {
-            chain.push(LlamaSampler::greedy());
+            LlamaSampler::chain_simple([LlamaSampler::greedy()])
+        };
+        if request.json_schema.is_none() {
+            return Ok(Box::new(chain));
         }
-        Ok(LlamaSampler::chain_simple(chain))
+        let grammar = LlamaSampler::grammar(&self.model, JSON_OBJECT_GRAMMAR, "root")
+            .map_err(|e| engine(format!("JSON grammar: {e}")))?;
+        Ok(Box::new(GrammarOnRejection { grammar, chain }))
     }
 }

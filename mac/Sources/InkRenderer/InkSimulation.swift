@@ -108,6 +108,12 @@ public struct InkSimulation: Sendable {
     /// The canvas size in pixels (the prototype's `c.width`, `c.height`).
     public var canvasWidth = 360.0
     public var canvasHeight = 720.0
+    /// How far blotting condenses the orb: the blotting weight's target, 0...1. At 1 (the design's
+    /// blot, the default) both orbs condense into one small, hard-edged drop of ink. Behind a
+    /// window's text that drop is a solid disc in the text's own colour (ivory at night), sitting
+    /// wherever the layout puts a rule or a heading; a shallower blot stops on the way: the orbs
+    /// draw together, shrink and take the ink's colour, and keep a soft edge.
+    public var blotDepth = 1.0
 
     // The prototype's `_st`.
     public internal(set) var t = 0.0
@@ -229,7 +235,9 @@ public struct InkSimulation: Sendable {
         prevA = envA
         prevB = envB
         let kw = snap ? 1 : 1 - pow(1 - Self.weightEase, dt * 60)
-        w += (Self.weights(for: state) - w) * kw
+        var target = Self.weights(for: state)
+        if state == .blotting { target.z = min(max(blotDepth, 0), 1) }
+        w += (target - w) * kw
         physics(dt)
     }
 
@@ -355,8 +363,8 @@ public struct InkSimulation: Sendable {
 
     /// The orb's uniform block for this state (shaders/ink.wgsl, `G`): the canvas, where the orb
     /// sits and how large a unit is, the time, your level and theirs (the envelopes), the state
-    /// weights, and the theme's colours. `motion` false draws a still frame: the shader stops its
-    /// time.
+    /// weights, and the theme's colours, with the rest tint in idle's fourth lane. `motion` false
+    /// draws a still frame: the shader stops its time.
     public func uniforms(palette: OrbPalette, placement: OrbPlacement, motion: Bool) -> InkUniforms {
         var u = InkUniforms()
         u.res = SIMD2(Float(canvasWidth), Float(canvasHeight))
@@ -372,16 +380,17 @@ public struct InkSimulation: Sendable {
         u.yB = SIMD4(palette.yB, 0)
         u.tA = SIMD4(palette.tA, 0)
         u.tB = SIMD4(palette.tB, 0)
-        u.idle = SIMD4(palette.idle, 0)
-        u.ink = SIMD4(palette.ink, 0)
+        u.idle = SIMD4(palette.idle, min(1, max(0, palette.restTint)))
+        u.ink = SIMD4(palette.ink, min(1, max(0, palette.restBoost)))
         return u
     }
 }
 
 /// The shader's uniform block `G` (shaders/ink.wgsl), 160 bytes: the canvas and the orb's centre
 /// in pixels (top-left origin), the time, the unit, your level and theirs, the four state weights,
-/// dark and motion, then six colours (rgb, the fourth unused). A plain value, so a frame hands it
-/// to Metal without allocating; Swift lays it out at the shader's offsets (SimulationTests checks).
+/// dark and motion, then six colours (rgb; the fourth unused, but idle's is the rest tint). A
+/// plain value, so a frame hands it to Metal without allocating; Swift lays it out at the shader's
+/// offsets (SimulationTests checks).
 public struct InkUniforms: Equatable, Sendable {
     public var res = SIMD2<Float>(0, 0)
     public var center = SIMD2<Float>(0, 0)

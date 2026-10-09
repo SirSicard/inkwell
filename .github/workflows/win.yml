@@ -2,7 +2,7 @@ name: Windows
 
 # The Windows shell (windows/): the generated C# is current, every NuGet package's licence is on
 # the allowlist, the solution builds and passes its tests against the core's DLL (the cdylib of
-# core/crates/ink-ffi, engine features off), and the app publishes with NativeAOT. The core's own
+# core/crates/ink-ffi, engine features off), and the app publishes ReadyToRun. The core's own
 # tests run in core.yml. CI has no desktop: launching the app is windows/S3.3a-CHECKLIST.md.
 on:
   push:
@@ -97,10 +97,10 @@ jobs:
             Write-Output "${name}: tests run: $total"
             if ($total -eq 0) { Write-Output "::error::$name ran no tests"; exit 1 }
           }
-      # The app as it ships: NativeAOT, x64, with the Windows App SDK's runtime beside the exe.
-      # A trim or AOT warning fails it (warnings are errors). Without the core's DLL beside it,
+      # The app as it ships: ReadyToRun, x64, with .NET's and the Windows App SDK's runtimes beside
+      # the exe. A warning fails it (warnings are errors). Without the core's DLL beside it,
       # the app would only say the core did not start: that fails here.
-      - name: Publish the app (NativeAOT)
+      - name: Publish the app (ReadyToRun)
         shell: pwsh
         working-directory: windows
         run: |

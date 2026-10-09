@@ -22,7 +22,7 @@ use rusqlite::{Connection, TransactionBehavior};
 use crate::codec::Fail;
 
 /// Every migration, in order. The database's `user_version` counts how many have run.
-const MIGRATIONS: &[&str] = &[V1, V2, V3, V4];
+const MIGRATIONS: &[&str] = &[V1, V2, V3, V4, V5, V6];
 
 /// The schema version this build writes: the number of migrations. A database with a higher
 /// `user_version` came from a newer build and is refused rather than guessed at.
@@ -212,6 +212,63 @@ CREATE INDEX commitment_done_evidence_by_record ON commitment_done_evidence (rec
 /// before this migration read as 0: nothing in them says whether an import wrote them.
 const V4: &str = "
 ALTER TABLE record ADD COLUMN imported INTEGER NOT NULL DEFAULT 0 CHECK (imported IN (0, 1));
+";
+
+/// Each record's transcript counted for the Stats screen (`ink_core::stats::RecordDigest`):
+/// counts and times only, never text, so a stats query does not re-read every transcript in the
+/// library. Derived data: a row is written by the first stats read after its record last changed,
+/// and the triggers drop it on any write that changes what it counts (a segment inserted, deleted
+/// or updated; the record's kind, times, revision or import mark), so a stale count is never
+/// read. It goes with its record by the cascade.
+///
+/// The record's own columns the stats need are copied in, so a stats read scans this one table:
+/// joining 75,000 records to their digests by id took 47 ms, a scan of this table alone about 10.
+/// `version` is the counting rules' (`ink_core::stats::DIGEST_VERSION`): a row kept under other
+/// rules is counted again, so a change to the rules needs no migration of its own.
+const V5: &str = "
+CREATE TABLE record_digest (
+    record_id            TEXT PRIMARY KEY NOT NULL REFERENCES record (id) ON DELETE CASCADE,
+    version              INTEGER NOT NULL CHECK (version >= 1),
+    kind                 TEXT NOT NULL CHECK (kind IN ('dictation', 'meeting', 'file_import')),
+    started_at_unix_ms   INTEGER NOT NULL,
+    ended_at_unix_ms     INTEGER,
+    imported             INTEGER NOT NULL CHECK (imported IN (0, 1)),
+    mic_words            INTEGER NOT NULL CHECK (mic_words >= 0),
+    mic_speech_ms        INTEGER NOT NULL CHECK (mic_speech_ms >= 0),
+    mic_lines            INTEGER NOT NULL CHECK (mic_lines >= 0),
+    far_words            INTEGER NOT NULL CHECK (far_words >= 0),
+    far_speech_ms        INTEGER NOT NULL CHECK (far_speech_ms >= 0),
+    far_lines            INTEGER NOT NULL CHECK (far_lines >= 0),
+    longest_monologue_ms INTEGER NOT NULL CHECK (longest_monologue_ms >= 0),
+    mic_questions        INTEGER NOT NULL CHECK (mic_questions >= 0)
+) STRICT, WITHOUT ROWID;
+CREATE TRIGGER record_digest_on_insert AFTER INSERT ON segment BEGIN
+    DELETE FROM record_digest WHERE record_id = new.record_id;
+END;
+CREATE TRIGGER record_digest_on_delete AFTER DELETE ON segment BEGIN
+    DELETE FROM record_digest WHERE record_id = old.record_id;
+END;
+CREATE TRIGGER record_digest_on_update AFTER UPDATE ON segment BEGIN
+    DELETE FROM record_digest WHERE record_id IN (old.record_id, new.record_id);
+END;
+CREATE TRIGGER record_digest_on_record AFTER UPDATE OF
+    kind, started_at_unix_ms, ended_at_unix_ms, revision, imported ON record BEGIN
+    DELETE FROM record_digest WHERE record_id = new.id;
+END;
+";
+
+/// Whether the stuck-key watchdog ended a dictation (`ink_core::Record::stuck`), on the record and
+/// copied into its digest. Records and digests from before this migration read as 0: nothing
+/// marked them, and a take the watchdog ended before then counts as any other. The trigger that
+/// drops a record's digest when the record changes now watches the mark too.
+const V6: &str = "
+ALTER TABLE record ADD COLUMN stuck INTEGER NOT NULL DEFAULT 0 CHECK (stuck IN (0, 1));
+ALTER TABLE record_digest ADD COLUMN stuck INTEGER NOT NULL DEFAULT 0 CHECK (stuck IN (0, 1));
+DROP TRIGGER record_digest_on_record;
+CREATE TRIGGER record_digest_on_record AFTER UPDATE OF
+    kind, started_at_unix_ms, ended_at_unix_ms, revision, imported, stuck ON record BEGIN
+    DELETE FROM record_digest WHERE record_id = new.id;
+END;
 ";
 
 /// Brings the database up to [`SCHEMA_VERSION`] in one immediate transaction.

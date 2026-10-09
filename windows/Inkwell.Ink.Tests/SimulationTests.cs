@@ -202,6 +202,28 @@ public sealed class SimulationTests
         Assert.Equal((0.0, 1.0, 0.0, 1.0), InkSimulation.WeightsFor(InkState.Problem));
     }
 
+    /// <summary>
+    /// Soft blotting: with a blot depth below 1 the final pass's blot stops partway (the window's
+    /// orb, 0.45: the orbs merge, shrink and take the ink colour, with a soft edge); the Drop keeps
+    /// the full blot (depth 1, the default).
+    /// </summary>
+    [Fact]
+    public void ABlotDepthStopsTheBlotPartway()
+    {
+        Assert.Equal((0.0, 1.0, 0.45, 0.0), InkSimulation.WeightsFor(InkState.Blotting, 0.45));
+        var soft = new InkSimulation(InkRandom.Seeded(1)) { State = InkState.Blotting, BlotDepth = 0.45 };
+        soft.Settle(InkVoice.Silent);
+        Assert.Equal(0.45f, soft.Uniforms(InkPlacement.Centre, GlowLook.Default, moving: false).Blotting, 6);
+        for (var i = 0; i < 600; i++)
+        {
+            soft.Step(1 / 60.0, snap: false, InkVoice.Silent);
+        }
+        Assert.Equal(0.45, soft.Weights.Blotting, 6);
+        var full = new InkSimulation(InkRandom.Seeded(1)) { State = InkState.Blotting };
+        full.Settle(InkVoice.Silent);
+        Assert.Equal(1f, full.Uniforms(InkPlacement.Centre, GlowLook.Default, moving: false).Blotting, 6);
+    }
+
     [Fact]
     public void Mulberry32MatchesItsReferenceSequence()
     {

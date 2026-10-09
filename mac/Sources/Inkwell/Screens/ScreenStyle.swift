@@ -33,6 +33,8 @@ enum Paper {
             case neutral
             case due
             case alert
+            /// Wanted, and off now (a mode's "Polish · off"): quieter than the rest.
+            case muted
         }
 
         let text: String
@@ -40,11 +42,12 @@ enum Paper {
 
         var body: some View {
             Text(text)
-                .font(.system(size: Glow.Size.eyebrow, weight: tone == .neutral ? .regular : .medium))
+                .font(.system(size: Glow.Size.eyebrow, weight: tone == .neutral || tone == .muted ? .regular : .medium))
                 .foregroundStyle(foreground)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 3)
                 .background(background, in: Capsule())
+                .overlay(Capsule().strokeBorder(tone == .muted ? PaperPalette.border : Color.clear, lineWidth: 1))
         }
 
         private var foreground: Color {
@@ -52,6 +55,7 @@ enum Paper {
             case .neutral: Theme.text
             case .due: PaperPalette.dueText
             case .alert: PaperPalette.alertText
+            case .muted: Theme.secondaryText
             }
         }
 
@@ -60,6 +64,7 @@ enum Paper {
             case .neutral: PaperPalette.chip
             case .due: PaperPalette.dueChip
             case .alert: PaperPalette.alertChip
+            case .muted: Color.clear
             }
         }
     }
@@ -90,8 +95,9 @@ enum Paper {
                         .foregroundStyle(Theme.text)
                         .accessibilityAddTraits(.isHeader)
                     if let subtitle {
+                        // Counts in words ("5 open · 1 overdue"), not a time: the caption's face.
                         Text(subtitle)
-                            .font(Typography.timestamp)
+                            .font(Typography.caption)
                             .foregroundStyle(Theme.secondaryText)
                     }
                 }
@@ -114,6 +120,49 @@ extension View {
     func paperCard(alert: Bool = false) -> some View {
         modifier(GlowCard(alert: alert))
     }
+
+    /// A section on its card, as Today's and Settings' are: the card's padding inside it, as wide
+    /// as its column.
+    func sectionCard() -> some View {
+        padding(.vertical, SectionCard.vertical)
+            .padding(.horizontal, SectionCard.horizontal)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .paperCard()
+    }
+
+    /// A row of a native List with a selection: in Theme.onAccent while AppKit fills it with the
+    /// accent, which is while it is selected, its list has the keyboard (`listFocused`, the list's
+    /// FocusState) and its window is key. Otherwise the row keeps its own colours: the selection
+    /// is then the system's quiet grey.
+    func onAccent(selected: Bool, listFocused: Bool) -> some View {
+        modifier(OnAccentRow(selected: selected, listFocused: listFocused))
+    }
+}
+
+/// Whether AppKit fills a List row with the accent: selected, in a list with the keyboard, in the
+/// key window.
+func accentFillsRow(selected: Bool, listFocused: Bool, active: ControlActiveState) -> Bool {
+    selected && listFocused && active == .key
+}
+
+private struct OnAccentRow: ViewModifier {
+    let selected: Bool
+    let listFocused: Bool
+    @Environment(\.controlActiveState) private var active
+
+    func body(content: Content) -> some View {
+        if accentFillsRow(selected: selected, listFocused: listFocused, active: active) {
+            content.foregroundStyle(Theme.onAccent)
+        } else {
+            content
+        }
+    }
+}
+
+/// A section card's padding inside its edge (sectionCard).
+enum SectionCard {
+    static let vertical: CGFloat = 20
+    static let horizontal: CGFloat = 22
 }
 
 /// Glow's card.

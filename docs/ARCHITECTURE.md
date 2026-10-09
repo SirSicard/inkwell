@@ -39,12 +39,21 @@ on the `legacy/0.2` branch, and its architecture is in [legacy/ARCHITECTURE-0.2.
 6. **Local-only is structural.** A switch refuses any non-loopback language-model endpoint in code.
    The core holds it (`llm.local_only`, on unless turned off, on when unreadable) and every
    language-model call goes through it: dictation polish, meeting summaries and commitments, Ask.
+   The core's own language model (Windows, below) runs in this process, so it passes.
 7. **One replay harness.** `FileReplaySource` drives the whole pipeline from WAV fixtures,
    identically on macOS and Windows.
 8. **One event schema.** Events are defined once in `schema/`, and the Swift and C# types are
    generated from it.
 9. **Draw nothing when idle.** The ink renders only while something is live; idle is a still frame.
-   No polling timers.
+   One exception, always answering the user: the main window's orb glides to a new spot for 2.4 s
+   when the window comes on screen or is uncovered, when its screen changes, and when the window
+   becomes key after 2.5 min in one spot. No polling timers: a window left alone draws nothing
+   (the shell budget's idle phase never activates the window). The live icon's recording pulse is
+   the Mac's only: a state animation, not polling, it runs only while a meeting records and someone
+   can see the screen, and stops the moment either ends. On Windows the tray icon and the taskbar
+   badge show the state still: each frame there would be a call into Explorer (Shell_NotifyIcon,
+   ITaskbarList3's overlay) on the UI thread, seven a second, and a hung Explorer would stall the
+   app.
 10. **Engines per job**, chosen by measurement (word error rate on public human-labelled sets:
     AMI meetings and FLEURS English). The models are listed in [MODEL-WEIGHTS.md](MODEL-WEIGHTS.md).
     - Dictation final and meeting final: Qwen3-ASR 1.7B via llama.cpp (Metal on the Mac, Vulkan or
@@ -60,7 +69,8 @@ on the `legacy/0.2` branch, and its architecture is in [legacy/ARCHITECTURE-0.2.
 headphones there is none, and running it anyway deletes words). The "you" transcript reads AEC3's
 linear output behind a gate that drops words where the full output says echo only: in measured
 double talk the full output cost about 10 WER points and the linear output under 1. With Bluetooth
-output, the built-in mic is recorded, because a headset mic is 16 kHz call audio.
+output, Automatic records the built-in mic, because a headset mic is 16 kHz call audio; the user
+can pick the headset's mic (or any other) in Settings > Sound.
 
 ## Crates
 
@@ -275,43 +285,88 @@ Each table is one kind:
   rate per job wins, at every call. So Parakeet, registered for the finals with rates worse than
   Qwen3-ASR's, serves them only while Qwen3-ASR is not installed. `engine.route` tells the shell
   what serves a job now.
-- Language models are kept by the core apart from the router (whose jobs are speech jobs); dictation
-  polish goes to the one registered. Foundation Models is registered only while Apple Intelligence
-  is available.
+- Language models are kept by the core apart from the router (whose jobs are speech jobs). The
+  features use the own-key provider chosen in Settings > AI; with none chosen, the core's own
+  language model once one is downloaded (Windows, below), else the one the shell registered.
+  Foundation Models is registered only while Apple Intelligence is available; the Mac has no
+  language model of the core's own, so its order is as it was.
 - Polish sends a dictation, voice edit the selection and the instruction, and a meeting's summary
   (with its commitments) and Ask the meeting's transcript, to that model, so each runs only with
   the user's consent for where it goes: this machine, or one named cloud provider
-  (`ink_pipeline::consent`, one consent per feature). The core keeps each consent
-  (`llm.consent.polish`, `llm.consent.edit`, `llm.consent.meetings`); `consent.allow` records it,
-  for the destination the model has at that moment, and turns the feature on (polish's switch,
-  edit's key, the meetings switch) in the same write; turning the feature off withdraws it in the
-  same write. Each call checks the consent against the model that call reaches
-  (`Llm::complete_if`), so a model that moved from this machine to a cloud provider, or between
+  (`ink_pipeline::consent`). The core keeps each feature's consents (`llm.consent.polish`,
+  `llm.consent.edit`, `llm.consent.meetings`); `consent.allow` records one, for the destination a
+  model the feature can use has at that moment, and turns the feature on (polish's switch, edit's
+  key, the meetings switch) in the same write; turning the feature off withdraws them in the same
+  write. Polish holds one consent per destination (a dictation mode may polish on a model of its
+  own, below): `consent.allow` adds one, `consent.revoke` takes one away (the last one turns
+  polish off with it), and a polish call passes when any of them covers the model it reaches. The
+  single consent an earlier build stored reads as a list of one. Voice edit and meetings send only
+  to the AI setting's model, so each keeps one consent. Each call checks local-only mode, then the
+  consent, against the model that call reaches (`Llm::complete_if`), so a model that moved from this machine to a cloud provider, or between
   providers, gets nothing until the user agrees again: a polish goes in as said with
   `polish_not_allowed`, an edit changes nothing (`not_allowed`), a meeting finishes with no
   summary or commitments (`summary_not_allowed`), and Ask answers that it needs the user's OK. The
   meeting's consent is read when the summary is written, not when the meeting starts.
 - A table the size of ABI 1's still registers an offline engine; newer kinds need the full table.
 
+## The core's own language model (Windows)
+
+Windows has no on-device model the OS provides, so the core runs one itself: a registry row of
+kind language (`RowKind::Language`), Qwen3-4B-Instruct-2507 Q4_K_M on llama.cpp (the same static
+llama.cpp and the same device choice as Qwen3-ASR), downloaded only when the user asks. It fills
+no speech job, so the router never picks it. The Mac lists none: Apple's model does this there.
+
+- **Which model the features use.** The chosen own-key provider first; with none chosen, this
+  model once it is downloaded; else one the shell registered. `llm.choose` `on_device` chooses it
+  outright (local-only mode stays on, no key), and while it is chosen nothing stands in for it.
+  A mode names it `engine:local`, whichever row is installed.
+- **Consent.** Its endpoint is this process, so the on-device consent covers it, the record
+  Apple's model uses; a feature moved to it from a cloud provider sends nothing until the user
+  gives that one tap. The core fails closed without it.
+- **Residency** of its own (`ink_ffi::local`), apart from the speech models', so it never evicts
+  Qwen3-ASR, and behind the model gate, so an update or a removal never touches files under a
+  call. It loads on first use, or at the start of a take that will polish or edit on it under a
+  consent that covers it, and unloads after five idle minutes: one thread, `ink-llm-local`,
+  sleeps until the next unload is due or a take or a call wakes it. Shutdown unloads it.
+- **Context** 8,192 tokens, twice Apple's model's: in 4,096-token windows a 34-minute meeting's
+  first window ran past its answer budget and got no summary. Every answer has a think block at its start taken off (an unclosed one is an error);
+  a row for a hybrid thinking model would also get the empty think block its template writes
+  for `enable_thinking=false` (`ChatQuirks::no_think`). A structured answer is held to one JSON
+  object by a grammar applied only to a token sampled freely that breaks it.
+- **One installed at a time.** Should the registry offer more than one, installing another
+  replaces the one in use once its download has verified (`llm.local.model`), so there is never
+  a moment with none; one a call held then is deleted at the next launch.
+- **Downloads and removal**, for every model: `model.cancel` and `model.remove` run on the
+  screens' thread, so neither waits behind a download on the command thread. Each `model.update`
+  has its own cancel token from when it is queued; a cancelled download keeps its part files for
+  a resume. A removal is refused while a job, a call or an update holds the model, and deletes
+  only the row's own directory, directly inside the models root (a link in its place is
+  refused). Before anything is fetched, the download's remaining bytes plus 1 GiB are checked
+  against the free space where models go (`SystemInfo`: `statfs` on the Mac,
+  `GetDiskFreeSpaceExW` on Windows): `not_enough_space`, and nothing changes.
+
 ## The screens' commands
 
 The screens read and change the library and the permissions through commands too
 ([`inkwell.h`](../core/crates/ink-ffi/include/inkwell.h) lists them): permission checks and
 requests, the open commitments ("owed"), a live meeting's notes, the model catalogue, the user's
-modes, each language-model feature's state and consent (`consent.get`, `consent.allow`), and a
+modes (listed and edited), each language-model feature's state and consent (`consent.get`, `consent.allow`, `consent.revoke`), and a
 whitelist of settings the shell owns (`SHELL_SETTINGS` in
 [`queries.rs`](../core/crates/ink-ffi/src/queries.rs), each with the values it takes):
 `onboarding.done`, `dictation.polish` and `meetings.llm` (only ever set to off: they turn on
 through `consent.allow`), `dictation.key`, `dictation.edit_key`, `dictation.enabled`,
-`meetings.detect`, `meetings.headset_mic`, `llm.local_only`, `retention.days`, `import.key_note`,
+`meetings.calls.default` (`ask`, `always` or `never`), `meetings.detect` (answered for that default:
+below), `audio.input` and `audio.output` (Sound, below), `llm.local_only`, `retention.days`,
+`import.key_note`,
 and the appearance settings: `appearance.mode` (`light`, `dark` or `system`),
 `appearance.dots.light` and `appearance.dots.dark` (a preset from
 [`design/tokens.json`](../design/tokens.json)), `appearance.you.light`, `appearance.them.light`,
 `appearance.you.dark` and `appearance.them.dark` (`preset`, or a `#rrggbb` colour in lowercase),
-`appearance.edge_glow` (`on` or `off`) and `appearance.motion` (`system` or `still`). The core
-does nothing with the appearance settings itself. A setting never set answers `setting.value`
-without a value, and the shell reads it as its default (for appearance, `APPEARANCE_DEFAULTS`:
-`system`, `indigo`, `preset`, `on` and `system`).
+`appearance.edge_glow` (`on` or `off`), `appearance.motion` (`system` or `still`) and
+`appearance.orb` (the main window's orb behind its text, `10` to `100` percent in tens; Windows
+reads it). The core does nothing with the appearance settings itself. A setting never set answers
+`setting.value` without a value, and the shell reads it as its default (for appearance,
+`APPEARANCE_DEFAULTS`: `system`, `indigo`, `preset`, `on`, `system` and `70`).
 
 - They run on their own core thread, `ink-queries`, in order among themselves. The command thread
   can be held for minutes by a model download; a note or a permission card never waits for it.
@@ -322,6 +377,41 @@ without a value, and the shell reads it as its default (for appearance, `APPEARA
   when a screen showing permissions appears, never on a timer.
 - A mode names apps by identity (on macOS, bundle ids, or part of one). The shell shows each as the
   app's name and icon; a raw identity is never shown.
+- **Modes are edited in Settings** (`modes.save`, `modes.delete`, [`modes.rs`](../core/crates/ink-ffi/src/modes.rs)).
+  Dictation and the listing read one document one way (`ModeStore::from_json`): the user's own,
+  else the 0.2 import's, else the built-in default. A save patches the stored document in place,
+  so a field this build does not know survives (0.2's `model`, which named a transcription model,
+  is never read as a language model). The rules are pure (`ModeStore::save`, each refusal with a
+  code) and are checked on what a save changes, so a mode the import brought that breaks one
+  stays editable.
+- **A mode may have its own language model** (`polish_model`): one the core holds, an engine the
+  shell registered (`engine:<id>`) or the chosen own-key provider (`provider:<id>`), and for a
+  provider optionally a model at it (`polish_model_name`: the same client asked for that model,
+  at the same endpoint, so the same consent covers it). It is found again at each take and at
+  the call through the same path as the AI setting's model (`PolishModel`: local-only mode, then
+  the polish consents, checked on the model the call reaches). A save that names the model
+  records where it sends then (`polish_model_to`). The contract: where it sends is recorded only
+  when a save picks another model or name, or confirms the one it has (`polish_model_confirm`,
+  once the user agreed to where it sends now, with that destination as the listing showed it,
+  `polish_model_confirm_to`); a save that sends the same pin back (an editor sends every field)
+  keeps what was recorded. A confirm whose model sends elsewhere by the time the save is read is
+  refused (`destination_changed`): the user agreed to one destination, not to whatever the model
+  reaches now. A save that clears the pin wins over a confirm sent with it. A mode whose model the
+  core does not hold, or that sends anywhere else than recorded (a custom server re-pointed from
+  this machine to another), or whose destination was never recorded, is not polished
+  (`polish_model_missing`; `polish_model_state` `missing`, `moved` or `unrecorded`) until the user
+  confirms it, and never sent to another model: that could be a destination the user did not
+  pick for this mode. A mode on a model no polish consent covers goes in as said
+  (`polish_not_allowed`, naming that model's destination).
+  While the stored modes cannot be read, nothing is polished, a voice command's "toggle polish"
+  included: which model each mode would send to cannot be known. The polish consents are read
+  again at each call, and only one both loaded and still stored counts, so a revoke reaches a take
+  already in flight. A cloud engine the shell registered is an endpoint by its id only, so its
+  consent also holds to the model's name.
+- **Ids and apps.** Every mode has its own id once read (the 0.2 import can give two one id; the
+  second is read as `<id>~2`), and the rules tell modes apart by place. An app is a substring of
+  the frontmost app's identity, so one of a single character or with no letter, or with a
+  control character, is refused when it is given (`app_invalid`).
 - Replies carry the user's words only where the screen asked for them (a commitment's text); a
   note's words are never echoed back, and errors never quote them.
 
@@ -329,9 +419,14 @@ without a value, and the shell reads it as its default (for appearance, `APPEARA
 `dictation.off`) and then lives in the core ([`voice.rs`](../core/crates/ink-ffi/src/voice.rs)):
 
 - **Keys.** The core holds the dictation key and, when one is set, the voice-edit key (two event
-  taps under Accessibility). The shell only stores the choice (`dictation.key`,
-  `dictation.edit_key`); a change rebinds at once. Without Accessibility the answer is
-  `dictation.off` with `needs_accessibility`, never a prompt.
+  taps under Accessibility). Either may be any key the platform can watch: a right-hand modifier
+  (or Fn on the Mac) held on its own, a function key, or modifiers and one key; a chord's hold ends
+  when any part of it is let go of. The platform's parser is the one judge
+  ([`hotkey.rs`](../core/crates/ink-ffi/src/hotkey.rs)): `hotkey.check` asks it about a shortcut
+  the user recorded and answers with its one spelling or why not, and the settings store a key on
+  the same rule. The shell only stores the choice (`dictation.key`, `dictation.edit_key`); a
+  change rebinds at once. Without Accessibility the answer is `dictation.off` with
+  `needs_accessibility`, never a prompt.
 - **The mic.** It opens at the first press, not at launch, and stays open so each take keeps the
   300 ms said before its press; after 1 minute without a take it is let go of (an open input keeps
   the Mac awake and the microphone indicator on). The first take after that starts when the device
@@ -370,6 +465,28 @@ show an empty library.
 - **Words.** These answers carry the library's words (transcripts, notes, summaries, search
   snippets). As with every event that does, they never reach a log.
 
+## Sound
+
+One mic choice serves dictation, meetings and the mic test (`audio.input`: `auto`, or a device's
+id), and on Windows one output choice the far end records (`audio.output`: `default`, or an
+output's id). [`devices.rs`](../core/crates/ink-ffi/src/devices.rs) resolves them;
+[`sound.rs`](../core/crates/ink-ffi/src/sound.rs) runs the rest on one thread, `ink-sound`.
+
+- **The rule.** The chosen device by id; else a connected one with its remembered name and
+  transport (Windows gives a USB mic a new id on another port); else Automatic, the platform's
+  routing (`CaptureControl::automatic_input`), said as `chosen_missing`; else no mic, an error and
+  never a stream of silence. A device is set only while it is connected, and the core remembers
+  its name and transport beside it.
+- **Changes.** The platform tells the core when devices come or go or a default changes
+  (`watch_devices`, OS notifications, never a poll); a burst is read once it has been quiet for
+  300 ms (at most 1 s after it began): `audio.devices_changed`, and dictation's idle mic is let go
+  of when the mic it would open now is another (the next take loses its 300 ms lead). A take in
+  progress finishes on its device; a meeting keeps its mic until that mic goes. A chosen mic that
+  is not connected is said once per spell (`audio.input_fallback`), when a mic opens in its place.
+- **The test** (`audio.test`) opens the chosen mic for up to 15 s and reports its level ten times
+  a second from the band analyzer, ungained; refused while a meeting records, and ended by one
+  that starts. Nothing it hears is kept.
+
 ## Meetings
 
 A meeting records the mic and the far end from this machine (`meeting.start`), or replays two WAV
@@ -377,26 +494,59 @@ files through the same path (`replay_meeting`, architecture rule 7). Commands fo
 their own thread, `ink-meetings`, so a model download on the command thread never delays "Record
 this call"; questions about a live meeting (`meeting.ask`) run on `ink-ask`.
 
-- **Consent.** Detection only offers. An app that has held the microphone for 3 s is offered
-  (`meeting.detected`, the shell's Drop), one at a time; "not this one" lasts until that app
-  releases the microphone. Nothing records until the user says so. A meeting recorded for an app
-  ends 15 s after the app lets go of the microphone; one started with "Record now" ends when it is
-  stopped. The rules are a pure state machine (`ink-ffi/src/detection.rs`); the thread wakes only
+- **Consent, per app.** An app that has held the microphone for 3 s is judged by its call policy
+  (`ink-ffi/src/calls.rs`), which the user chooses in the Drop or in Settings
+  (`meetings.calls.set`), else the default (`meetings.calls.default`, Ask unless set):
+  - **Ask** offers it (`meeting.detected`, the shell's Drop), one at a time; "not this one" lasts
+    until that app releases the microphone.
+  - **Always** records it at once, through the same start as Record, so the recording indicator,
+    the Live screen and the meeting's end are the same; `meeting.started` says `auto`, and the
+    Drop keeps its reminder to tell the others. Only when the app's own sound can be recorded
+    alone: where it cannot (the Mac's tap finds no process for it, Windows hears it by loopback of
+    its output device), the recording would hold everything the computer plays, so it is offered
+    instead and the offer says why. Windows' plan says so before anything opens; the Mac's tap
+    only once opened, and its capture is closed again unstarted. After the user stops one by
+    hand, that call is offered rather than recorded again, until the app lets go.
+  - **Never** neither offers nor records.
+
+  Nothing records without the user's Record or an Always choice the core could read: a stored
+  list it cannot read is set aside, and Always is then Ask; starting it over under a default of
+  Always sets the default to Ask. Apps are keyed by the identity detection reports (bundle id;
+  executable in lowercase on Windows), at most 64, each listed with its name for Settings
+  (`meetings.calls`). The old switch "Offer to record calls" (`meetings.detect`) is the default
+  now: off was migrated to Never at launch, and the setting answers for the default until the
+  shells move. A meeting recorded for an app ends 15 s after the app lets go of the microphone;
+  one started with "Record now" ends when it is stopped. The rules are a pure state machine
+  (`ink-ffi/src/detection.rs`, its decision table in the module docs); the thread wakes only
   while something is pending. The platform's detector polls the audio server once a second while
-  detection is on (`meetings.detect`).
-- **Capture.** On the Mac: the routed mic's own IOProc (the built-in mic with Bluetooth output,
-  unless `meetings.headset_mic`) and a process tap of the meeting's app, else of everything this
-  Mac plays except Inkwell. On Windows: the routed mic (WASAPI), and for the far end process
+  detection listens, which it does while any app could be offered or recorded (a default of Never
+  with nothing chosen is off, as the old switch was).
+- **Stop and delete.** For the first minute of a meeting started here, however it started,
+  `meeting.discard` ends it and deletes it as if never made: no final pass (so nothing reaches a
+  language model), then the store's secure delete of the record and the removal of its audio
+  directory. The intent is written into the crash marker first, so a crash on the way still
+  deletes it at the next launch. After the minute only Stop is left (`delete_window_over`); the
+  record can be deleted from the library once it is finished. A meeting already being finished,
+  or whose worker failed, refuses it at once: which of the user and the worker decides is settled
+  once (`DiscardGate`), so the answer is what happens. A delete granted just before the meeting
+  fails ends with that failure (`meeting.failed`, `meeting.worker_failed`) rather than
+  `meeting.discarded`, and its marker deletes what it had recorded at the next launch.
+- **Capture.** On the Mac: the chosen mic's own IOProc (Sound, below; Automatic is the built-in
+  mic with Bluetooth output) and a process tap of the meeting's app, else of everything this
+  Mac plays except Inkwell. On Windows: the chosen mic (WASAPI), and for the far end process
   loopback of Zoom and the browsers (the app alone) or device loopback of the output any other app
   plays to (everything that device plays, said as such), else of the default output. Device
   loopback moves with the call: the pump asks every 2 s whether its output went or the app plays
   elsewhere, and hands the side's ring to the new source. A side left with no source (it ended by
   itself, or could not be opened again) must deliver from then on, so the watchdog says its
-  silence. `meeting.started` names the title (the calendar's event on now, from the shell), the
-  app and the mic.
+  silence. The mic moves only when it goes: a mic plugged in or made the default mid-call changes
+  nothing, and when the meeting's own mic goes (its source ends by itself) it opens again from the
+  choice as it is then (`meeting.mic_switched`). `meeting.started` names the title (the
+  calendar's event on now, from the shell), the app and the mic.
 - **What it runs on.** The VAD (Silero), loaded at the start; the far end's diarizer (Nemotron),
-  loaded only for the final pass and let go of after it; and the language model the shell
-  registered, for the summary, commitments and Ask, sized to its context (`context_tokens`: the
+  loaded only for the final pass and let go of after it; and the AI setting's language model (the
+  chosen provider, the core's own on Windows, or the one the shell registered), for the summary,
+  commitments and Ask, sized to its context (`context_tokens`: the
   on-device model holds 4,096 tokens, so a long meeting's summary is written in windows cut by
   size and combined in groups). Foundation Models generates structured answers to the request's
   JSON Schema. Any of them missing is said, never guessed around.
@@ -417,7 +567,9 @@ this call"; questions about a live meeting (`meeting.ask`) run on `ink-ask`.
   removed (a record without an end is never swept).
 - **Summaries keep their citations.** Each decision and action is saved with the span of the line
   it cites, so a record shows it; a promise names who it is owed to; a later meeting in which the
-  user says an open promise is already done marks it "looks done" for the user to confirm.
+  user says an open promise is already done marks it "looks done" for the user to confirm. A
+  meeting with no line of at least three words (nothing said, or a noise heard as "Oh.") asks no
+  model: it gets no summary, title or commitments.
 
 ## Testing
 

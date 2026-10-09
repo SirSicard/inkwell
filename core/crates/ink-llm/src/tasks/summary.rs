@@ -261,6 +261,15 @@ pub fn quote_cites(quote: &str, line: &str) -> bool {
     quote_found(quote, line) && quote.split_whitespace().count() >= MIN_QUOTE_WORDS
 }
 
+/// Whether any line of `segments` is long enough for a citation to quote ([`MIN_QUOTE_WORDS`]
+/// words). Without one, no decision or action can stand, and a headline would stand on nothing:
+/// the meeting chain asks no model then.
+pub fn has_citable_line(segments: &[Segment]) -> bool {
+    segments
+        .iter()
+        .any(|s| s.text.split_whitespace().count() >= MIN_QUOTE_WORDS)
+}
+
 /// A finished summary.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SummaryOutcome {
@@ -306,10 +315,11 @@ pub fn summarize(
         );
         (parse_summary(&ask(llm, &request, cancel)?, true)?, 1)
     } else {
+        let labels = transcript::speaker_labels(segments, record.speaker_names);
         let line_len = |i: usize| {
-            segments.get(i).map_or(0, |s| {
-                transcript::render_line(i, s, record.speaker_names).len() + 1
-            })
+            segments
+                .get(i)
+                .map_or(0, |s| transcript::render_line(i, s, &labels).len() + 1)
         };
         let windows = cut_by_size(windows(segments, options), &line_len, options.window_chars);
         let total = windows.len();
@@ -450,12 +460,14 @@ pub fn summarize(
     })
 }
 
+/// The meeting's title, when it has one, and its date. An untitled meeting gets no title line: a
+/// placeholder there ("(untitled)") was copied into the headline, which names the record.
 fn header(record: &RecordContext<'_>) -> String {
-    format!(
-        "Meeting: {}\nDate: {}",
-        record.title.unwrap_or("(untitled)"),
-        record.time.local_date()
-    )
+    let date = format!("Date: {}", record.time.local_date());
+    match record.title {
+        Some(title) => format!("Meeting: {title}\n{date}"),
+        None => date,
+    }
 }
 
 fn summary_request(user: String, max_tokens: u32) -> LlmRequest {

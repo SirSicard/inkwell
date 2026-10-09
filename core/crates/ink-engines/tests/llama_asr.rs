@@ -136,6 +136,7 @@ fn options() -> TranscribeOptions {
         channel: Channel::Mic,
         context: None,
         cancel: CancelToken::new(),
+        live: false,
     }
 }
 

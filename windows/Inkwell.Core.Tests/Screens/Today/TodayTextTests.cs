@@ -40,6 +40,7 @@ public class TodayTextTests
             ["Dictated today · couldn't be counted", "This week · couldn't be counted"],
             TodayText.StatsLines(null, true, null, true, EnGb));
         Assert.Empty(TodayText.StatsLines(null, false, null, false, EnGb));
+        Assert.Equal("Stats ›", TodayText.StatsLink); // the counts lead to Stats
     }
 
     [Fact]

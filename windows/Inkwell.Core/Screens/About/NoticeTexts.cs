@@ -6588,7 +6588,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 """;
 
-    /// <summary>the LICENSE.TXT and THIRD-PARTY-NOTICES.TXT of the .NET 10.0.12 runtime packs (Microsoft.NETCore.App.Runtime.NativeAOT.win-x64, the same files as Microsoft.NETCore.App.Runtime.win-x64 and the ILCompiler packages).</summary>
+    /// <summary>the LICENSE.TXT and THIRD-PARTY-NOTICES.TXT of the .NET 10.0.12 runtime packs (Microsoft.NETCore.App.Runtime.win-x64, the same files as Microsoft.NETCore.App.Runtime.NativeAOT.win-x64 and Microsoft.NETCore.App.Crossgen2.win-x64).</summary>
     internal const string DotnetText = """
 --- LICENSE.TXT ---
 The MIT License (MIT)

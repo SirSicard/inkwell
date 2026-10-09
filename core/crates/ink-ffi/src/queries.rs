@@ -1,6 +1,7 @@
-//! The screens' commands: permissions, what is owed, a live meeting's notes, settings, modes, the
-//! model catalogue, the library's records ([`library`](crate::library)), and Inkwell 0.2's data
-//! ([`import02`](crate::import02)). They run on their own thread, `ink-queries`, in the order they were sent.
+//! The screens' commands: permissions, what is owed, a live meeting's notes, a record's speakers'
+//! names, settings, modes, the model catalogue, the library's records
+//! ([`library`](crate::library)), and Inkwell 0.2's data ([`import02`](crate::import02)). They
+//! run on their own thread, `ink-queries`, in the order they were sent.
 //!
 //! Apart from the command thread on purpose: a model update holds that thread for as long as its
 //! download takes, and a note typed during it, or a permission card the user is looking at, must
@@ -8,8 +9,8 @@
 //! second or so). They may overtake commands queued earlier on the command thread; nothing here
 //! depends on one of those.
 //!
-//! Errors name what failed, never what was said: a note's or a commitment's text reaches the shell
-//! only in the event that answers the command that asked for it (I5).
+//! Errors name what failed, never what was said: a note's or a commitment's text, or a speaker's
+//! name, reaches the shell only in the event that answers the command that asked for it (I5).
 
 use std::collections::BTreeMap;
 use std::io;
@@ -19,11 +20,10 @@ use std::sync::mpsc::{self, Sender};
 use std::thread::{self, JoinHandle};
 
 use ink_core::{
-    Commitment, CommitmentId, NoteId, Permission, PermissionProbe, PermissionState, PlatformError,
-    RecordId, Store,
+    Channel, Commitment, CommitmentId, NoteId, Permission, PermissionProbe, PermissionState,
+    PlatformError, RecordId, SpeakerId, Store,
 };
-use ink_engines::{ModelDir, Os, Route};
-use ink_pipeline::style::Style;
+use ink_engines::{ModelDir, Os, Route, RowKind};
 use serde_json::{Map, Value, json};
 
 use crate::events::{self, event};
@@ -33,10 +33,10 @@ use crate::runtime::Shared;
 /// never runs the tone probe, because the probe would make macOS show its prompt.
 pub const SYSTEM_AUDIO_ASKED_KEY: &str = "permissions.system_audio_asked";
 
-/// The store setting holding the user's modes, as a JSON document:
-/// `{"default_id", "modes": [{"id", "name", "style", "polish_enabled", "remove_fillers", "apps"}]}`
-/// (the shape the 0.2 import writes). Until it is set, `modes.list` reads the imported modes, and
-/// without those the built-in default. The dictation chain reads the same key (S2.7).
+/// The store setting holding the user's modes, as a JSON document (the shape the 0.2 import
+/// writes, read by `ink_pipeline::modes::ModeStore::from_json`). Until it is set, the modes are
+/// the imported ones, and without those the built-in default; the first `modes.save` or
+/// `modes.delete` writes it ([`modes`](crate::modes)). The dictation chain reads the same key.
 pub const MODES_KEY: &str = "dictation.modes";
 
 /// The settings a shell may read and write through `setting.get` and `setting.set`, with the values
@@ -48,11 +48,13 @@ pub const SHELL_SETTINGS: &[(&str, &[&str])] = &[
     // model; the shell shows the two apart. `setting.set` takes only `off` (which withdraws the
     // consent too): polish turns on through `consent.allow` (crate::consent).
     (crate::voice::POLISH_SETTING, &["on", "off"]),
-    // The dictation key and the voice-edit key (S2.7). A change rebinds them at once. The edit key
-    // turns on with its consent through `consent.allow`; `off` withdraws that consent too, and a
-    // key set without one edits nothing (crate::consent).
-    (crate::voice::KEY_SETTING, crate::voice::KEYS),
-    (crate::voice::EDIT_KEY_SETTING, crate::voice::EDIT_KEYS),
+    // The dictation key and the voice-edit key (S2.7): any key this computer can watch, stored in
+    // its one spelling (crate::hotkey). A change rebinds them at once. The edit key turns on with
+    // its consent through `consent.allow`; `off` withdraws that consent too, and a key set without
+    // one edits nothing (crate::consent).
+    (crate::voice::KEY_SETTING, &[ANY_KEY]),
+    (crate::voice::EDIT_KEY_SETTING, &["off", ANY_KEY]),
+    (crate::meeting_keys::KEY_SETTING, &["off", ANY_KEY]),
     // Whether the shell turns dictation on at launch (Settings > Voice). The shell reads it and
     // sends dictation.enable or not; the core does nothing with it itself.
     ("dictation.enabled", &["on", "off"]),
@@ -60,11 +62,30 @@ pub const SHELL_SETTINGS: &[(&str, &[&str])] = &[
     // language model. As for polish, `setting.set` takes only `off` (which withdraws the consent
     // too): it turns on through `consent.allow` (crate::consent).
     (crate::consent::MEETINGS_SETTING, &["on", "off"]),
-    // Whether the app watches for calls and offers to record them (the consent Drop). On unless
-    // turned off; the meetings thread starts or stops detection when it changes.
+    // What happens for apps the user has not chosen for when one takes the mic for a call
+    // (crate::calls): ask (the consent Drop; also when unset), always record, or never. The
+    // meetings thread reads the policies again when it changes.
+    (crate::calls::DEFAULT_KEY, crate::calls::DEFAULT_VALUES),
+    // The reminder to tell the others has been shown during a call its app's Always recorded:
+    // the shells show it on the first such call only. The core does nothing with it.
+    ("meetings.auto_reminder_shown", &["on"]),
+    // "Offer to record calls", which the default replaced: answered for the default until the
+    // shells move to it (off is never; on over never is ask), never stored again.
     (crate::control::DETECT_KEY, &["on", "off"]),
-    // Record the Bluetooth headset's own mic instead of the built-in one (call-quality audio).
-    (crate::control::HEADSET_MIC_KEY, &["on", "off"]),
+    // The mic for dictation, meetings and the mic test (crate::devices): Automatic, or a device
+    // connected when it is set (by the id audio.devices lists). A change lets go of dictation's
+    // idle mic when it is another.
+    (
+        crate::devices::INPUT_KEY,
+        &[crate::devices::AUTO, ANY_DEVICE],
+    ),
+    // The output a meeting's far end is to record (Windows): the default output, or a device
+    // connected when it is set. Only `default` where the platform has no output picker (macOS).
+    // The Windows far end of all output records it (crate::capture's Windows module docs).
+    (
+        crate::devices::OUTPUT_KEY,
+        &[crate::devices::DEFAULT, ANY_DEVICE],
+    ),
     // Local-only mode (architecture rule 6): on unless turned off; while on, a language model
     // that is not on this machine is never called (crate::llms::PolishModel).
     (crate::llms::LOCAL_ONLY_KEY, &["on", "off"]),
@@ -91,10 +112,49 @@ pub const SHELL_SETTINGS: &[(&str, &[&str])] = &[
     // `still` draws the orb and the edge glow without motion; `system` follows the system's
     // reduce-motion setting.
     ("appearance.motion", &["system", "still"]),
+    // How strongly the main window's orb shows behind its text, in percent at rest (live it fades
+    // back to 3/7 of that, as at the default 70). Windows only so far; the Mac reads none.
+    ("appearance.orb", ORB_PERCENTS),
+    // The typing speed the Stats screen measures time saved against (crate::stats): whole words
+    // a minute, 40 unless set.
+    (crate::stats::TYPING_WPM_KEY, &[TYPING_WPM]),
+    // Whether a milestone reached, or a best set, is celebrated (crate::stats). On unless turned
+    // off.
+    (crate::stats::CELEBRATE_KEY, &["on", "off"]),
+    // The weekdays the streak rests on (crate::stats::rest_days): none unless set.
+    (crate::stats::REST_DAYS_KEY, &["none", REST_DAYS]),
+    // Whether the streak shows anywhere: shown unless hidden.
+    (crate::stats::STREAK_KEY, &["shown", "hidden"]),
+    // Whether the share card may carry the heatmap. Off unless turned on; the shells read it.
+    (crate::stats::SHARE_HEATMAP_KEY, &["on", "off"]),
+    // The week whose review the user dismissed, by its first day.
+    (crate::stats::REVIEW_DISMISSED_KEY, &[DATE]),
 ];
+
+/// In a value list of [`SHELL_SETTINGS`]: a device's id as `audio.devices` lists it
+/// ([`crate::devices::is_device_token`]); setting it also checks that it is connected now.
+pub const ANY_DEVICE: &str = "<device>";
+
+/// In a value list of [`SHELL_SETTINGS`]: a typing speed, a whole number of words a minute in
+/// [`crate::stats::TYPING_WPM_RANGE`], written plainly (`40`).
+pub const TYPING_WPM: &str = "<wpm>";
+
+/// In a value list of [`SHELL_SETTINGS`]: ISO weekdays ascending and comma-separated (`6,7`), as
+/// [`crate::stats::rest_days`] reads them.
+pub const REST_DAYS: &str = "<weekdays, e.g. 6,7>";
+
+/// In a value list of [`SHELL_SETTINGS`]: a date, `YYYY-MM-DD`.
+pub const DATE: &str = "<YYYY-MM-DD>";
 
 /// In a value list of [`SHELL_SETTINGS`]: any colour written `#rrggbb`, in lowercase hex.
 pub const HEX_COLOUR: &str = "#rrggbb";
+
+/// In a value list of [`SHELL_SETTINGS`]: any key [`crate::hotkey::stored_value`] takes, which is
+/// stored in its one spelling.
+pub const ANY_KEY: &str = "<key>";
+
+/// The values `appearance.orb` takes: 10 to 100 percent in steps of 10.
+pub const ORB_PERCENTS: &[&str] = &["10", "20", "30", "40", "50", "60", "70", "80", "90", "100"];
 
 /// The dot colour presets, by id: the `presets` of design/tokens.json.
 pub const DOT_PRESETS: &[&str] = &[
@@ -119,7 +179,12 @@ pub const APPEARANCE_DEFAULTS: &[(&str, &str)] = &[
     ("appearance.them.dark", "preset"),
     ("appearance.edge_glow", "on"),
     ("appearance.motion", "system"),
+    ("appearance.orb", "70"),
 ];
+
+/// The longest name `speaker.name` takes, in characters: a person's name, which Ask's transcript
+/// writes before each of their lines.
+pub const MAX_SPEAKER_NAME_CHARS: usize = 80;
 
 /// The most commitments `commitments.list` returns when the command names no limit.
 pub const DEFAULT_COMMITMENTS_LIMIT: usize = 200;
@@ -172,8 +237,32 @@ pub enum Query {
         /// The note.
         note: String,
     },
+    /// `speaker.name`: a far-end speaker of one record named, renamed, or (`None`) cleared.
+    SpeakerName {
+        /// The record.
+        record: String,
+        /// The diarizer's label, as the record's segments carry it.
+        speaker: String,
+        /// The name, trimmed; `None` clears it.
+        name: Option<String>,
+    },
+    /// `record.delete`: one record, whole ([`crate::retention::delete_one`]).
+    RecordDelete {
+        /// The record.
+        record: String,
+    },
     /// `models.list`: the catalogue's models for this OS.
     ModelsList,
+    /// `model.cancel`: stops a model's download, running or queued ([`crate::models::cancel`]).
+    ModelCancel {
+        /// The model being downloaded (`model.update`'s `next`).
+        model: String,
+    },
+    /// `model.remove`: deletes a model's files ([`crate::models::remove`]).
+    ModelRemove {
+        /// The model.
+        model: String,
+    },
     /// `engine.route`: what serves a job now. A router read, so it is here, where a model
     /// download on the command thread never delays it.
     EngineRoute(ink_core::Job),
@@ -189,8 +278,11 @@ pub enum Query {
         /// One of the values it accepts.
         value: String,
     },
-    /// `modes.list`: the user's modes.
-    ModesList,
+    /// `hotkey.check`: whether this computer can watch a key binding ([`crate::hotkey`]).
+    HotkeyCheck {
+        /// The binding, as the shell spelled it.
+        binding: String,
+    },
     /// `dictation.enable`: dictation live, or its settings read and its keys bound again.
     DictationEnable {
         /// The user's UTC offset, for `{date}` and `{time}` in snippets.
@@ -198,18 +290,34 @@ pub enum Query {
     },
     /// `dictation.disable`.
     DictationDisable,
+    /// Ordered after dictation.disable when capturing a shortcut.
+    MeetingShortcutSuspend {
+        /// Whether capture is in progress.
+        suspended: bool,
+    },
     /// `consent.get`: a feature's switch, destination and consent ([`crate::consent::state`]).
     ConsentGet(ink_pipeline::consent::Feature),
     /// `consent.allow`: the user agreed a feature may send where its model goes now.
     ConsentAllow(crate::consent::Allow),
+    /// `consent.revoke`: polish may no longer send to one destination ([`crate::consent::revoke`]).
+    ConsentRevoke(
+        ink_pipeline::consent::Feature,
+        ink_pipeline::consent::LlmConsent,
+    ),
     /// The library's records, a search, one record, or counts ([`library`](crate::library)).
     Library(crate::library::LibraryQuery),
     /// Snippets, voice commands and the import's key note ([`phrases`](crate::phrases)).
     Phrases(crate::phrases::PhrasesQuery),
+    /// Dictation modes: listed, saved and deleted ([`modes`](crate::modes)).
+    Modes(crate::modes::ModesQuery),
     /// Own-key language model providers and their keys ([`cloud`](crate::cloud)).
     Cloud(crate::cloud::CloudQuery),
     /// Inkwell 0.2's data: looked for, or imported ([`import02`](crate::import02)).
     Import02(crate::import02::Import02Query),
+    /// The Stats screen's numbers ([`stats`](crate::stats)).
+    Stats(crate::stats::StatsQuery),
+    /// Settings > Sound: the devices and the mic test ([`sound`](crate::sound)).
+    Sound(crate::sound::SoundQuery),
 }
 
 /// A query with the command's name and id, for its events.
@@ -222,7 +330,7 @@ struct Job {
 /// The fields each query takes besides `cmd` and `id`; `None` when `name` is not a query.
 fn fields(name: &str) -> Option<&'static [&'static str]> {
     Some(match name {
-        "permissions.check" | "models.list" | "modes.list" => &[],
+        "permissions.check" | "models.list" => &[],
         "engine.route" => &["job"],
         "permission.request" => &["permission"],
         "commitments.list" => &["limit"],
@@ -231,12 +339,18 @@ fn fields(name: &str) -> Option<&'static [&'static str]> {
         "note.add" => &["record", "at_ms", "text"],
         "note.update" => &["note", "text"],
         "note.delete" => &["note"],
+        "speaker.name" => &["record", "speaker", "name"],
+        "record.delete" => &["record"],
+        "model.cancel" | "model.remove" => &["model"],
         "setting.get" => &["key"],
         "setting.set" => &["key", "value"],
+        "hotkey.check" => &["binding"],
         "dictation.enable" => &["utc_offset_minutes"],
         "dictation.disable" => &[],
+        "meetings.shortcut.suspend" => &["suspended"],
         "consent.get" => &["feature"],
         "consent.allow" => &["feature", "to", "endpoint", "key"],
+        "consent.revoke" => &["feature", "to", "endpoint"],
         _ => return None,
     })
 }
@@ -273,11 +387,20 @@ pub fn parse(name: &str, v: &Value) -> Option<Result<Query, String>> {
     if let Some(query) = crate::phrases::parse(name, v) {
         return Some(query.map(Query::Phrases));
     }
+    if let Some(query) = crate::modes::parse(name, v) {
+        return Some(query.map(Query::Modes));
+    }
     if let Some(query) = crate::cloud::parse(name, v) {
         return Some(query.map(Query::Cloud));
     }
     if let Some(query) = crate::import02::parse(name, v) {
         return Some(query.map(Query::Import02));
+    }
+    if let Some(query) = crate::stats::parse(name, v) {
+        return Some(query.map(Query::Stats));
+    }
+    if let Some(query) = crate::sound::parse(name, v) {
+        return Some(query.map(Query::Sound));
     }
     let allowed = fields(name)?;
     Some(parse_known(name, allowed, v))
@@ -342,7 +465,25 @@ fn parse_known(name: &str, allowed: &[&str], v: &Value) -> Result<Query, String>
         "note.delete" => Query::NoteDelete {
             note: text("note")?,
         },
+        "speaker.name" => Query::SpeakerName {
+            record: text("record")?,
+            speaker: Some(text("speaker")?)
+                .filter(|s| !s.is_empty())
+                .ok_or_else(|| {
+                    format!("{name}: \"speaker\" is the diarizer's label, never empty")
+                })?,
+            name: speaker_name(name, &text("name")?)?,
+        },
+        "record.delete" => Query::RecordDelete {
+            record: text("record")?,
+        },
         "models.list" => Query::ModelsList,
+        "model.cancel" => Query::ModelCancel {
+            model: text("model")?,
+        },
+        "model.remove" => Query::ModelRemove {
+            model: text("model")?,
+        },
         "engine.route" => Query::EngineRoute(
             events::parse_job(&text("job")?).ok_or_else(|| format!("{name}: unknown job"))?,
         ),
@@ -351,7 +492,15 @@ fn parse_known(name: &str, allowed: &[&str], v: &Value) -> Result<Query, String>
         },
         "setting.set" => {
             let key = shell_setting(name, &text("key")?)?;
-            let value = text("value")?;
+            let mut value = text("value")?;
+            if crate::hotkey::is_key_setting(&key)
+                && (value != "off" || key == crate::voice::KEY_SETTING)
+            {
+                // A key is judged by the platform's own parser and stored in its one spelling;
+                // the refusal says why, in its words.
+                value = crate::hotkey::stored_value(&value)
+                    .map_err(|why| format!("{name}: \"{key}\" can't be \"{value}\": {why}"))?;
+            }
             let accepted = SHELL_SETTINGS
                 .iter()
                 .find(|(k, _)| *k == key)
@@ -376,7 +525,9 @@ fn parse_known(name: &str, allowed: &[&str], v: &Value) -> Result<Query, String>
             }
             Query::SettingSet { key, value }
         }
-        "modes.list" => Query::ModesList,
+        "hotkey.check" => Query::HotkeyCheck {
+            binding: text("binding")?,
+        },
         "dictation.enable" => Query::DictationEnable {
             utc_offset_minutes: match obj.get("utc_offset_minutes") {
                 None => None,
@@ -391,24 +542,20 @@ fn parse_known(name: &str, allowed: &[&str], v: &Value) -> Result<Query, String>
             },
         },
         "dictation.disable" => Query::DictationDisable,
+        "meetings.shortcut.suspend" => Query::MeetingShortcutSuspend {
+            suspended: obj
+                .get("suspended")
+                .and_then(Value::as_bool)
+                .ok_or_else(|| format!("{name}: needs a boolean suspended"))?,
+        },
         "consent.get" => Query::ConsentGet(feature(name, &text("feature")?)?),
+        "consent.revoke" => Query::ConsentRevoke(
+            feature(name, &text("feature")?)?,
+            destination(name, obj, &text)?,
+        ),
         "consent.allow" => {
             let feature = feature(name, &text("feature")?)?;
-            let asked = match text("to")?.as_str() {
-                "on_device" if !obj.contains_key("endpoint") => {
-                    ink_pipeline::consent::LlmConsent::OnDevice
-                }
-                "cloud" => ink_pipeline::consent::LlmConsent::Cloud {
-                    endpoint: text("endpoint")?,
-                    // Not needed to compare: what is recorded is the model's own name.
-                    name: String::new(),
-                },
-                _ => {
-                    return Err(format!(
-                        "{name}: \"to\" is on_device, or cloud with the \"endpoint\" consent.state gave"
-                    ));
-                }
-            };
+            let asked = destination(name, obj, &text)?;
             let key = match obj.get("key") {
                 None => None,
                 Some(_) => Some(text("key")?),
@@ -424,6 +571,50 @@ fn parse_known(name: &str, allowed: &[&str], v: &Value) -> Result<Query, String>
     })
 }
 
+/// A speaker's name as `speaker.name` takes it: trimmed, `None` when nothing is left (cleared).
+/// Refused over two lines or more, or with any other control character (Ask's transcript writes
+/// it before each of their lines, one line per turn), or longer than [`MAX_SPEAKER_NAME_CHARS`]. The error never quotes it.
+fn speaker_name(command: &str, raw: &str) -> Result<Option<String>, String> {
+    let name = raw.trim();
+    // A line or paragraph separator breaks a line as surely as a line feed does.
+    if name
+        .chars()
+        .any(|c| c.is_control() || matches!(c, '\u{2028}' | '\u{2029}'))
+    {
+        return Err(format!(
+            "{command}: \"name\" is one line, without control characters"
+        ));
+    }
+    if name.chars().count() > MAX_SPEAKER_NAME_CHARS {
+        return Err(format!(
+            "{command}: \"name\" is at most {MAX_SPEAKER_NAME_CHARS} characters"
+        ));
+    }
+    Ok((!name.is_empty()).then(|| name.to_owned()))
+}
+
+/// The destination a consent command names: `"to":"on_device"`, or `"to":"cloud"` with the
+/// `"endpoint"` `consent.state` (or `modes.listed`) gave. Its name is not needed to compare: what
+/// is recorded is the model's own.
+fn destination(
+    name: &str,
+    obj: &serde_json::Map<String, Value>,
+    text: &dyn Fn(&str) -> Result<String, String>,
+) -> Result<ink_pipeline::consent::LlmConsent, String> {
+    match text("to")?.as_str() {
+        "on_device" if !obj.contains_key("endpoint") => {
+            Ok(ink_pipeline::consent::LlmConsent::OnDevice)
+        }
+        "cloud" => Ok(ink_pipeline::consent::LlmConsent::Cloud {
+            endpoint: text("endpoint")?,
+            name: String::new(),
+        }),
+        _ => Err(format!(
+            "{name}: \"to\" is on_device, or cloud with the \"endpoint\" consent.state gave"
+        )),
+    }
+}
+
 /// A feature the consent commands serve: one with a switch ([`crate::consent::switch`]).
 fn feature(name: &str, feature: &str) -> Result<ink_pipeline::consent::Feature, String> {
     ink_pipeline::consent::Feature::parse(feature)
@@ -433,7 +624,23 @@ fn feature(name: &str, feature: &str) -> Result<ink_pipeline::consent::Feature, 
 
 /// Whether `allowed`, one entry of a value list in [`SHELL_SETTINGS`], accepts `value`.
 fn accepts(allowed: &str, value: &str) -> bool {
-    if allowed == HEX_COLOUR {
+    if allowed == ANY_DEVICE {
+        crate::devices::is_device_token(value)
+    } else if allowed == ANY_KEY {
+        crate::hotkey::stored_value(value).is_ok()
+    } else if allowed == TYPING_WPM {
+        // Digits only, so the stored text reads back as the number it is ("040" and "+40" are
+        // refused rather than kept in two spellings).
+        !value.starts_with('0')
+            && value.bytes().all(|b| b.is_ascii_digit())
+            && value
+                .parse::<u32>()
+                .is_ok_and(|w| crate::stats::TYPING_WPM_RANGE.contains(&w))
+    } else if allowed == REST_DAYS {
+        crate::stats::rest_days(value).is_some()
+    } else if allowed == DATE {
+        crate::stats::Calendar::parse_date(value).is_some()
+    } else if allowed == HEX_COLOUR {
         // `#` and six lowercase hex digits; the pattern itself is not a colour.
         value.len() == 7
             && value.starts_with('#')
@@ -503,6 +710,37 @@ impl PermissionProbe for NoPermissionProbe {
             "this platform has no permission probe yet",
         ))
     }
+}
+
+/// Names a far-end speaker of `record`, or clears its name. A name goes only to a label the
+/// record's current transcript gives the far end: the mic is the user, never renamed, and a label a
+/// later pass dropped names nobody. A clear needs no such label, so a stale name can still go.
+/// Errors name the record and the label, never the name.
+fn name_speaker(
+    store: &dyn Store,
+    record: &str,
+    speaker: &str,
+    name: Option<&str>,
+) -> Result<(), String> {
+    let id = RecordId(record.to_owned());
+    let label = SpeakerId(speaker.to_owned());
+    let Some(name) = name else {
+        return store
+            .clear_speaker_name(&id, &label)
+            .map_err(|e| e.to_string());
+    };
+    let said = store.segments(&id).map_err(|e| e.to_string())?;
+    if !said
+        .iter()
+        .any(|s| s.channel == Channel::Far && s.speaker.as_ref() == Some(&label))
+    {
+        return Err(format!(
+            "record {record} has no far-end speaker {speaker} in its transcript"
+        ));
+    }
+    store
+        .set_speaker_name(&id, &label, name)
+        .map_err(|e| e.to_string())
 }
 
 /// The thread that runs the queries.
@@ -670,11 +908,63 @@ impl Ctx<'_> {
                 )),
                 Err(e) => fail(e.to_string()),
             },
-            Query::ModelsList => emit(self.catalogue()),
+            Query::SpeakerName {
+                record,
+                speaker,
+                name,
+            } => match name_speaker(store, &record, &speaker, name.as_deref()) {
+                Ok(()) => emit(event(
+                    "speaker.named",
+                    &[
+                        ("record", Some(record.into())),
+                        ("speaker", Some(speaker.into())),
+                        ("named", Some(name.is_some().into())),
+                        ("ref", id.clone().map(Into::into)),
+                    ],
+                )),
+                Err(e) => fail(e),
+            },
+            Query::RecordDelete { record } => {
+                match crate::retention::delete_one(self.shared, &RecordId(record.clone())) {
+                    Ok(deleted) => emit(event(
+                        "record.deleted",
+                        &[
+                            ("record", Some(record.into())),
+                            ("kind", Some(crate::library::kind_name(deleted.kind).into())),
+                            ("audio_left", Some(deleted.audio_left.into())),
+                            ("scrubbed", Some(deleted.scrubbed.into())),
+                            ("ref", id.clone().map(Into::into)),
+                        ],
+                    )),
+                    Err(e) => fail(e),
+                }
+            }
+            Query::ModelsList => emit(self.catalogue(id.as_deref())),
+            Query::ModelCancel { model } => {
+                if let Err((message, code)) = crate::models::cancel(self.shared, &model) {
+                    fail_coded(message, Some(code));
+                }
+            }
+            Query::ModelRemove { model } => {
+                match crate::models::remove(self.shared, &model, id.as_deref()) {
+                    Ok(listed) => emit(listed),
+                    Err((message, code)) => fail_coded(message, code),
+                }
+            }
             Query::EngineRoute(job) => emit(routed(self.shared, job)),
-            Query::SettingGet { key } => match store.setting(&key) {
-                Ok(value) => emit(setting(&key, value)),
-                Err(e) => fail(e.to_string()),
+            Query::SettingGet { key } => match if crate::calls::is_calls_setting(&key) {
+                crate::calls::setting_value(store, &key)
+            } else {
+                store.setting(&key).map_err(|e| e.to_string())
+            } {
+                Ok(value) => {
+                    emit(setting(&key, value));
+                    if key == crate::meeting_keys::KEY_SETTING {
+                        self.shared
+                            .tell_meetings(crate::control::Msg::ShortcutState { id: id.clone() });
+                    }
+                }
+                Err(e) => fail(e),
             },
             Query::SettingSet { key, value } => {
                 match match crate::consent::feature_switched_by(&key) {
@@ -683,21 +973,46 @@ impl Ctx<'_> {
                     Some(feature) if value == "off" => {
                         crate::consent::turn_off(self.shared, feature)
                     }
+                    // A device is checked against those connected now, and remembered.
+                    _ if [crate::devices::INPUT_KEY, crate::devices::OUTPUT_KEY]
+                        .contains(&key.as_str()) =>
+                    {
+                        crate::sound::set_choice(self.shared, &key, &value)
+                    }
+                    _ if key == crate::control::DETECT_KEY => {
+                        crate::calls::set_detect(store, &value)
+                    }
+                    _ if crate::hotkey::is_key_setting(&key) => {
+                        crate::hotkey::unique_setting(store, &key, &value).and_then(|()| {
+                            store.set_setting(&key, &value).map_err(|e| e.to_string())
+                        })
+                    }
                     _ => store.set_setting(&key, &value).map_err(|e| e.to_string()),
                 } {
                     Ok(()) => {
                         if key == crate::llms::LOCAL_ONLY_KEY {
                             self.shared.local_only.set(value != "off");
                         }
-                        if key == crate::control::DETECT_KEY {
-                            self.shared.tell_meetings(crate::control::Msg::Detect {
-                                on: value == "on",
-                                why_off: None,
-                            });
-                        }
+                        let calls = crate::calls::is_calls_setting(&key);
                         let sweep = key == crate::retention::RETENTION_KEY;
                         let switched = crate::consent::feature_switched_by(&key);
                         emit(setting(&key, Some(value)));
+                        if crate::hotkey::is_key_setting(&key) {
+                            self.shared
+                                .tell_meetings(crate::control::Msg::ShortcutReload);
+                        }
+                        if calls {
+                            if key == crate::control::DETECT_KEY {
+                                // The default it set, for a screen that shows the default.
+                                let default = crate::calls::DEFAULT_KEY;
+                                match crate::calls::setting_value(store, default) {
+                                    Ok(v) => emit(setting(default, v)),
+                                    Err(e) => log::warn!("call policies: the default: {e}"),
+                                }
+                            }
+                            self.shared
+                                .tell_meetings(crate::control::Msg::Calls { announce: true });
+                        }
                         if let Some(feature) = switched {
                             emit(crate::consent::state(self.shared, feature, None));
                         }
@@ -707,23 +1022,42 @@ impl Ctx<'_> {
                         if crate::voice::DICTATION_SETTINGS.contains(&key.as_str()) {
                             crate::voice::settings_changed(self.shared);
                         }
+                        if [crate::devices::INPUT_KEY, crate::devices::OUTPUT_KEY]
+                            .contains(&key.as_str())
+                        {
+                            crate::sound::choice_changed(self.shared, &key);
+                        }
                     }
                     Err(e) => fail(e),
                 }
             }
-            Query::ModesList => match modes(store) {
-                Ok(e) => emit(e),
-                Err(e) => fail(e),
-            },
+            Query::HotkeyCheck { binding } => emit(crate::hotkey::checked(
+                &binding,
+                crate::hotkey::check(&binding),
+                id.as_deref(),
+            )),
             Query::DictationEnable { utc_offset_minutes } => {
                 crate::voice::enable(self.shared, self.models, utc_offset_minutes, id.as_deref())
             }
             Query::DictationDisable => crate::voice::disable(self.shared, id.as_deref()),
+            Query::MeetingShortcutSuspend { suspended } => {
+                self.shared
+                    .tell_meetings(crate::control::Msg::ShortcutSuspend {
+                        id: id.clone(),
+                        suspended,
+                    })
+            }
             Query::ConsentGet(feature) => {
                 emit(crate::consent::state(self.shared, feature, id.as_deref()))
             }
             Query::ConsentAllow(asked) => {
                 match crate::consent::allow(self.shared, &asked, id.as_deref()) {
+                    Ok(e) => emit(e),
+                    Err(e) => fail(e),
+                }
+            }
+            Query::ConsentRevoke(feature, asked) => {
+                match crate::consent::revoke(self.shared, feature, &asked, id.as_deref()) {
                     Ok(e) => emit(e),
                     Err(e) => fail(e),
                 }
@@ -747,9 +1081,32 @@ impl Ctx<'_> {
                     Err(e) => fail_coded(e.message, e.code),
                 }
             }
+            Query::Modes(query) => {
+                let saves = query.saves();
+                match crate::modes::answer(self.shared, query, id.as_deref()) {
+                    Ok(e) => {
+                        emit(e);
+                        // A running dictation takes the change at once (a deleted mode's pin too).
+                        if saves {
+                            crate::voice::settings_changed(self.shared);
+                        }
+                    }
+                    Err(e) => fail_coded(e.message, e.code),
+                }
+            }
             Query::Cloud(query) => match crate::cloud::answer(self.shared, query, id.as_deref()) {
                 Ok(Some(e)) => emit(e),
                 // llm.test: the test thread answers.
+                Ok(None) => {}
+                Err(e) => fail(e),
+            },
+            Query::Stats(query) => match crate::stats::answer(self.shared, query, id.as_deref()) {
+                Ok(e) => emit(e),
+                Err(e) => fail(e),
+            },
+            Query::Sound(query) => match crate::sound::answer(self.shared, query, id.as_deref()) {
+                Ok(Some(e)) => emit(e),
+                // audio.test, audio.test_stop: the sound thread answers.
                 Ok(None) => {}
                 Err(e) => fail(e),
             },
@@ -759,9 +1116,28 @@ impl Ctx<'_> {
                 let import = self.shared.import02.get();
                 match crate::import02::answer(import, query, id.as_deref()) {
                     Ok(e) => {
+                        // Dictations are all that milestones count of an import.
+                        let dictations = e
+                            .get("counts")
+                            .and_then(|c| c.get("dictations"))
+                            .and_then(Value::as_u64)
+                            .unwrap_or(0);
+                        // The imported words are history: the next milestone check notes what
+                        // they reach without celebrating it. Set before the answer goes out, so a
+                        // check the shell sends on it finds the flag; only when words came over,
+                        // so an empty import never swallows a milestone reached since. Not in the
+                        // import's transaction: a failure here (logged) only costs a celebration
+                        // the import did not earn.
+                        if query.imports()
+                            && dictations > 0
+                            && let Err(err) =
+                                store.set_setting(crate::stats::MILESTONES_AFRESH_KEY, "yes")
+                        {
+                            log::warn!("import: milestones could not be noted afresh: {err}");
+                        }
                         emit(e);
-                        // A running dictation takes the imported key and lists at once.
                         if query.imports() {
+                            // A running dictation takes the imported key and lists at once.
                             crate::voice::settings_changed(self.shared);
                         }
                     }
@@ -786,31 +1162,53 @@ impl Ctx<'_> {
         )
     }
 
-    /// `models.listed`: every registry model this OS runs, with whether it is installed.
-    fn catalogue(&self) -> Value {
-        let os = Os::current();
-        let models: Vec<Value> = self
-            .shared
-            .registry
-            .rows()
-            .iter()
-            .filter(|row| os.is_some_and(|os| row.runs_on(os)))
-            .map(|row| {
-                json!({
-                    "id": row.id,
-                    "licence": row.licence,
-                    "size_bytes": row.total_size(),
-                    "installed": self.models.is_installed(row),
-                    "jobs": row
-                        .scores
-                        .iter()
-                        .map(|s| json!({"job": events::job(s.job), "wer": s.wer}))
-                        .collect::<Vec<_>>(),
-                })
-            })
-            .collect();
-        event("models.listed", &[("models", Some(Value::Array(models)))])
+    /// `models.listed`: every registry model this OS runs, with whether it is installed, and the
+    /// free space where models go.
+    fn catalogue(&self, reference: Option<&str>) -> Value {
+        catalogue(self.shared, self.models, reference)
     }
+}
+
+/// **Worker.** `models.listed`: every registry model this OS runs, with whether it is installed
+/// in `models`, what it is for (a language model with its name), and the free space where models
+/// go.
+pub(crate) fn catalogue(shared: &Shared, models: &ModelDir, reference: Option<&str>) -> Value {
+    let os = Os::current();
+    let list: Vec<Value> = shared
+        .registry
+        .rows()
+        .iter()
+        .filter(|row| os.is_some_and(|os| row.runs_on(os)))
+        .map(|row| {
+            let mut entry = json!({
+                "id": row.id,
+                "kind": if crate::models::is_language(row) { "language" } else { "speech" },
+                "licence": row.licence,
+                "size_bytes": row.total_size(),
+                "installed": models.is_installed(row),
+                "jobs": row
+                    .scores
+                    .iter()
+                    .map(|s| json!({"job": events::job(s.job), "wer": s.wer}))
+                    .collect::<Vec<_>>(),
+            });
+            if let RowKind::Language(language) = &row.kind {
+                entry["name"] = language.name.as_str().into();
+            }
+            entry
+        })
+        .collect();
+    event(
+        "models.listed",
+        &[
+            ("models", Some(Value::Array(list))),
+            (
+                "free_bytes",
+                crate::models::free_bytes(shared).map(Into::into),
+            ),
+            ("ref", reference.map(Into::into)),
+        ],
+    )
 }
 
 /// `setting.value`.
@@ -931,80 +1329,6 @@ fn owed(
     Value::Object(item)
 }
 
-/// `modes.listed`, from [`MODES_KEY`], else the modes the 0.2 import brought, else the built-in
-/// default. A stored document that cannot be read is an error, never quietly the default.
-fn modes(store: &dyn Store) -> Result<Value, String> {
-    let stored = match store.setting(MODES_KEY).map_err(|e| e.to_string())? {
-        Some(doc) => Some(doc),
-        None => store
-            .setting(ink_store::import::MODES_KEY)
-            .map_err(|e| e.to_string())?,
-    };
-    let (default_id, modes) = match stored {
-        Some(doc) => read_modes(&doc)?,
-        None => {
-            // The same default dictation writes in (polished whenever the switch is on).
-            let mode = crate::voice::default_modes().modes.remove(0);
-            (
-                mode.id.clone(),
-                vec![json!({
-                    "id": mode.id,
-                    "name": mode.name,
-                    "style": mode.style.as_str(),
-                    "polish": mode.polish_enabled,
-                    "remove_fillers": mode.remove_fillers,
-                    "apps": mode.apps,
-                })],
-            )
-        }
-    };
-    Ok(event(
-        "modes.listed",
-        &[
-            ("default_id", Some(default_id.into())),
-            ("modes", Some(Value::Array(modes))),
-        ],
-    ))
-}
-
-fn read_modes(doc: &str) -> Result<(String, Vec<Value>), String> {
-    const UNREADABLE: &str = "the stored modes cannot be read";
-    let v: Value = serde_json::from_str(doc).map_err(|_| UNREADABLE.to_owned())?;
-    let default_id = v
-        .get("default_id")
-        .and_then(Value::as_str)
-        .ok_or(UNREADABLE)?
-        .to_owned();
-    let list = v.get("modes").and_then(Value::as_array).ok_or(UNREADABLE)?;
-    let mut out = Vec::with_capacity(list.len());
-    for m in list {
-        let s = |k: &str| m.get(k).and_then(Value::as_str);
-        let flag = |k: &str, default: bool| match m.get(k) {
-            None => Some(default),
-            Some(b) => b.as_bool(),
-        };
-        let apps: Vec<&str> = match m.get("apps") {
-            None => Vec::new(),
-            Some(Value::Array(apps)) => apps
-                .iter()
-                .map(Value::as_str)
-                .collect::<Option<_>>()
-                .ok_or(UNREADABLE)?,
-            Some(_) => return Err(UNREADABLE.into()),
-        };
-        out.push(json!({
-            "id": s("id").ok_or(UNREADABLE)?,
-            "name": s("name").ok_or(UNREADABLE)?,
-            // A style this build does not know is shown as such, never as another style.
-            "style": s("style").and_then(Style::parse).map_or("other", Style::as_str),
-            "polish": flag("polish_enabled", false).ok_or(UNREADABLE)?,
-            "remove_fillers": flag("remove_fillers", true).ok_or(UNREADABLE)?,
-            "apps": apps,
-        }));
-    }
-    Ok((default_id, out))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1040,6 +1364,34 @@ mod tests {
             }))
         );
         assert_eq!(
+            p(r#"{"cmd":"speaker.name","record":"r","speaker":"spk1","name":" Robin\t"}"#),
+            Some(Ok(Query::SpeakerName {
+                record: "r".into(),
+                speaker: "spk1".into(),
+                name: Some("Robin".into())
+            }))
+        );
+        assert_eq!(
+            p(r#"{"cmd":"speaker.name","record":"r","speaker":"spk1","name":"  "}"#),
+            Some(Ok(Query::SpeakerName {
+                record: "r".into(),
+                speaker: "spk1".into(),
+                name: None
+            })),
+            "nothing left once trimmed: cleared"
+        );
+        let longest = "é".repeat(MAX_SPEAKER_NAME_CHARS);
+        assert!(
+            matches!(
+                parse(
+                    "speaker.name",
+                    &json!({"cmd": "speaker.name", "record": "r", "speaker": "spk1", "name": longest})
+                ),
+                Some(Ok(_))
+            ),
+            "counted in characters, not bytes"
+        );
+        assert_eq!(
             p(r#"{"cmd":"setting.set","key":"dictation.polish","value":"off"}"#),
             Some(Ok(Query::SettingSet {
                 key: "dictation.polish".into(),
@@ -1073,6 +1425,34 @@ mod tests {
             p(r#"{"cmd":"consent.get","feature":"edit"}"#),
             Some(Ok(Query::ConsentGet(Feature::Edit)))
         );
+        assert_eq!(
+            p(
+                r#"{"cmd":"consent.revoke","feature":"polish","to":"cloud","endpoint":"shell engine x"}"#
+            ),
+            Some(Ok(Query::ConsentRevoke(
+                Feature::Polish,
+                LlmConsent::Cloud {
+                    endpoint: "shell engine x".into(),
+                    name: String::new()
+                }
+            )))
+        );
+        assert_eq!(
+            p(r#"{"cmd":"consent.revoke","feature":"polish","to":"on_device"}"#),
+            Some(Ok(Query::ConsentRevoke(
+                Feature::Polish,
+                LlmConsent::OnDevice
+            )))
+        );
+        for bad in [
+            r#"{"cmd":"consent.revoke","feature":"polish"}"#,
+            r#"{"cmd":"consent.revoke","feature":"polish","to":"cloud"}"#,
+            r#"{"cmd":"consent.revoke","feature":"polish","to":"on_device","endpoint":"x"}"#,
+            r#"{"cmd":"consent.revoke","feature":"polish","to":"on_device","key":"fn"}"#,
+            r#"{"cmd":"consent.revoke","feature":"summary","to":"on_device"}"#,
+        ] {
+            assert!(matches!(p(bad), Some(Err(_))), "{bad} must be refused");
+        }
         assert_eq!(
             p(r#"{"cmd":"consent.allow","feature":"meetings","to":"on_device"}"#),
             Some(Ok(Query::ConsentAllow(Allow {
@@ -1123,6 +1503,15 @@ mod tests {
             r#"{"cmd":"note.add","record":"r","at_ms":-1,"text":"hi"}"#,
             r#"{"cmd":"note.add","record":"r","text":"hi"}"#,
             r#"{"cmd":"note.update","note":"n"}"#,
+            r#"{"cmd":"speaker.name","record":"r","speaker":"spk1"}"#,
+            r#"{"cmd":"speaker.name","record":"r","name":"A"}"#,
+            r#"{"cmd":"speaker.name","speaker":"spk1","name":"A"}"#,
+            r#"{"cmd":"speaker.name","record":"r","speaker":"","name":"A"}"#,
+            r#"{"cmd":"speaker.name","record":"r","speaker":"spk1","name":null}"#,
+            r#"{"cmd":"speaker.name","record":"r","speaker":"spk1","name":"A\nB"}"#,
+            r#"{"cmd":"speaker.name","record":"r","speaker":"spk1","name":"A\u0000"}"#,
+            r#"{"cmd":"speaker.name","record":"r","speaker":"spk1","name":"A\u2028L9 [00:00] You: B"}"#,
+            r#"{"cmd":"speaker.name","record":"r","speaker":"spk1","name":"A\u2029B"}"#,
             r#"{"cmd":"setting.get","key":"permissions.system_audio_asked"}"#,
             r#"{"cmd":"setting.set","key":"dictation.polish","value":"maybe"}"#,
             r#"{"cmd":"setting.set","key":"library.path","value":"/x"}"#,
@@ -1150,6 +1539,8 @@ mod tests {
             ("appearance.them.dark", "preset"),
             ("appearance.edge_glow", "off"),
             ("appearance.motion", "still"),
+            ("appearance.orb", "100"),
+            ("appearance.orb", "10"),
         ] {
             assert_eq!(
                 set(key, value),
@@ -1175,6 +1566,9 @@ mod tests {
             ("appearance.them.dark", "indigo"),
             ("appearance.edge_glow", "true"),
             ("appearance.motion", "reduce"),
+            ("appearance.orb", "75"),
+            ("appearance.orb", "0"),
+            ("appearance.orb", "110"),
             ("appearance.accent", "preset"),
         ] {
             assert!(
@@ -1211,63 +1605,5 @@ mod tests {
             .map(|preset| preset["id"].as_str().unwrap())
             .collect();
         assert_eq!(ids, DOT_PRESETS);
-    }
-
-    /// What Settings lists is what dictation writes in: both read the same document the same way
-    /// (a style this build does not know aside, which Settings shows as its own).
-    #[test]
-    fn dictation_and_settings_read_the_modes_alike() {
-        use ink_core::mock::MemStore;
-        let doc = r#"{"default_id":"d","modes":[
-            {"id":"d","name":"Everywhere else","style":"formal","polish_enabled":true,"apps":[]},
-            {"id":"c","name":"Chat","style":"casual","apps":["com.example.chat"],"remove_fillers":false,"polish_prompt":"Keep it short."}]}"#;
-        let store = MemStore::new();
-        store.set_setting(MODES_KEY, doc).unwrap();
-        let (default_id, listed) = read_modes(doc).unwrap();
-        let used = crate::voice::load_modes(&store).unwrap();
-        assert_eq!(used.default_id, default_id);
-        assert_eq!(used.modes.len(), listed.len());
-        for (mode, shown) in used.modes.iter().zip(&listed) {
-            assert_eq!(shown["id"], mode.id.as_str());
-            assert_eq!(shown["name"], mode.name.as_str());
-            assert_eq!(shown["style"], mode.style.as_str());
-            assert_eq!(shown["polish"], mode.polish_enabled);
-            assert_eq!(shown["remove_fillers"], mode.remove_fillers);
-            assert_eq!(shown["apps"], json!(mode.apps));
-        }
-        assert_eq!(used.modes[1].polish_prompt, "Keep it short.");
-        // Nothing stored: the default mode, polished whenever the switch is on, in both.
-        let empty = MemStore::new();
-        assert!(crate::voice::load_modes(&empty).unwrap().modes[0].polish_enabled);
-        let listed = modes(&empty).unwrap();
-        assert_eq!(listed["modes"][0]["polish"], true);
-        // A damaged document is an error in both, never quietly the default.
-        store.set_setting(MODES_KEY, "not json").unwrap();
-        assert!(crate::voice::load_modes(&store).is_err());
-        assert!(modes(&store).is_err());
-    }
-
-    #[test]
-    fn stored_modes_are_read_and_a_damaged_document_is_an_error() {
-        let doc = r#"{"default_id":"d","modes":[
-            {"id":"d","name":"Everywhere else","style":"formal","polish_enabled":true,"apps":[]},
-            {"id":"c","name":"Chat","style":"casual","apps":["com.example.chat"],"remove_fillers":false},
-            {"id":"x","name":"Odd","style":"shouting"}]}"#;
-        let (default_id, modes) = read_modes(doc).unwrap();
-        assert_eq!(default_id, "d");
-        assert_eq!(modes[0]["polish"], true);
-        assert_eq!(modes[0]["remove_fillers"], true, "the 0.2 default");
-        assert_eq!(modes[1]["apps"], json!(["com.example.chat"]));
-        assert_eq!(modes[1]["polish"], false);
-        assert_eq!(modes[2]["style"], "other");
-        for bad in [
-            "not json",
-            r#"{"modes":[]}"#,
-            r#"{"default_id":"d","modes":[{"name":"x","style":"formal"}]}"#,
-            r#"{"default_id":"d","modes":[{"id":"x","name":"x","apps":[3]}]}"#,
-            r#"{"default_id":"d","modes":[{"id":"x","name":"x","polish_enabled":"yes"}]}"#,
-        ] {
-            assert!(read_modes(bad).is_err(), "{bad}");
-        }
     }
 }

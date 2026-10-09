@@ -506,6 +506,49 @@ mod tests {
         );
     }
 
+    /// A chord through the hold, as the core hears it: pressed when the whole chord is down,
+    /// released when any part of it comes up (here its modifier, before its key).
+    #[test]
+    fn a_chord_reaches_the_core_as_one_press_and_one_release() {
+        let (sink, got) = sink(|_| false);
+        let panics = Arc::new(AtomicU64::new(0));
+        let binding = Binding::parse("ctrl+shift+space").expect("valid");
+        let hold = Hold::new(binding, sink, panics);
+        let down = |autorepeat, flags| TapInput::KeyDown {
+            keycode: keycode::SPACE,
+            flags,
+            autorepeat,
+        };
+        let both = flag::CONTROL | flag::SHIFT;
+        assert!(hold.on(down(false, both), AT).swallow);
+        assert!(hold.on(down(true, both), AT).swallow);
+        let control_up = TapInput::FlagsChanged {
+            keycode: 0x3B,
+            flags: flag::SHIFT,
+        };
+        assert!(
+            !hold.on(control_up, AT).swallow,
+            "the app's modifier change"
+        );
+        assert!(hold.on(down(true, flag::SHIFT), AT).swallow);
+        assert!(
+            hold.on(
+                TapInput::KeyUp {
+                    keycode: keycode::SPACE
+                },
+                AT
+            )
+            .swallow
+        );
+        assert_eq!(
+            *got.lock().expect("unpoisoned"),
+            [
+                HotkeyEvent::Pressed { at_ns: 42 },
+                HotkeyEvent::Released { at_ns: 42 }
+            ]
+        );
+    }
+
     /// A panic outside the sink (in this crate's own callback code) is caught by the callback's
     /// guard; recovering from it resets the hold and tells the core, like a sink panic.
     #[test]

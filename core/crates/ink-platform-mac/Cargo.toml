@@ -66,6 +66,9 @@ objc2-core-audio-types = { version = "0.3.2", default-features = false, features
 block2 = { version = "0.6.2", default-features = false, features = ["std"] }
 # The realtime guard seam (I4) and, in the probe, the capture ring the IOProcs push into.
 ink-audio = { path = "../ink-audio" }
+# `statfs` for the free disk space (src/system.rs). MIT OR Apache-2.0;
+# already in the tree.
+libc = "0.2.189"
 
 # The input checklist binary checks that the main run loop is serving (the pasteboard promise is
 # answered there) by dispatching to it.

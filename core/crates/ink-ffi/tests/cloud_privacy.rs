@@ -95,7 +95,7 @@ fn neither_the_key_nor_the_words_reach_a_log_an_event_or_an_error() {
         rig.net.set(answer);
         let got = Consented {
             inner: llm.as_ref(),
-            consent: allowed.as_ref(),
+            consents: &allowed,
         }
         .complete(&request, &CancelToken::new());
         if let Err(e) = got {

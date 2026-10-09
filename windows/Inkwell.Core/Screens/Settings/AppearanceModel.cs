@@ -47,6 +47,7 @@ public sealed class AppearanceModel(Action<CoreCommand> send, ScreenLog? log = n
         ShellSetting.AppearanceThemDark,
         ShellSetting.AppearanceEdgeGlow,
         ShellSetting.AppearanceMotion,
+        ShellSetting.AppearanceOrb,
     ];
 
     /// <summary>The ids its setting commands carry.</summary>
@@ -72,6 +73,15 @@ public sealed class AppearanceModel(Action<CoreCommand> send, ScreenLog? log = n
     public bool EdgeGlow { get; private set; } = true;
 
     public AppearanceMotion Motion { get; private set; } = AppearanceMotion.System;
+
+    /// <summary>The orb behind the window's text, unless set: 70 %, the strength every text was checked against.</summary>
+    public const int OrbDefault = 70;
+
+    /// <summary>The weakest and strongest the orb may be set, and the step between.</summary>
+    public const int OrbMinimum = 10, OrbMaximum = 100, OrbStep = 10;
+
+    /// <summary>How strongly the window's orb shows behind its text at rest, in percent (10 to 100 in tens).</summary>
+    public int OrbStrength { get; private set; } = OrbDefault;
 
     /// <summary>A read or a save failed and the store has not answered for that setting since (Settings says <see cref="FailedText"/>).</summary>
     public bool Failed => failedKeys.Count > 0;
@@ -171,6 +181,23 @@ public sealed class AppearanceModel(Action<CoreCommand> send, ScreenLog? log = n
         Set(ShellSetting.AppearanceEdgeGlow, on ? "on" : "off");
     }
 
+    /// <summary>The orb's strength, rounded to the nearest step and held in 10 to 100.</summary>
+    public void SetOrbStrength(double percent)
+    {
+        var stepped = OrbStepped(percent);
+        if (OrbStrength == stepped)
+        {
+            return;
+        }
+        OrbStrength = stepped;
+        Set(ShellSetting.AppearanceOrb, stepped.ToString(System.Globalization.CultureInfo.InvariantCulture));
+    }
+
+    /// <summary><paramref name="percent"/> at the nearest step, in 10 to 100 (the default for a value that is no number).</summary>
+    public static int OrbStepped(double percent) => double.IsFinite(percent)
+        ? Math.Clamp((int)Math.Round(percent / OrbStep, MidpointRounding.AwayFromZero) * OrbStep, OrbMinimum, OrbMaximum)
+        : OrbDefault;
+
     public void SetMotion(AppearanceMotion motion)
     {
         if (Motion == motion)
@@ -218,7 +245,7 @@ public sealed class AppearanceModel(Action<CoreCommand> send, ScreenLog? log = n
     /// <summary>A value from the store; anything this shell cannot read is the default. True when it changed something.</summary>
     private bool Take(string key, string? value)
     {
-        var before = (Mode, DotsLight, DotsDark, YouLight, ThemLight, YouDark, ThemDark, EdgeGlow, Motion);
+        var before = (Mode, DotsLight, DotsDark, YouLight, ThemLight, YouDark, ThemDark, EdgeGlow, Motion, OrbStrength);
         switch (key)
         {
             case "appearance.mode":
@@ -253,10 +280,17 @@ public sealed class AppearanceModel(Action<CoreCommand> send, ScreenLog? log = n
             case "appearance.motion":
                 Motion = value == "still" ? AppearanceMotion.Still : AppearanceMotion.System;
                 break;
+            case "appearance.orb":
+                // Only a value the core takes (10 to 100 in tens); anything else is the default.
+                OrbStrength = int.TryParse(value, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var percent)
+                    && percent == OrbStepped(percent)
+                    ? percent
+                    : OrbDefault;
+                break;
             default:
                 return false;
         }
-        return before != (Mode, DotsLight, DotsDark, YouLight, ThemLight, YouDark, ThemDark, EdgeGlow, Motion);
+        return before != (Mode, DotsLight, DotsDark, YouLight, ThemLight, YouDark, ThemDark, EdgeGlow, Motion, OrbStrength);
     }
 
     private void SetColour(bool dark, bool you, GlowRgb? colour)

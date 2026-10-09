@@ -2,7 +2,7 @@ name: Windows release
 
 # Releases the Windows app (docs/RELEASING.md), unsigned for now: no code signing yet, and the
 # homepage tells people how to get past SmartScreen and check the download. x64 only: 1.0 ships no
-# ARM64 build. On a v1.X.Y tag: build the core with its engines and the app (NativeAOT), check that
+# ARM64 build. On a v1.X.Y tag: build the core with its engines and the app (ReadyToRun), check that
 # neither needs anything a PC may lack (the Vulkan driver, Windows' own older ONNX Runtime, a Visual
 # C++ runtime other than the one beside the app), pack the installer and the update feed with
 # Velopack, and write their SHA-256s (win-release-build.yml); then draft the GitHub release holding

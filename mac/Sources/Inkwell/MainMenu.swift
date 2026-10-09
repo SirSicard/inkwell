@@ -173,6 +173,8 @@ final class MenuActions: NSObject, NSMenuItemValidation {
 
     @objc func showShortcuts(_ sender: Any?) {
         let alert = NSAlert()
+        // An app-modal alert has no window to follow: it takes the mode's appearance itself.
+        alert.window.appearance = screens.theme.appearance
         alert.messageText = "Keyboard Shortcuts"
         let key = DictationModel.key(screens.dictation.key)?.name ?? screens.dictation.key
         alert.informativeText = """

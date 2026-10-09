@@ -30,7 +30,8 @@ enum Says {
     Unavailable,
     /// Nothing, ever: a hung model.
     Never,
-    /// "Polished take N." for its Nth request, after `SLOW`: a cold but working model.
+    /// "Synthetic words, take N." for its Nth request, after `SLOW`: a cold but working model.
+    /// A cleanup of what was said, as polish's answer must be (the take says "synthetic words").
     Slow,
 }
 
@@ -80,7 +81,10 @@ unsafe extern "C" fn generate(ctx: *mut c_void, call: u64, request: *const c_cha
             r#"{"error":{"kind":"unavailable","code":2,"message":"synthetic words"}}"#.to_owned(),
             None,
         ),
-        Says::Slow => (format!(r#"{{"text":"Polished take {n}."}}"#), Some(SLOW)),
+        Says::Slow => (
+            format!(r#"{{"text":"Synthetic words, take {n}."}}"#),
+            Some(SLOW),
+        ),
     };
     // Answered from a thread of the engine's own, as a Swift Task would.
     std::thread::spawn(move || {
@@ -191,7 +195,8 @@ fn dictation_polish_goes_to_the_registered_model_and_never_fakes_an_answer() {
     let platform = Arc::new(MockPlatform::new());
     let mut settings = DictationSettings::default();
     settings.modes.modes[0].polish_enabled = true;
-    settings.polish_consent = Some(LlmConsent::OnDevice);
+    settings.polish_consents = vec![LlmConsent::OnDevice];
+    store_polish_consents(&core, &settings.polish_consents);
     let inbox = core
         .start_dictation(DictationParts {
             inserter: platform.clone(),
@@ -308,8 +313,9 @@ fn polishing(
     let platform = Arc::new(MockPlatform::new());
     let mut settings = DictationSettings::default();
     settings.modes.modes[0].polish_enabled = true;
-    settings.polish_consent = Some(LlmConsent::OnDevice);
+    settings.polish_consents = vec![LlmConsent::OnDevice];
     settings.polish_budget = budget;
+    store_polish_consents(&core, &settings.polish_consents);
     let inbox = core
         .start_dictation(DictationParts {
             inserter: platform.clone(),
@@ -438,7 +444,10 @@ fn a_press_while_polish_runs_leaves_that_take_polished_and_is_processed_after_it
         .iter()
         .map(|s| s.trim().to_owned())
         .collect();
-    assert_eq!(inserted, ["Polished take 1.", "Polished take 2."]);
+    assert_eq!(
+        inserted,
+        ["Synthetic words, take 1.", "Synthetic words, take 2."]
+    );
     assert_eq!(
         model.cancels.load(Ordering::SeqCst),
         0,
@@ -478,10 +487,11 @@ fn dictation_polish_never_calls_a_model_that_is_not_local_while_local_only_is_on
     let mut settings = DictationSettings::default();
     settings.modes.modes[0].polish_enabled = true;
     // The user agreed to this provider: what refuses it here is local-only mode alone.
-    settings.polish_consent = Some(LlmConsent::Cloud {
+    settings.polish_consents = vec![LlmConsent::Cloud {
         endpoint: "shell engine remote-model".into(),
         name: "remote".into(),
-    });
+    }];
+    store_polish_consents(&core, &settings.polish_consents);
     let inbox = core
         .start_dictation(DictationParts {
             inserter: platform.clone(),

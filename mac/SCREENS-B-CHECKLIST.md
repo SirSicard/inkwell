@@ -28,22 +28,52 @@ the real core.
 - [ ] A fresh library opens the first-run sheet over the window: five steps shown as dots.
 - [ ] Permissions step: four cards, "Hear you", "Hear the others", "Type for you", "Know your
       meetings", each with its state. Nothing is asked for until you press Allow.
-- [ ] Models step (it downloads about 3 GB: only with your OK, into the scratch library's own
-      models folder): each model not on this Mac with its licence, size and where it comes from
-      (huggingface.co; Silero VAD from raw.githubusercontent.com), and the total. Nothing is fetched until you
-      press Download (Activity Monitor > Network: Inkwell receives nothing before it). Then one
-      model at a time, smallest first, with its bar, the others "Waiting". Continue works at once,
-      and the downloads keep going through the rest of the first run and after it.
-- [ ] Once Parakeet is in, Settings > Models reads Parakeet TDT v3 for Live words without a
-      restart, and dictating shows live words in the Drop; once Qwen3-ASR is in, Dictation reads
-      Qwen3-ASR 1.7B, and the first dictation after it is as quick as the next (it is loaded when
-      its download ends, not by that take).
-- [ ] A download that fails (turn Wi-Fi off while one runs): its row says "Couldn't download it"
+- [ ] Models step (Download fetches about 484 MB: only with your OK, into the scratch library's
+      own models folder): three choices, no scroll bar and nothing clipped. "Dictation, live words
+      and meeting transcripts" (484 MB) is ticked and cannot be unticked; "Fewer mistakes" (+2.5 GB,
+      about a third fewer wrong words) and "Tell the people on the call apart" (+107 MB, Speaker 1,
+      Speaker 2 instead of "Them") are unticked. Under each, its models with licence, size and host
+      (huggingface.co; Silero VAD from raw.githubusercontent.com). The one button reads "Download
+      484 MB", and changes as boxes are ticked ("Download 591 MB", "Download 3.1 GB"). Nothing is
+      fetched until you press it (Activity Monitor > Network: Inkwell receives nothing before it).
+      The press fetches the set first, one model at a time, then each ticked extra, smallest first:
+      the set's row shows its bar ("121 MB of 484 MB"), a ticked extra "Waiting". Continue works at
+      once, and the downloads keep going through the rest of the first run and after it.
+- [ ] With only the recommended set in: Settings > Models reads Parakeet TDT v3 for Dictation,
+      Meeting transcript and Live words without a restart, and dictating shows live words in the
+      Drop and types the take. A recorded call's far end is one voice, "Them".
+- [ ] An extra ticked in the first run (or its Download in Settings > Models): once Qwen3-ASR is in,
+      Dictation and Meeting transcript read Qwen3-ASR 1.7B (Live words stays Parakeet), and the
+      first dictation after it is as quick as the next (it is loaded when its download ends, not
+      by that take). Once the diarizer is in, a call with two or more people on the far end reads
+      Speaker 1, Speaker 2 after it ends.
+- [ ] A download that fails (turn Wi-Fi off while one runs): its choice says "Couldn't download it"
       and why, in red, with Retry, and nothing tries again by itself. Wi-Fi back on, Retry: it
       downloads.
 - [ ] Polish step: the switch is off and cannot be turned on if Apple Intelligence is off or not
       on this Mac, and the line under it says why. With Apple Intelligence on, switching it on
       asks first ("Turn on polish?", naming Apple's on-device model); Cancel leaves it off.
+- [ ] Polish step, own key (a test key of your own, never committed; Settings > AI's Local only
+      reads On before): "Use Groq's free model" is closed, and Continue and Skip work without
+      opening it. Opened: the sentence says Groq's free tier needs no credit card, with a
+      console.groq.com link; under it "Paste your Groq key" (the placeholder fits) and Save, then
+      Use Groq. No model field and no provider picker: those are under "Other providers or
+      models…", which shows Settings > AI's rows without the Local only switch, and "Back to
+      Groq's free model" returns. Use stays greyed until the key is saved (the field clears). Use:
+      "Turn on polish?" names Groq, says your words leave this Mac and go to Groq, and that Send to
+      Groq turns Local only off; nothing is sent yet (Settings > AI still reads Local only On).
+      Cancel: nothing changed. Use, Send to Groq: the switch reads on, its line says your words go
+      to the Groq model, Settings > AI reads Groq in use with Local only Off, Test there answers,
+      and a dictation comes back polished. With OpenAI picked in Settings > AI first, opening it
+      shows the other providers' rows.
+- [ ] VoiceOver on that step: "Use Groq's free model" reads as a disclosure; inside, "Groq API key",
+      Save and Use Groq (its hint is the line beside it); under "Other providers or models…", the
+      picker, "API key", "Model", Use and Test read as in Settings > AI.
+- [ ] Ready step, before any speech model is in: "Inkwell needs a speech model before it can type
+      what you say." with "Download speech models (484 MB)" and its hosts (Today's button); no
+      "Hold fn" and no orb. Pressed, it shows the download's percentage. With a model in: "Hold fn
+      (Globe), say something, and let go", and the orb shows at rest as a soft violet disc, in Light
+      as in Dark; holding fn, it answers your voice.
 - [ ] Start (or Skip) closes it. Quit and start again on the same library: it does not come back.
 - [ ] On a fresh library, with the sheet up, press Command-Q (and, separately, choose Quit Inkwell
       from the menu-bar item): Inkwell quits at once. Start it again on the same library: the
@@ -157,6 +187,11 @@ on 0.2's agent for the copy that runs, so the signed build goes where 0.2 is: `/
       which names where the transcript goes (see MEETINGS-CHECKLIST, Setup). Turning Polish on
       leaves it off, and the reverse. Turn it off: the switch reads off at once and stays off after
       a restart; turning it on again asks again.
+- [ ] AI, your own key, in a scratch library on a Mac account that already has a Groq key saved:
+      with Groq picked, the line reads "A Groq key is already saved in your keychain for this Mac
+      account." (the key is the account's, not the library's). "Delete Groq key…" asks "Delete the
+      Groq key from your keychain?", saying every Inkwell on this account stops using it; Cancel
+      keeps it (check with a provider whose key you can lose, never your real one).
 - [ ] Models: Dictation, Meeting transcript and Live words, each with the engine that serves it now
       and its measured accuracy. After a model finishes installing, the line changes to it without
       a restart. Each model not on this Mac has Download (downloads: only with your OK); a second
@@ -175,6 +210,10 @@ on 0.2's agent for the copy that runs, so the signed build goes where 0.2 is: `/
 - [ ] Each screen side by side with its board on the design canvas (Live meeting, Owed, Settings):
       same order of parts, same words, same use of the seal red. Note any difference: ______
 - [ ] Light and dark appearance: text stays readable everywhere, the sepia of "Them" included.
+- [ ] Inkwell in Light with the system in Dark (and Dark with the system in Light): the
+      speaker-name popover in a record, polish's consent alert (first run and Settings > AI),
+      "Delete this record?", "Delete the … key from your keychain?" and Help > Keyboard Shortcuts
+      all draw in Inkwell's mode, their text readable; none is dark glass over a Light window.
 - [ ] VoiceOver (Command-F5): every control on these screens is announced with a name; Owed's
       rings say "Mark done:" and the promise; permission cards say their state; the order follows
       the screen from top to bottom.

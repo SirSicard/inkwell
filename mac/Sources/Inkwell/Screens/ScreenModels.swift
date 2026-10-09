@@ -28,6 +28,8 @@ final class OnboardingModel {
     /// The app is quitting: the sheet is ended so AppKit can quit, and nothing is recorded.
     private(set) var quitting = false
     var step: Step = .welcome
+    /// The Ready step's try-it heard nothing (TryItHint): it says where the microphone is picked.
+    var notHearing = false
 
     @ObservationIgnored private let send: SendCommand
     @ObservationIgnored private let log: ScreenLog
@@ -120,6 +122,9 @@ final class StorageModel {
     let modelsDirectory: URL?
     private(set) var sizes: Sizes?
     @ObservationIgnored private var measuring = false
+    /// A measure was asked while one ran: that one may have walked past what changed, so another
+    /// follows it.
+    @ObservationIgnored private var again = false
 
     init(dataDirectory: URL?, modelsDirectory: URL?) {
         self.dataDirectory = dataDirectory
@@ -128,15 +133,40 @@ final class StorageModel {
 
     /// Measures off the main thread.
     func measure() {
-        guard !measuring, let data = dataDirectory else { return }
+        guard let data = dataDirectory else { return }
+        if measuring {
+            again = true
+            return
+        }
         measuring = true
         let models = modelsDirectory ?? data.appendingPathComponent("models", isDirectory: true)
         Task.detached(priority: .utility) {
             let sizes = Self.sizes(data: data, models: models)
             await MainActor.run { [weak self] in
-                self?.sizes = sizes
-                self?.measuring = false
+                guard let self else { return }
+                self.sizes = sizes
+                self.measuring = false
+                if self.again {
+                    self.again = false
+                    self.measure()
+                }
             }
+        }
+    }
+
+    /// Measures again when a model's files, or a record's recording, have changed (a model
+    /// installed, a record deleted): Settings measures as it appears, and a
+    /// download it started finishes while it is still showing (it once read "Models 0 bytes" over
+    /// 2.9 GB of installed models). Only once Settings has measured: nobody reads the sizes before.
+    func apply(_ event: InkEvent) {
+        guard sizes != nil || measuring else { return }
+        switch event {
+        case .modelUpdateFinished, .recordDeleted:
+            // A failed update too: it may have removed what it had downloaded. A deleted record
+            // took its recording with it.
+            measure()
+        default:
+            break
         }
     }
 
@@ -192,6 +222,8 @@ final class ScreenModels {
     let owed: OwedModel
     let live: LiveModel
     let meetings: MeetingModel
+    /// Each app's call policy, and the default (Settings > Meetings, the Drop's offer).
+    let calls: CallPolicyModel
     let onboarding: OnboardingModel
     let storage: StorageModel
     let dictation: DictationModel
@@ -202,12 +234,19 @@ final class ScreenModels {
     let snippets: SnippetsModel
     let voiceCommands: VoiceCommandsModel
     let importNote: ImportNoteModel
+    /// "Record a shortcut…" for the dictation key and the edit key.
+    let meetingShortcut: MeetingShortcutModel
+    let shortcuts: ShortcutRecorderModel
     /// Inkwell 0.2's data: the first run's step and a row in Settings > General.
     let import02: Import02Model
     /// The theme: the appearance settings and what they resolve to.
     let theme: GlowTheme
     /// Settings > AI: the language model you bring, and local-only mode.
     let cloud: CloudModel
+    /// The Stats screen, milestones, and Settings > Stats.
+    let stats: StatsModel
+    /// Settings > Sound: the microphone and its test.
+    let sound: SoundModel
 
     /// The id of the meetings switch's command (a `command.failed` carries it).
     static let meetingsAISettingID = "setting:\(ShellSetting.meetingsLLM.rawValue)"
@@ -218,6 +257,7 @@ final class ScreenModels {
         send: @escaping SendCommand,
         calendar: any CalendarAccess = EventKitCalendar(),
         apps: any AppDirectory = WorkspaceApps(),
+        runningApps: any RunningApps = WorkspaceRunningApps(),
         callTitles: any CallTitles = EventKitCallTitles(),
         dataDirectory: URL? = nil,
         modelsDirectory: URL? = nil,
@@ -225,13 +265,21 @@ final class ScreenModels {
     ) {
         theme = GlowTheme(send: send)
         cloud = CloudModel(send: send)
+        stats = StatsModel(send: send)
+        sound = SoundModel(send: send)
         permissions = PermissionsModel(send: send, calendar: calendar)
-        polish = PolishModel(send: send)
+        let polish = PolishModel(send: send)
+        self.polish = polish
         catalogue = CatalogueModel(send: send)
-        modes = ModesModel(send: send, apps: apps)
+        // A mode's own OK is one of polish's consents; its chip reads polish's switch.
+        modes = ModesModel(
+            send: send, apps: apps, running: runningApps, consent: polish.consent,
+            polishSwitch: { [polish] in polish.preference })
         owed = OwedModel(send: send)
         live = LiveModel(send: send)
         meetings = MeetingModel(send: send, titles: callTitles)
+        calls = CallPolicyModel(send: send, apps: apps)
+        live.discarding = { [meetings] record in meetings.discarding == record }
         onboarding = OnboardingModel(send: send, log: log)
         storage = StorageModel(dataDirectory: dataDirectory, modelsDirectory: modelsDirectory)
         dictation = DictationModel(send: send)
@@ -239,10 +287,16 @@ final class ScreenModels {
         meetingsConsent = ConsentModel(feature: .meetings, switchSettingID: Self.meetingsAISettingID, send: send)
         self.send = send
         dictation.hasLanguageModel = { [polish] in polish.hasWorkingEngine }
+        dictation.speechModels = { [catalogue] in catalogue.speech }
         snippets = SnippetsModel(send: send)
         voiceCommands = VoiceCommandsModel(send: send)
         importNote = ImportNoteModel(send: send)
         import02 = Import02Model(send: send, log: log)
+        // A recorded edit key is chosen as a picked one is: consent first when voice edit is not on.
+        // Weak: the recorder is the screens' own, and must not keep them alive.
+        meetingShortcut = MeetingShortcutModel(send: send)
+        shortcuts = ShortcutRecorderModel(send: send, dictation: dictation, meeting: meetingShortcut, saveEditKey: { _ in })
+        shortcuts.saveEditKey = { [weak self] token in self?.chooseEditKey(token) }
         onboarding.offersImport = { [import02] in import02.offered }
     }
 
@@ -259,10 +313,14 @@ final class ScreenModels {
             owed.apply(event)
             live.apply(event)
             meetings.apply(event)
+            calls.apply(event)
             onboarding.apply(event)
             theme.apply(event)
             cloud.apply(event)
             import02.apply(event)
+            storage.apply(event)
+            stats.apply(event)
+            sound.apply(event)
             if onboarding.showing {
                 // The first run offers its import step only when there is something to import.
                 import02.checkOnce()
@@ -278,6 +336,8 @@ final class ScreenModels {
                 modes.load()
             }
             dictation.apply(event)
+            meetingShortcut.apply(event)
+            shortcuts.apply(event)
             editConsent.apply(event)
             meetingsConsent.apply(event)
             snippets.apply(event)
@@ -297,11 +357,13 @@ final class ScreenModels {
         owed.load()
         polish.load()
         meetings.load()
+        calls.load()
         permissions.refresh()
         catalogue.requery()
         // Reads the switch, then (unless it is off) the core holds the keys; without
         // Accessibility it answers dictation.off, and coming back to the app tries again.
         dictation.load()
+        meetingShortcut.load()
         editConsent.load()
         meetingsConsent.load()
     }
@@ -367,6 +429,26 @@ final class ScreenModels {
         return "Summaries are off until you allow them in Settings > AI. Meetings are still recorded and transcribed."
     }
 
+    /// A button on the Drop. The speech models' button brings the main window to Today (`show`),
+    /// where the download states its size and hosts; the note stays up for the rest of its time.
+    /// The rest are the meeting commands'.
+    func performDropAction(_ action: DropText.Action, show: (Route) -> Void) {
+        switch action {
+        case .showSpeechModels:
+            show(.today)
+        case .always(let app, _):
+            // The app is Always from now on, and this call is recorded once that is saved: an app
+            // offered and made Always stays offered until it is started (inkwell.h,
+            // meetings.calls.set). A save that failed records nothing and says so on the offer.
+            calls.choose(.always, for: app, from: .drop) { [meetings] in meetings.record(app: app) }
+        case .never(let app, _):
+            // The core withdraws the offer (meeting.detection_ended, dismissed).
+            calls.choose(.never, for: app, from: .drop)
+        case .record, .dismiss, .allowSystemAudio, .stop, .stopAndDelete:
+            meetings.perform(action, permissions: permissions)
+        }
+    }
+
     /// The app became active again.
     func appBecameActive() {
         permissions.appBecameActive()
@@ -381,32 +463,51 @@ final class ScreenModels {
     /// Whether a screen shows this failure itself (the rest the controller logs).
     func handles(_ failed: CommandFailed) -> Bool {
         switch failed.command {
-        case "permissions.check", "models.list", "modes.list", "commitment.set_done",
+        case "permissions.check", "models.list", "modes.list", "modes.save", "modes.delete", "commitment.set_done",
              "commitment.not_yet", "note.add", "note.update", "note.delete",
-             "meeting.start", "meeting.stop", "meeting.dismiss", "meeting.ask":
+             "meeting.start", "meeting.stop", "meeting.dismiss", "meeting.discard", "meeting.ask",
+             "meetings.calls.list", "meetings.calls.set", "meetings.calls.remove":
             true
         case "model.update":
             // The download's row says it failed, and why (the first run and Settings > Models).
             true
+        case "stats.get":
+            // The Stats screen says it couldn't count. (A milestone check that failed celebrates
+            // nothing until the next one; no screen shows it, so it is logged.)
+            stats.handles(failed)
+        case "streak.pause", "streak.resume":
+            // Settings > Stats says so under the pause.
+            stats.handles(failed)
         case "setting.get":
-            failed.id == OnboardingModel.settingID || failed.id == PolishModel.settingID
-                || MeetingModel.settingIDs.contains(failed.id ?? "") || dictation.handles(failed)
+            stats.handles(failed) || failed.id == OnboardingModel.settingID || failed.id == PolishModel.settingID
+                || MeetingModel.settingIDs.contains(failed.id ?? "") || dictation.handles(failed) || meetingShortcut.handles(failed)
                 || GlowTheme.settingIDs.contains(failed.id ?? "") || CloudModel.handles(failed)
+                || failed.id == CallPolicyModel.defaultSettingID
         case "setting.set":
             // Onboarding's is not shown (the first run shows again next launch), so it is logged.
-            failed.id == PolishModel.settingID || MeetingModel.settingIDs.contains(failed.id ?? "")
-                || failed.id == Self.meetingsAISettingID || dictation.handles(failed)
+            stats.handles(failed) || failed.id == PolishModel.settingID || MeetingModel.settingIDs.contains(failed.id ?? "")
+                || failed.id == Self.meetingsAISettingID || dictation.handles(failed) || meetingShortcut.handles(failed) || sound.handles(failed)
                 || GlowTheme.settingIDs.contains(failed.id ?? "") || CloudModel.handles(failed)
+                || failed.id == CallPolicyModel.defaultSettingID
         case "dictation.enable", "dictation.disable":
             dictation.handles(failed)
+        case "audio.devices", "audio.test", "audio.test_stop":
+            // Said in Settings > Sound.
+            sound.handles(failed)
+        case "meetings.shortcut.suspend", "meetings.shortcut.state":
+            true
+        case "hotkey.check":
+            // Said under the key's row.
+            shortcuts.handles(failed)
         case "engine.route":
             // Settings > Models says so on the job's line.
             CatalogueModel.routeJob(failed) != nil
         case "llm.providers", "llm.key.save", "llm.key.delete", "llm.choose", "llm.test":
             // Said under Settings > AI's language model.
             CloudModel.handles(failed)
-        case "consent.get", "consent.allow":
-            // Shown under the Polish or the summaries toggle, or in the Dictation section for voice edit.
+        case "consent.get", "consent.allow", "consent.revoke":
+            // Shown under the Polish or the summaries toggle, in the Dictation section for voice
+            // edit, or in Settings > Modes for a mode's own OK.
             true
         // Settings > Snippets and Voice commands say so. The key note that could not be read is
         // not shown (there is nothing to say then); it is logged.

@@ -1,12 +1,12 @@
 // Settings > AI. Each switch shows what the model says (on only with the core's consent and a
 // working model), so switching one on reads back off while its consent step is up, and on once the
 // core has recorded the consent. The section owns the Settings screen's ConsentDialog, for all
-// three features (Dictation's edit-key picker asks through it too): WinUI shows one dialog at a time.
+// three features (the voice-edit key picker asks through it too): WinUI shows one dialog at a time.
 //
-// Above them, the language model (CloudModel): the provider picker, the key (a PasswordBox whose
-// text is sent once, on Save key, and cleared at once: it is never kept or shown), the model, Use
-// and Test; then Local only, the explicit switch over llm.local_only. The pickers show what the core holds; a change is sent, and the core's answer is what
-// shows.
+// Above them, the language model (LanguageModelRows, over CloudModel: this PC's own model with its
+// download, Use and Try it (LocalLlmModel, whose Use asks polish's one tap through this section's
+// dialog); or the provider, its key, its model, Use and Test) and how to get a free Groq key
+// (GroqKeyGuideView); then Local only, the explicit switch over llm.local_only.
 using Inkwell.Core.Screens;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
@@ -19,24 +19,30 @@ public sealed partial class AiSection : UserControl
     private readonly AiSettings ai;
     private readonly PolishModel polish;
     private readonly CloudModel cloud;
-    /// <summary>The provider ids behind the picker's items, in order (the first is none).</summary>
-    private readonly List<string?> providerTokens = [];
+    private readonly ShortcutRecorderModel recorder;
     private bool rendering;
 
-    public AiSection(AiSettings ai, CloudModel cloud, ScreenLog? log = null)
+    /// <param name="local">This PC's own model (the picker's "On this PC"); null: own-key providers only.</param>
+    public AiSection(AiSettings ai, CloudModel cloud, ShortcutRecorderModel recorder, LocalLlmModel? local = null, ScreenLog? log = null, MeetingShortcutModel? meeting = null)
     {
         ArgumentNullException.ThrowIfNull(ai);
         ArgumentNullException.ThrowIfNull(cloud);
+        ArgumentNullException.ThrowIfNull(recorder);
         this.ai = ai;
         this.cloud = cloud;
+        this.recorder = recorder;
         polish = ai.Polish;
         InitializeComponent();
-        ModelBox.RegisterPropertyChangedCallback(ComboBox.TextProperty, (_, _) => OnModelTyped());
+        EditShortcutHost.Content = new EditShortcutView(ai, recorder, meeting);
+        LanguageModelHost.Content = new LanguageModelRows(cloud, local: local);
+        GroqGuideExpander.Header = GroqKeyGuide.Title;
+        GroqGuideExpander.Content = new GroqKeyGuideView(GroqKeyGuidePlace.Settings);
         _ = new ConsentDialog(this, ConsentHost.Settings, [polish.Consent, ai.EditConsent, ai.MeetingsConsent], log);
         Loaded += (_, _) =>
         {
             ai.PropertyChanged += OnChanged;
             cloud.PropertyChanged += OnChanged;
+            recorder.PropertyChanged += OnChanged;
             // Read again whenever Settings appears, as the Mac's does: a read that failed is
             // retried here (its line says so), and a switch changed elsewhere is current.
             cloud.Load();
@@ -50,6 +56,7 @@ public sealed partial class AiSection : UserControl
         {
             ai.PropertyChanged -= OnChanged;
             cloud.PropertyChanged -= OnChanged;
+            recorder.PropertyChanged -= OnChanged;
         };
         Render();
     }
@@ -70,9 +77,10 @@ public sealed partial class AiSection : UserControl
         try
         {
             Show(PolishSwitch, PolishStatus, polish.IsOn, polish.CanToggle, polish.Status, polish.IsProblem);
-            Show(EditSwitch, EditStatus, ai.EditOn, ai.CanToggleEdit, ai.EditStatus, ai.EditIsProblem);
+            Show(EditSwitch, EditStatus, ai.EditOn, ai.CanToggleEdit && !recorder.Busy, ai.EditStatus, ai.EditIsProblem);
             Show(MeetingsSwitch, MeetingsStatus, ai.MeetingsAIOn, ai.CanToggleMeetingsAI, ai.MeetingsAIStatus, ai.MeetingsAIIsProblem);
             RenderCloud();
+            RenderConsents();
         }
         finally
         {
@@ -92,130 +100,60 @@ public sealed partial class AiSection : UserControl
     private void RenderCloud()
     {
         // Local only: on unless the user turned it off, or chose a provider off this PC.
+        LanguageModelCaption.Text = LocalLlmModel.Caption(cloud);
         LocalOnlySwitch.IsOn = cloud.LocalOnly;
         LocalOnlySwitch.IsEnabled = cloud.Loaded;
         LocalOnlyCaption.Text = cloud.LocalOnly
             ? $"{CloudModel.LocalOnlyTitle}: no language model off this PC is called, whichever is chosen."
             : "A language model off this PC may be called, once a feature is on and allowed.";
+    }
 
-        var items = new List<(string? Id, string Name)> { (null, "None: nothing leaves this PC") };
-        items.AddRange(cloud.Providers.Select(p => ((string?)p.Id, p.Name)));
-        if (!providerTokens.SequenceEqual(items.Select(i => i.Id)))
+    /// <summary>The consents shown, so the list is built again only when they change (a Revoke keeps the keyboard otherwise).</summary>
+    private IReadOnlyList<ConsentGrant>? shownConsents;
+
+    /// <summary>Each destination the user agreed polish may send to, with Revoke.</summary>
+    private void RenderConsents()
+    {
+        var consents = polish.State?.Consents ?? [];
+        if (shownConsents is not null && shownConsents.SequenceEqual(consents))
         {
-            providerTokens.Clear();
-            ProviderBox.Items.Clear();
-            foreach (var (id, name) in items)
+            return;
+        }
+        shownConsents = consents;
+        PolishConsents.Children.Clear();
+        if (consents.Count == 0)
+        {
+            PolishConsents.Children.Add(Caption("Nowhere yet. Polish asks before it first sends anywhere."));
+            return;
+        }
+        foreach (var grant in consents)
+        {
+            // Its name and line, Revoke beside them; under them at the narrowest window.
+            var row = new LineOrStackPanel { Fill = 0, FillMinimum = 140 };
+            var words = new StackPanel { Spacing = 1 };
+            words.Children.Add(new TextBlock
             {
-                providerTokens.Add(id);
-                ProviderBox.Items.Add(name);
-            }
+                Text = grant.Label,
+                Style = (Style)Application.Current.Resources["InkBodyStyle"],
+                TextWrapping = TextWrapping.Wrap,
+            });
+            words.Children.Add(Caption(grant.Detail));
+            var revoke = new Button { Content = "Revoke", HorizontalAlignment = HorizontalAlignment.Left, VerticalAlignment = VerticalAlignment.Center };
+            AutomationProperties.SetName(revoke, $"Revoke polish's OK for {grant.Label}");
+            revoke.Click += (_, _) => polish.Consent.Revoke(grant);
+            row.Children.Add(words);
+            row.Children.Add(revoke);
+            PolishConsents.Children.Add(row);
         }
-        ProviderBox.SelectedIndex = providerTokens.IndexOf(cloud.Selected);
-        ProviderBox.IsEnabled = cloud.Loaded;
-
-        var provider = cloud.SelectedProvider;
-        ProviderDetails.Visibility = Visible(provider is not null);
-        ServerBox.Visibility = Visible(provider?.CustomUrl == true);
-        if (ServerBox.Text != cloud.DraftBaseUrl)
-        {
-            ServerBox.Text = cloud.DraftBaseUrl;
-        }
-        KeyBox.PlaceholderText = provider?.HasKey == true ? "Paste a new key to replace the stored one" : "Paste your API key";
-        KeyStatus.Text = cloud.KeyStatus;
-        DeleteKeyButton.IsEnabled = provider?.HasKey == true;
-        var models = new List<string>();
-        if (provider is not null)
-        {
-            models.Add(provider.DefaultModel);
-            if (cloud.Chosen == provider.Id && cloud.ChosenModel is string chosen && chosen != provider.DefaultModel)
-            {
-                models.Add(chosen);
-            }
-        }
-        if (!models.SequenceEqual(ModelBox.Items.OfType<string>()))
-        {
-            ModelBox.Items.Clear();
-            foreach (var model in models)
-            {
-                ModelBox.Items.Add(model);
-            }
-        }
-        ModelBox.PlaceholderText = provider?.DefaultModel ?? "";
-        if (ModelBox.Text != cloud.DraftModel)
-        {
-            ModelBox.Text = cloud.DraftModel;
-        }
-
-        UseNote.Text = cloud.UseNote;
-        UseButton.Content = cloud.UseLabel;
-        UseButton.IsEnabled = cloud.CanUse;
-        AutomationProperties.SetHelpText(UseButton, cloud.UseNote);
-        TestButton.IsEnabled = cloud.CanTest;
-        Line(TestStatus, cloud.TestMessage, cloud.TestState == CloudTestState.Failed);
-        var status = cloud.Failure ?? cloud.Status;
-        Line(CloudStatus, status, cloud.Failure is not null || cloud.ReadError is not null);
-        AutomationProperties.SetHelpText(ProviderBox, status);
+        PolishConsents.Children.Add(Caption("Revoking the last one turns polish off. Modes on a model there go in as you said them."));
     }
 
-    private static void Line(TextBlock line, string? text, bool problem)
+    private static TextBlock Caption(string text) => new()
     {
-        line.Text = text ?? "";
-        line.Visibility = Visible(!string.IsNullOrEmpty(text));
-        line.Style = (Style)Application.Current.Resources[problem ? "InkAlertTextStyle" : "InkCaptionStyle"];
-    }
-
-    private static Visibility Visible(bool shown) => shown ? Visibility.Visible : Visibility.Collapsed;
-
-    private void OnProviderChosen(object sender, SelectionChangedEventArgs e)
-    {
-        var i = ProviderBox.SelectedIndex;
-        if (!rendering && i >= 0 && i < providerTokens.Count && providerTokens[i] != cloud.Selected)
-        {
-            KeyBox.Password = "";
-            cloud.Select(providerTokens[i]);
-        }
-    }
-
-    private void OnServerChanged(object sender, TextChangedEventArgs e)
-    {
-        if (!rendering && ServerBox.Text != cloud.DraftBaseUrl)
-        {
-            cloud.DraftBaseUrl = ServerBox.Text;
-            Render();
-        }
-    }
-
-    private void OnModelChosen(object sender, SelectionChangedEventArgs e)
-    {
-        if (!rendering && ModelBox.SelectedItem is string model)
-        {
-            cloud.DraftModel = model;
-            Render();
-        }
-    }
-
-    private void OnModelTyped()
-    {
-        if (!rendering && ModelBox.Text != cloud.DraftModel)
-        {
-            cloud.DraftModel = ModelBox.Text ?? "";
-            Render();
-        }
-    }
-
-    private void OnSaveKey(object sender, RoutedEventArgs e)
-    {
-        // Sent once, then gone from the box: the key is never kept or shown here.
-        var key = KeyBox.Password;
-        KeyBox.Password = "";
-        cloud.SaveKey(key);
-    }
-
-    private void OnDeleteKey(object sender, RoutedEventArgs e) => cloud.DeleteKey();
-
-    private void OnUse(object sender, RoutedEventArgs e) => cloud.Use();
-
-    private void OnTest(object sender, RoutedEventArgs e) => cloud.Test();
+        Text = text,
+        Style = (Style)Application.Current.Resources["InkCaptionStyle"],
+        TextWrapping = TextWrapping.Wrap,
+    };
 
     private void OnPolishToggled(object sender, RoutedEventArgs e)
     {

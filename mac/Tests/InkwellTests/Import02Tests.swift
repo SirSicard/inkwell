@@ -237,7 +237,7 @@ final class Import02FirstRunTests: XCTestCase {
         screens.apply([event(#"{"type":"import.finished","counts":\#(counts),"ref":"import.run"}"#)])
         XCTAssertTrue(sent.commands.contains(.snippetsList(ref: "snippets:2")), "\(sent.commands)")
         XCTAssertTrue(sent.commands.contains(.voiceCommandsList(ref: "voice_commands:1")), "\(sent.commands)")
-        XCTAssertTrue(sent.commands.contains(.modesList), "\(sent.commands)")
+        XCTAssertTrue(sent.commands.contains(.modesList(ref: "modes:1")), "\(sent.commands)")
 
         screens.apply([event(#"{"type":"snippets.listed","from_import":true,"ref":"snippets:2","snippets":[{"id":"s1","trigger":"my sig","expansion":"Kind regards","category":"","enabled":true}]}"#)])
         XCTAssertTrue(screens.snippets.fromImport)

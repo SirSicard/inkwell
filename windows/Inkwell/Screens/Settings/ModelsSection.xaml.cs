@@ -13,7 +13,7 @@ public sealed partial class ModelsSection : UserControl
     {
         Model = catalogue ?? throw new ArgumentNullException(nameof(catalogue));
         InitializeComponent();
-        DownloadableHost.Content = new ModelRowsView(Model, firstRun: false);
+        DownloadableHost.Content = new ModelRowsView(Model);
         Model.PropertyChanged += (_, _) => Render();
         Render();
     }
@@ -31,7 +31,11 @@ public sealed partial class ModelsSection : UserControl
         var lines = CatalogueModel.Jobs.Select(job => CatalogueLineItem.Of(Model, job)).ToList();
         Lines.ItemsSource = lines;
         // Where the accuracy comes from, only when a line shows one.
-        SourceLine.Visibility = lines.Any(l => l.Accuracy is not null) ? Visibility.Visible : Visibility.Collapsed;
+        AccuracyLines.ItemsSource = lines.Where(l => l.Accuracy is not null).ToList();
+        AccuracyDetails.Visibility = lines.Any(l => l.Accuracy is not null) ? Visibility.Visible : Visibility.Collapsed;
         DownloadablePanel.Visibility = Model.Models.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        var free = Model.FreeSpaceText(System.Globalization.CultureInfo.CurrentCulture);
+        FreeSpaceLine.Text = free ?? "";
+        FreeSpaceLine.Visibility = free is null ? Visibility.Collapsed : Visibility.Visible;
     }
 }

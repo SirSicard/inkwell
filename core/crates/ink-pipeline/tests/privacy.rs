@@ -94,10 +94,22 @@ fn no_dictated_word_reaches_a_log_an_event_or_an_error() {
     let rig = Rig::builder()
         .settings(|s| {
             s.modes.modes[0].polish_enabled = true;
-            s.polish_consent = Some(ink_pipeline::consent::LlmConsent::OnDevice);
+            s.polish_consents = vec![ink_pipeline::consent::LlmConsent::OnDevice];
         })
         .llm(Arc::new(EmptyLlm))
-        .store(Arc::new(FaultyStore::new(Fault::AppendFails)))
+        .store({
+            // Polish's consent is read from the store at the call, as the core keeps it.
+            let store = Arc::new(FaultyStore::new(Fault::AppendFails));
+            ink_core::Store::set_setting(
+                store.as_ref(),
+                ink_pipeline::consent::Feature::Polish.setting_key(),
+                &ink_pipeline::consent::consents_to_setting(&[
+                    ink_pipeline::consent::LlmConsent::OnDevice,
+                ]),
+            )
+            .unwrap();
+            store
+        })
         .build();
     rig.platform
         .set_permission(Permission::Accessibility, PermissionState::Denied);

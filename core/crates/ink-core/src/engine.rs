@@ -76,6 +76,10 @@ pub struct TranscribeOptions {
     pub context: Option<String>,
     /// Checked between chunks; the engine returns [`EngineError::Cancelled`] when set.
     pub cancel: CancelToken,
+    /// A live-partials window, decoded again every half second while someone talks: an engine
+    /// may spend fewer threads on it than on a final (Windows' Parakeet uses one; with a thread
+    /// per core, ONNX Runtime's spinning pools kept two thirds of a 24-thread PC busy in a call).
+    pub live: bool,
 }
 
 /// Transcribes a whole buffer: the dictation final, the meeting final pass, and file import.

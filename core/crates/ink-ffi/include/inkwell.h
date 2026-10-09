@@ -141,22 +141,52 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       loaded it is unloaded (and loaded again if it was warm), and while a job uses it the
  *       update is refused, as above. A voice detector installed while dictation runs is taken by
  *       it at once ("dictation.voice_detection" says so).
+ *       Before anything is held or fetched, the download's remaining bytes plus 1 GiB are checked
+ *       against the free space where models go: too little is "command.failed" with code
+ *       not_enough_space, "needed_bytes" and "free_bytes", and nothing changes (free space the OS
+ *       cannot give never blocks it). "model.update_finished" says "cancelled":true when a
+ *       model.cancel stopped it.
+ *       A language model (models.listed's kind "language", Windows): send "model" and "next"
+ *       as its id. Once it verifies it is the one in use (engine:local); should another
+ *       language model be installed, it is deleted then (one at a time).
  *   {"cmd":"engine.unregister","engine":"<engine id>"}
  *       Lets go of an engine the shell registered; its release function runs once no call is in
  *       flight. "engine.unregistered".
  *
  *   Meetings run on their own thread (starting one never waits behind a model download), and
  *   questions about one on another. A failure is "command.failed" with the "id".
+ *   {"cmd":"meetings.shortcut.suspend","suspended":true,"id":"<ref>"}
+ *       The global meeting shortcut is independent of dictation: setting meetings.key
+ *       defaults to ctrl+shift+r on Windows and off on Mac; off disables it. A fresh press starts a manual recording,
+ *       or stops capture; repeats and presses while stopping/finalizing do neither.
+ *       A chord held when its hook is resumed must be released before a fresh press can act.
+ *       meetings.shortcut.state gives key, active, suspended, an optional error, and ref.
+ *       Suspend runs on the queries thread after a preceding dictation.disable; the ref
+ *       acknowledgement is emitted only after both hooks have stopped. Resume with false.
+ *       A setting.get for meetings.key also returns current shortcut state, without rebinding.
+ *       Meeting, dictation and edit shortcuts must be distinct in the platform's canonical
+ *       spelling. Unreadable conflicts refuse a write; a failed save leaves the old hook held.
  *   {"cmd":"meeting.start","app":"<app id>","title":"..."}
- *       Records a meeting from this machine: the mic (with Bluetooth output, the built-in one
- *       unless "meetings.headset_mic" is on) and the far end ("app", when the start answers a
+ *       Records a meeting from this machine: the mic ("audio.input"; Automatic records the
+ *       built-in one with Bluetooth output) and the far end ("app", when the start answers a
  *       "meeting.detected" offer: that app; otherwise everything this machine plays). Both
- *       optional. "meeting.started" (with the title, the app's name and the mic), then the live
- *       events. Only when the user asks: detection offers, it never starts a recording.
+ *       optional. "meeting.started" (with the title, the app's name, the mic and
+ *       "delete_until_unix_ms"), then the live events. Only when the user asks, or for an app the
+ *       user chose Always for (below), which starts here the same way, with "auto" in
+ *       "meeting.started": the shell shows every recording from that event.
  *   {"cmd":"meeting.stop"}
  *       Ends the recording; the final pass follows ("meeting.stopped" ... "meeting.finished").
  *       A meeting started for an app also ends by itself 15 s after that app lets go of the
  *       microphone.
+ *   {"cmd":"meeting.discard"}
+ *       "Stop and delete", within a minute of a start made here (until "delete_until_unix_ms"):
+ *       the recording ends, no final pass runs, and the record and its audio are deleted as if
+ *       never made ("meeting.stopped", then "meeting.discarded"). Later it is refused with code
+ *       "delete_window_over": stop it, then delete it from the library. Its answer is what
+ *       happens: refused when the meeting had already stopped and is being finished, or had
+ *       failed. A delete granted ends with "meeting.discarded", or, should the meeting fail on
+ *       its way, with "meeting.failed" or "meeting.worker_failed" (what it had recorded is
+ *       deleted at the next launch).
  *   {"cmd":"meeting.dismiss","app":"<app id>"}
  *       "Not this one": the offer ends ("meeting.detection_ended" with "dismissed") and that app
  *       is not offered again until it releases the microphone.
@@ -170,9 +200,35 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       once the shell's own engines are registered, so a recovered meeting gets them too. Sent
  *       while a recovery runs, it is never refused: that recovery goes one more round (asks
  *       during a round count as one), ending with its own "meetings.recovered".
- *   Detection follows the "meetings.detect" setting (on unless turned off): "meeting.detection"
- *   says whether it listens, "meeting.detected" offers an app that has held the microphone for
- *   3 s, "meeting.detection_ended" takes the offer back.
+ *   {"cmd":"meetings.calls.list","id":"<ref>"}
+ *       "meetings.calls": the default call policy and every app seen holding the microphone for a
+ *       call, or chosen for (at most 64), with its policy and whether it was chosen.
+ *   {"cmd":"meetings.calls.set","app":"<app id>","policy":"always|ask|never|default","id":"<ref>"}
+ *       One app's call policy, by the identity detection reports (never its name): always (its
+ *       calls are recorded at once, visibly), ask (offered), never (neither), or default (follow
+ *       the default again). Saved and applied at once: an offered app set to never is withdrawn
+ *       ("meeting.detection_ended", dismissed), a held app set to ask is offered. An app offered
+ *       and set to always stays offered: send meeting.start for it ("Always for this app").
+ *       Answers "meetings.calls" with the "id" as "ref". While the stored choices cannot be read
+ *       ("meetings.calls" has a "message"), it is refused with code "list_unreadable" unless it
+ *       says "replace_unreadable":true, which starts the list over with this choice (and, under
+ *       a default of always, sets the default to ask, said in the answer's "message").
+ *   {"cmd":"meetings.calls.remove","app":"<app id>","expected_default":"always|ask|never","id":"<ref>"}
+ *       Forget this app's choice and last-seen history. Past recordings are kept. The next
+ *       detected call may add it again, following the current default (including Always).
+ *       A save failure, unreadable list, or default changed since confirmation changes nothing.
+ *       Answers meetings.calls with ref.
+ *
+ *   Detection listens while any app could be offered or recorded (the default call policy,
+ *   "meetings.calls.default", is not never, or an app is chosen always or ask): "meeting.detection"
+ *   says whether it listens. An app that has held the microphone for 3 s is offered
+ *   ("meeting.detected"; "meeting.detection_ended" takes the offer back) when its policy is ask,
+ *   recorded when it is always (offered instead, with a "message", when that start fails or its
+ *   own sound cannot be recorded alone, so the recording would hold everything this computer
+ *   plays; and offered after the user stopped a recording by hand during this call), and left
+ *   alone when it is never. On Windows an app's identity is compared and kept in lowercase,
+ *   in every event and command. Unasked "meetings.calls" says the list changed (a new app seen,
+ *   the default set).
  *
  *   The screens' commands run on their own thread, in order among themselves, so a model update
  *   holding the commands above never delays them. Each answers with the event named, or
@@ -198,13 +254,48 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       each with the command's "id" as "ref"; a failure is "command.failed" with that "id". So
  *       every answer can be matched to the line that sent it. The note's words are never echoed
  *       back.
- *   {"cmd":"models.list"}
+ *   {"cmd":"speaker.name","record":"<record id>","speaker":"spk1","name":"...","id":"<ref>"}
+ *       Names (or renames) a far-end speaker of a record: "speaker" is the diarizer's label, as
+ *       the record's segments carry it, and only a label its far end has (the mic is the user,
+ *       never renamed). The name is trimmed; an empty one clears it, and the speaker reads as
+ *       numbered again. One line, at most 80 characters. "speaker.named" (with the "id" as "ref",
+ *       and "named": false once cleared), or "command.failed"; the name is never echoed back.
+ *       record.open's "speakers" carries it, and Ask's transcript names that speaker by it.
+ *   {"cmd":"record.delete","record":"<record id>","id":"<ref>"}
+ *       Deletes one record whole, of any kind, as the retention setting deletes one: its
+ *       transcript, notes, summary, commitments, speaker names and search entries, its words
+ *       overwritten in the library's files, then its audio. "record.deleted" (with the "id" as
+ *       "ref"; "audio_left" when its audio stayed on disk, "scrubbed": false while another
+ *       process keeps the words in the database's log), or "command.failed": a record that is
+ *       not there, or one still live (a meeting being recorded, or whose final pass has not
+ *       finished). Only when the user asks, after a confirmation that it cannot be undone.
+ *   {"cmd":"models.list","id":"<ref>"}
  *       "models.listed": the catalogue's models for this OS, their measured error rates and
- *       whether each is installed. Send engine.route for what serves a job now. A model the
+ *       whether each is installed, each one's "kind" (speech or language; a language model also
+ *       has its "name"), the bytes free where models go ("free_bytes", absent when the OS cannot
+ *       say) and the "id" as "ref". Send engine.route for what serves a job now. A model the
  *       shell runs fills no job there: the core only downloads it (model.update) into
  *       <models_dir>/<id>/<first 12 digits of its revision>/, and the shell loads it from there
  *       and registers its engine. The Mac's Parakeet, parakeet-tdt-0.6b-v3-coreml: its files are
  *       in that directory's parakeet-tdt-0.6b-v3/, the folder FluidAudio loads v3 from.
+ *   {"cmd":"model.cancel","model":"<id being downloaded>","id":"<ref>"}
+ *       Stops a model.update's download of that model, from the screens' thread, so it never
+ *       waits behind the download. A running one stops at its next chunk and keeps its part
+ *       files (the next model.update resumes them); one still queued never starts. Either ends
+ *       with "model.update_finished" with "cancelled":true, the queued one at once (with no
+ *       "model.update_started" before it); nothing else answers. One cancelled just as it
+ *       starts, before it fetches, may end with that update's own "command.failed" instead (no
+ *       room, or the model held). No download of it, or one already ended: "command.failed"
+ *       with code not_downloading.
+ *   {"cmd":"model.remove","model":"<registry id>","id":"<ref>"}
+ *       Deletes a model's files (every revision's, and part files), from the screens' thread:
+ *       "models.listed" with the "id" as "ref". While a job, a language model call or an update
+ *       holds the model (a meeting holds its voice detector for its length, and its diarizer for
+ *       the final pass), "command.failed" with code model_in_use, and nothing is deleted: try
+ *       again once it ends. A model loaded and idle is unloaded first. Removing the language
+ *       model in use leaves a mode pinned to engine:local missing; while on_device is chosen the
+ *       features then have none, and nothing falls through to another model. Only when the
+ *       user asks.
  *   {"cmd":"engine.route","job":"dictation_final"}
  *       Which engine serves a job now: "engine.routed" with the job, and the engine's id and
  *       source ("registry" for a downloaded model, "shell" for an engine the shell registered),
@@ -218,15 +309,30 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       "setting.value". Only the shell's settings: "onboarding.done" (true|false),
  *       "dictation.polish" (on|off; setting.set takes only off, which also withdraws polish's
  *       consent in the same write, and answers "consent.state" too: consent.allow turns it on),
- *       "dictation.key" (fn|right_option|right_command|right_control|right_shift|right_alt|
- *       right_win; a key this OS cannot hold is refused when dictation binds it, as
- *       "dictation.off" with "key_refused"; the default is fn on macOS and right_control on
+ *       "dictation.key" (any key this computer can watch, as hotkey.check judges it: a
+ *       right-hand modifier, or fn on macOS, held on its own; a function key; or modifiers and
+ *       one key such as ctrl+shift+space. Stored in hotkey.check's one spelling, which
+ *       "setting.value" echoes; a key it refuses is refused here with its reason. The named
+ *       tokens fn|right_option|right_command|right_control|right_shift|right_alt|right_win are
+ *       stored on either OS: one this OS cannot hold is refused when dictation binds it, as
+ *       "dictation.off" with "key_refused". The default is fn on macOS and right_control on
  *       Windows),
- *       "dictation.edit_key" (off or one of those; voice edit turns on with its consent through
- *       consent.allow, and off withdraws that consent in the same write, answering
- *       "consent.state" too; an edit key set without a consent edits nothing),
+ *       "dictation.edit_key" (off or a key as for dictation.key, never the dictation key in any
+ *       spelling; voice edit turns on with its consent through consent.allow, and off withdraws
+ *       that consent in the same write, answering "consent.state" too; an edit key set without a
+ *       consent edits nothing),
  *       "dictation.enabled" (on|off: the shell's own switch, read before it sends
- *       dictation.enable), "meetings.detect" (on|off), "meetings.headset_mic" (on|off),
+ *       dictation.enable), "meetings.calls.default" (ask|always|never: the call policy for apps
+ *       not chosen for; ask unless set), "meetings.auto_reminder_shown" (on: the reminder to
+ *       tell the others was shown during a call Always recorded, which the shells show on the
+ *       first such call only; the core does nothing with it), "meetings.detect" (on|off: the
+ *       old "Offer to record calls", answered for the default: off is never, on over never is
+ *       ask),
+ *       "audio.input" (auto|a device id from audio.devices: the mic for dictation, meetings and
+ *       the test; a device must be connected when set), "audio.output" (default|an output's id,
+ *       where audio.devices lists outputs: on Windows, the output Record now, and a call
+ *       whose app could not be heard alone, record; the default output when the chosen one is
+ *       not connected, and back on it when it returns),
  *       "meetings.llm" (on|off: a meeting's summary and Ask; as for dictation.polish, setting.set
  *       takes only off, which also withdraws their consent, and consent.allow turns it on),
  *       "llm.local_only" (on|off: on unless turned off, and on when unreadable; while on, a
@@ -235,9 +341,42 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       (forever|7|30|90|365: meetings and dictations older than that are deleted, never
  *       imports; at launch, after each meeting and when it changes, on the core's own thread;
  *       "library.swept" says how many), "import.key_note" (dismissed: import.notes stops
- *       saying what became of 0.2's hotkey). A change to the keys or to dictation.polish reaches a
+ *       saying what became of 0.2's hotkey), "stats.typing_wpm" (a whole number from 10 to 200,
+ *       written plainly: the typing speed stats.get measures time saved against; 40 unless set)
+ *       "stats.celebrate" (on|off: milestones and bests are celebrated; on unless set),
+ *       "stats.rest_days" (none, or ISO weekdays ascending and comma-separated, e.g. 6,7, never
+ *       all seven: days the streak rests on, which neither count nor break it, a dictation on one
+ *       included; a change applies to all of history; none unless set), "stats.streak" (shown|hidden: a
+ *       hidden streak is shown nowhere and its milestones are not celebrated; shown unless set),
+ *       "stats.share_heatmap" (on|off: the share card may carry the heatmap; off unless set; the
+ *       core does nothing with it) and "stats.review_dismissed" (a YYYY-MM-DD date: the first day
+ *       of the week whose review the user dismissed: send week_review's "week" as it came; it
+ *       stays dismissed when the week's first day changes). A change to the keys or to dictation.polish reaches a
  *       running dictation at once (keys rebound): a new "dictation.ready" (or "dictation.off")
  *       follows the "setting.value".
+ *   {"cmd":"audio.devices","id":"<ref>"}
+ *       "audio.devices": the connected inputs (and outputs, where there is an output picker), the
+ *       choice, what Automatic records now and the mic Inkwell opens now, with why ("chosen",
+ *       "chosen_missing" when Automatic stands in for a chosen mic that is not connected, or
+ *       Automatic's reason). Where the platform reports changes, "audio.devices_changed" says the
+ *       same unasked, once a burst of changes has been quiet for 300 ms; "audio.input_fallback"
+ *       says once when a mic opens in place of a chosen one that is not connected.
+ *   {"cmd":"audio.test","seconds":15,"id":"<ref>"}
+ *   {"cmd":"audio.test_stop","id":"<ref>"}
+ *       Opens the chosen mic for "seconds" (1 to 15, 15 when absent): "audio.test_started" names
+ *       it, "audio.test_level" reports its level about ten times a second (0-1, -60 dBFS to full
+ *       scale), "audio.tested" ends it (done, stopped, meeting or failed; "heard" says whether
+ *       anything above a quiet room came in). One at a time; refused while a meeting records
+ *       ("code":"meeting_recording"), and ended by a meeting that starts. audio.test_stop is
+ *       answered by the test's own "audio.tested" (its "ref" is the test's id, "ended":"stopped"),
+ *       or "command.failed" with the stop's id when no test runs. Nothing is kept.
+ *   {"cmd":"hotkey.check","binding":"<token>","id":"<ref>"}
+ *       Whether this computer can watch a key binding as the dictation or edit key, before the
+ *       shell stores one the user recorded: "hotkey.checked" with "ok", and either "canonical"
+ *       (its one spelling, to store and to compare keys by: modifiers on macOS in the order
+ *       fn ctrl option shift cmd, e.g. ctrl+shift+space) or "reason" (why not, in plain words to
+ *       show after "can't use that:"). Nothing is stored. The platform's own parser answers, so a
+ *       key binds exactly when this says yes.
  *   {"cmd":"dictation.enable","utc_offset_minutes":120,"id":"<ref>"}
  *       Dictation live: the core holds the keys (the dictation key, and the edit key if one is
  *       set), opens the mic at the first press and lets it go after 1 minute without a take.
@@ -252,8 +391,11 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       the dictation; edit: the selection and the instruction; meetings: a meeting's transcript,
  *       for its summary, its commitments and Ask): its switch, where the model it
  *       would use now sends them ("to": on_device or cloud, with its "name", and for cloud the
- *       "endpoint"), and where the user agreed it may ("allowed_to"); "allowed" says whether
- *       that consent covers the model now. Each consent is its own. A feature runs only when on
+ *       "endpoint"), and where the user agreed it may ("consents", each with "to", and for cloud
+ *       its "name" and "endpoint"; "allowed_to" is the one covering the model now, else the
+ *       first); "allowed" says whether a consent covers the model now. Each feature's consents
+ *       are its own. Polish holds one per destination (a mode may polish on a model of its own,
+ *       elsewhere than the AI setting's); voice edit and meetings one at most. A feature runs only when on
  *       and allowed: a model that changed destination since the user agreed gets nothing, and
  *       each take says so (dictation.warning polish_not_allowed, dictation.edit_failed
  *       not_allowed; a meeting finishes with meeting.warning summary_not_allowed and no summary,
@@ -265,31 +407,96 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       records that consent and turns the feature on (its switch, or edit's key), both in
  *       one write. Name what "consent.state" showed; if the model changed meanwhile, nothing is
  *       recorded and it fails ("command.failed", with a fresh "consent.state" first), so the
- *       shell asks again. Answers "consent.state" with the "id".
+ *       shell asks again. For polish, the destination may be any model's in "modes.listed"'s
+ *       "polish_models" (ask for it the first time a mode on that model needs it), and it is
+ *       added to the others; for edit and meetings, the AI setting's, and it replaces the one
+ *       there was. Polish's turns "dictation.polish" on in the same write even for a destination
+ *       only a mode uses: a mode polishes only while that switch is on. Answers "consent.state"
+ *       with the "id".
+ *   {"cmd":"consent.revoke","feature":"polish","to":"on_device|cloud","endpoint":"<for cloud>","id":"<ref>"}
+ *       Takes polish's consent for that destination away (Settings lists each, from
+ *       "consent.state"'s "consents"); the others stay. Revoking the last turns polish off in
+ *       the same write (with "setting.value"). One not there is no failure; edit and meetings
+ *       are refused (turn them off instead). Reaches a running dictation at once. Answers
+ *       "consent.state" with the "id".
  *   {"cmd":"llm.providers","id":"<ref>"}
  *   {"cmd":"llm.key.save","provider":"openai|groq|anthropic|openrouter|custom","key":"...","id":"<ref>"}
  *   {"cmd":"llm.key.delete","provider":"<provider>","id":"<ref>"}
- *   {"cmd":"llm.choose","provider":"<provider>|none","model":"<optional>","base_url":"<custom only>",
- *    "local_only":"off","id":"<ref>"}
- *       Own-key language models, for a shell with no model of its own (Windows): "llm.providers"
- *       lists every provider, whether its key is stored (asked without reading it) and the one
- *       chosen. A key goes only into the OS key store (macOS keychain, Windows Credential
+ *   {"cmd":"llm.choose","provider":"<provider>|on_device|none","model":"<optional>",
+ *    "base_url":"<custom only>","local_only":"off","id":"<ref>"}
+ *       Own-key language models, and this machine's (Windows): "llm.providers" lists every
+ *       provider, whether its key is stored (asked without reading it) and the one chosen, and,
+ *       where the OS has a language model of the core's own, "on_device" with its model and
+ *       whether it is downloaded ("installed"). A key goes only into the OS key store (macOS keychain, Windows Credential
  *       Manager): never into settings, an event, an error or a log; send it once and forget it.
  *       llm.choose picks the provider and its model: one that is not on this machine is chosen
  *       only with "local_only":"off", which turns local-only mode off with it; one on this
  *       machine, or none, turns it back on. It answers "setting.value" (llm.local_only) and a
  *       "consent.state" per feature first: choosing sends nothing, and each feature still needs
- *       its consent for the provider's endpoint. A model the shell registered is used before the
- *       chosen provider. Each answers "llm.providers" with the "id".
+ *       its consent for the provider's endpoint. "on_device" chooses the downloaded language
+ *       model (a "model" given must be its id; no base_url, no local_only): local-only mode on,
+ *       no key, and while it is chosen nothing stands in for it. The features use the chosen
+ *       provider; with none chosen, the core's own model once one is downloaded, else the model
+ *       the shell registered (Apple's on the Mac). Each answers "llm.providers" with the "id".
  *   {"cmd":"llm.test","id":"<ref>"}
  *       One short fixed request (never the user's words) to the chosen provider with its stored
  *       key, through local-only mode: "llm.tested" with the "id", saying whether it answered
- *       (and the HTTP status of a refusal). One at a time; another sent meanwhile fails as busy.
- *       A provider that has not answered within 60 s fails it, and ink_shutdown never waits for
- *       its answer.
- *   {"cmd":"modes.list"}
+ *       (and the HTTP status of a refusal) and how long the answer took ("answer_ms"). With no
+ *       provider chosen and a language model downloaded, it goes to that model (provider
+ *       "on_device", loaded first if it is not): "load_ms" times the load. One at a time;
+ *       another sent meanwhile fails as busy. A provider that has not answered within 60 s fails
+ *       it, and ink_shutdown never waits for a provider's answer. A load of the on-device model
+ *       cannot be stopped: one already under way when ink_shutdown begins finishes first (none
+ *       starts after), so ink_shutdown can wait seconds for it.
+ *   {"cmd":"modes.list","id":"<ref>"}
  *       "modes.listed": the user's modes, in the order they are matched, with the app identities
- *       each is picked for (on macOS, bundle ids: name them, never show them as they are).
+ *       each is picked for (on macOS, bundle ids: name them, never show them as they are), each
+ *       mode's polish instructions ("polish_prompt", blank for "default_polish_prompt") and its
+ *       own language model ("polish_model", absent for the AI setting's; "polish_model_name", a
+ *       model at that provider; "polish_model_state": ready, missing (not held now), moved
+ *       (sends elsewhere than where it was recorded) or unrecorded (never recorded): for the
+ *       last two, show where its model sends, ask the user, then save with
+ *       "polish_model_confirm":true and that destination as "polish_model_confirm_to").
+ *       "polish_models" lists every model a mode can pick now (engine:<id> for one the shell
+ *       registered, engine:local for the core's own language model, whichever is downloaded,
+ *       provider:<id> for the chosen own-key provider), each with where it sends
+ *       ("to", and for a cloud model its "endpoint"), the model it asks for ("model"), whether
+ *       polish may use it now ("allowed": a polish consent covers it and local-only mode lets
+ *       it) and "blocked_local_only";
+ *       "setting_polish_model" is the AI setting's. Ask again after llm.choose, consent.state
+ *       or an engine (un)registering.
+ *       Carries the user's words: never log it.
+ *   {"cmd":"modes.save","mode":{"id":"<absent to add>","name":"...","style":"formal|casual|relaxed",
+ *    "polish":true,"remove_fillers":true,"polish_prompt":"...","apps":["..."],
+ *    "polish_model":"<an id from polish_models, or null for the AI setting's>",
+ *    "polish_model_name":"<provider: only; a model at it, or null for the one chosen in AI>",
+ *    "polish_model_confirm":false,
+ *    "polish_model_confirm_to":{"to":"on_device|cloud","endpoint":"<for cloud>"}},
+ *    "take_apps":false,"replace_unreadable":false,"id":"<ref>"}
+ *   {"cmd":"modes.delete","mode":"<mode id>","id":"<ref>"}
+ *       Settings' mode editor. A save without "id" adds a mode (the core gives it an id); with
+ *       one it changes only the fields it names, and keeps the stored fields it does not know.
+ *       A delete gives the mode's apps back to the default mode. Each answers "modes.listed" with
+ *       the "id" (a save's with "saved", the mode's id) and reaches a running dictation at once
+ *       (a voice command's pin to a deleted mode is dropped). Where a mode's model sends is
+ *       recorded when a save picks another model or name, or confirms it
+ *       ("polish_model_confirm":true, after the user agreed to where it sends now, with
+ *       "polish_model_confirm_to" that destination; each needs the other, and null is none); a
+ *       save that sends the same pin back keeps what was recorded, and one that clears the model
+ *       ("polish_model":null) ignores a confirm sent with it. A refusal is command.failed with a
+ *       "code": name_blank, name_taken (another name sounds the same), name_is_style, too_long (a
+ *       name over 64 characters, instructions over 2000, over 64 apps or an app over 256, over 50
+ *       modes; an imported mode over 64 apps: "Shorten to 64 apps or fewer."), default_mode (it
+ *       cannot be deleted or given apps), app_taken (send again with "take_apps":true to move it),
+ *       app_invalid (a control character, one character, or no letter), mode_not_found,
+ *       model_unknown (not in polish_models), model_name_invalid (over 128 characters, a control
+ *       character, or not for a provider:), destination_changed (a confirmed model sends elsewhere
+ *       than "polish_model_confirm_to" now: list again, and ask again), and list_unreadable as for
+ *       snippets.save. Each rule is checked on what the save changes. A mode whose model the core
+ *       does not hold at a take, or that sends elsewhere than when it was saved, goes in as said
+ *       (dictation.warning polish_model_missing): never to another model, and its polish needs a
+ *       polish consent for that model's destination. While the stored modes cannot be read, nothing
+ *       is polished.
  *   {"cmd":"snippets.list","id":"<ref>"}
  *   {"cmd":"snippets.save","snippets":[{"id":"...","trigger":"...","expansion":"...",
  *    "category":"...","enabled":true}],"id":"<ref>"}
@@ -340,6 +547,41 @@ int32_t ink_init(const char *config_json, InkEventCallback cb, void *ctx);
  *       of the newest meetings in a row kept the user's words and none of the far end's.
  *       These four answer with the command's "id" as "ref"; a failure is "command.failed" with
  *       that "id", so a screen can tell "could not load" from "empty".
+ *   {"cmd":"stats.get","utc_offsets":[{"from_unix_ms":0,"minutes":60}],"week_start":1,
+ *    "id":"<ref>"}
+ *       "stats.counted": the Stats screen's numbers, counted on this computer from the library:
+ *       words dictated, speed against the user's own past, time saved against stats.typing_wpm,
+ *       the streak and a heatmap of words per day; meetings' hours, talk time (mic is the user,
+ *       far end the others), longest monologue and the user's lines ending in a question mark
+ *       (?, ？ or ؟); promises kept, open and overdue; which milestones are reached, each with a
+ *       name to word; the personal bests, from takes made here only (longest and fastest
+ *       dictation, most words in a day, best week, longest meeting, longest monologue); what time
+ *       saved is about (a key and a count, within a fifth); and last week's review until it is
+ *       dismissed (gains and plain facts only). A take the stuck-key watchdog stopped is no best
+ *       and counts in no speed or time saved (its words count).
+ *       A rest day (stats.rest_days) neither counts nor breaks a streak; a pause carries it over
+ *       days without a dictation; ended, it is shown by its latest and longest, never as lost.
+ *       Days are
+ *       the user's: "utc_offsets" is the zone's UTC offset over time, oldest first, each from the
+ *       moment it took effect (the first also covers everything before it; 1 to 400 of them,
+ *       minutes -840 to 840), and "week_start" the ISO weekday weeks start on (1 Monday to 7
+ *       Sunday). It answers with the "id" as "ref"; a failure is "command.failed" with that "id".
+ *   {"cmd":"milestones.check","utc_offsets":[...],"week_start":1,"id":"<ref>"}
+ *       "milestones.reached": the milestones (words dictated 1,000 to 100,000, streaks of 7 to
+ *       100 days) reached since the last check, to celebrate; usually none. Each is reported
+ *       once ever, remembered in the library. A library's first check reports none and notes
+ *       what is already reached; with stats.celebrate off a milestone is noted, never reported.
+ *       Send it at launch and after a dictation or a meeting ends. Takes stats.get's calendar.
+ *       Its "best" is a best the newest take (or today, or this week) just set, with the old value
+ *       and the new, for a short note: at most one a day, none on a library's first check or with
+ *       stats.celebrate off, and only once five earlier entries were beaten. A day's or a week's
+ *       best is reported once, when it first passes the old one, and grows on the shelf after.
+ *   {"cmd":"streak.pause","utc_offsets":[...],"week_start":1,"id":"<ref>"}
+ *   {"cmd":"streak.resume","utc_offsets":[...],"week_start":1,"id":"<ref>"}
+ *       Pause the streak from today (days without a dictation do not count against it, for up to
+ *       90 days unless resumed sooner), or end the running pause (it ends yesterday; one started
+ *       today goes). Either changes nothing when already so. "stats.counted" answers, with the
+ *       "id" as "ref"; the pauses are kept in the library. Takes stats.get's calendar.
  *
  * Returns INK_OK once the command is queued; its outcome arrives as events. A command the core
  * cannot read returns INK_ERR_INVALID_ARGUMENT and queues nothing.
@@ -386,7 +628,9 @@ int32_t ink_far_bands_read(InkBands *out);
  *     says false. "context_tokens" (optional, at least 256) is how many tokens its context holds,
  *     prompt and answer together: a meeting's summary and Ask are sized to fit it (4096 when not
  *     said). Registered language models do dictation polish, meeting summaries, commitments and
- *     Ask.
+ *     Ask. The id and "model" are the shell's word, which the core cannot check: a cloud engine
+ *     ("local":false) is named in a consent by both, so a consent given for it holds for an
+ *     engine the shell later registers under the same id and model name.
  * Ids are unique across every kind.
  *
  * ANSWERS. Every call below that takes a `call` id is answered with ink_engine_complete(call,

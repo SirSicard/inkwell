@@ -93,7 +93,8 @@ internal sealed class ShellInk : IDisposable
             ? null
             : new DropText(line.Title, line.Detail, Tone(line.Tone), line.LiveWords)
             {
-                Buttons = line.Actions is { } a ? new DropButtons(a.First.Title, a.Second?.Title) : null,
+                Buttons = line.Actions is { } a ? new DropButtons(a.All.Select(action => action.Title).ToList()) : null,
+                DetailLines = line.DetailLines,
             };
         live = InkFor(ink);
         Update();
@@ -151,7 +152,7 @@ internal sealed class ShellInk : IDisposable
     private void ApplyLook(DropWindow window)
     {
         window.Look = pillLook;
-        window.Surface.Look = orbLook;
+        window.OrbLook = orbLook;
         window.Surface.AlwaysStill = alwaysStill;
     }
 

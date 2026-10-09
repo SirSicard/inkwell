@@ -35,6 +35,17 @@ VO means Control-Option (or Caps Lock, if VoiceOver uses it as its modifier).
 - [ ] Live is not listed: it appears only while a meeting runs, and is checked with the Live
       screen (SCREENS-B-CHECKLIST.md, sections 3 and 6).
 
+## Settings > Sound
+
+- [ ] Settings > Sound: VoiceOver reads the "Sound" heading, then "Microphone, pop-up button" with
+      the choice ("Automatic (MacBook Pro Microphone)", or a mic with how it connects: "AirPods
+      Pro · Bluetooth"), and its hint is the caption under it.
+- [ ] Choose a mic that is then unplugged: VoiceOver announces "<name> isn't connected. Inkwell is
+      using <mic> until it is." without moving focus.
+- [ ] "Test the microphone, button": VO-Space starts the test; the button becomes "Stop the
+      microphone test". "Microphone level" reads a percentage while it runs and "No test running"
+      after; the line under it says "Inkwell heard you." or "Not hearing you? …".
+
 ## Closing and quitting
 
 - [ ] Command-W closes the window, and the Dock icon goes.

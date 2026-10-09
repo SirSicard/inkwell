@@ -6,11 +6,8 @@ import SwiftUI
 
 struct LibraryScreen: View {
     @Environment(LibraryModel.self) private var library
-    @Environment(Router.self) private var router
-    @FocusState private var searchFocused: Bool
 
     var body: some View {
-        @Bindable var library = library
         HStack(spacing: 0) {
             LibraryColumn()
                 .frame(width: 272)
@@ -33,15 +30,6 @@ struct LibraryScreen: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-        .searchable(text: $library.query, placement: .toolbar, prompt: "Search everything said")
-        .searchFocused($searchFocused)
-        .onChange(of: router.searchPending, initial: true) { _, pending in
-            // Find (⌘F) chose this field.
-            if pending {
-                searchFocused = true
-                router.searchPending = false
-            }
         }
         .onAppear {
             library.refreshList()
@@ -71,6 +59,13 @@ struct LibraryColumn: View {
                     .accessibilityLabel(searching ? "\(library.hits.count) matches" : "\(library.records.count) records")
             }
             .padding(.horizontal, 6)
+            if let note = library.deletionNote {
+                Text(note)
+                    .font(PaperType.meta)
+                    .foregroundStyle(Theme.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 6)
+            }
             if !searching {
                 KindFilter()
                     .padding(.horizontal, 6)
@@ -95,7 +90,18 @@ struct KindFilter: View {
     ]
 
     var body: some View {
-        HStack(spacing: 6) {
+        // A chip's label never wraps ("Meetin/gs"): the four fit the 272 pt list column at this
+        // padding (about 228 pt of its 236), and should they not, the row scrolls sideways.
+        ViewThatFits(in: .horizontal) {
+            chips
+            ScrollView(.horizontal, showsIndicators: false) { chips }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Show")
+    }
+
+    private var chips: some View {
+        HStack(spacing: 4) {
             ForEach(Self.kinds, id: \.1) { kind, title in
                 let on = library.filter == kind
                 Button {
@@ -103,7 +109,9 @@ struct KindFilter: View {
                 } label: {
                     Text(title)
                         .font(.system(size: Glow.Size.caption))
-                        .padding(.horizontal, 10)
+                        .lineLimit(1)
+                        .fixedSize()
+                        .padding(.horizontal, 7)
                         .frame(minHeight: 28)
                         .foregroundStyle(on ? Theme.buttonLabel : Theme.text)
                         .background(Capsule().fill(on ? Theme.buttonFill : PaperPalette.chip))
@@ -114,8 +122,6 @@ struct KindFilter: View {
                 .accessibilityHint(kind == nil ? "Shows every kind" : "Shows only \(title.lowercased())")
             }
         }
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("Show")
     }
 }
 
@@ -123,6 +129,7 @@ struct KindFilter: View {
 /// each row.
 struct RecordList: View {
     @Environment(LibraryModel.self) private var library
+    @FocusState private var listFocused: Bool
 
     private var emptyText: (String, String) {
         switch library.filter {
@@ -155,7 +162,9 @@ struct RecordList: View {
         } else {
             List(selection: Binding(get: { library.selected }, set: { if let id = $0 { library.open(id) } })) {
                 ForEach(library.records, id: \.record) { record in
-                    RecordRowView(record: record, now: now, calendar: library.calendar, selected: library.selected == record.record)
+                    RecordRowView(
+                        record: record, now: now, calendar: library.calendar, selected: library.selected == record.record,
+                        listFocused: listFocused)
                         .tag(record.record)
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
@@ -172,33 +181,41 @@ struct RecordList: View {
             }
             .listStyle(.plain)
             .scrollContentBackground(.hidden)
+            .focused($listFocused)
             .accessibilityLabel("Records")
         }
     }
 }
 
-/// One record in the list: what it is called, and when and how long.
+/// One record in the list: what it is called, and when and how long. Selected, it is a card; while
+/// the list has the keyboard AppKit fills it with the accent instead, and its words are in the
+/// button label.
 struct RecordRowView: View {
     let record: RecordRow
     let now: Date
     let calendar: Calendar
     let selected: Bool
+    let listFocused: Bool
+    @Environment(\.controlActiveState) private var active
+
+    private var onAccent: Bool { accentFillsRow(selected: selected, listFocused: listFocused, active: active) }
+    private var card: Bool { selected && !onAccent }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(LibraryFormat.title(of: record))
                 .font(.body.weight(.semibold))
-                .foregroundStyle(Theme.text)
+                .foregroundStyle(onAccent ? Theme.onAccent : Theme.text)
                 .lineLimit(2)
             Text(LibraryFormat.listLine(record, now: now, calendar: calendar))
                 .font(PaperType.meta)
-                .foregroundStyle(Theme.secondaryText)
+                .foregroundStyle(onAccent ? Theme.onAccent : Theme.secondaryText)
         }
         .padding(.vertical, 9)
         .padding(.horizontal, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 10).fill(selected ? PaperPalette.card : Color.clear))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(selected ? PaperPalette.border : Color.clear, lineWidth: 1))
+        .background(RoundedRectangle(cornerRadius: 10).fill(card ? PaperPalette.card : Color.clear))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(card ? PaperPalette.border : Color.clear, lineWidth: 1))
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
     }

@@ -4,8 +4,8 @@
 //! modifier on its own; hold-to-talk needs both. The hook sees every key event in the session
 //! before any app, needs no permission, and may swallow the hotkey's own events (the rules are in
 //! `machine`). It cannot see keys typed into an app running as administrator or on the secure
-//! desktop (UAC, the lock screen): a key released there is never seen, so the core's stuck-key
-//! watchdog ends such a hold.
+//! desktop (UAC, the lock screen): a key released there is never seen, so the key's next press
+//! ends such a hold (`machine`), and the core's stuck-key watchdog ends it if none comes.
 //!
 //! **Threads.** The hook runs on its own thread, which installs it and pumps messages: Windows
 //! calls the hook on that thread. The callback reads the event, updates a `Copy` state machine
@@ -23,8 +23,8 @@
 //! `stop` never reports `Lost`; a hold in progress is reported as `Cancelled`.
 //!
 //! **Panics.** A panic in the core's sink is caught on the hook thread (it must not unwind into
-//! user32), counted in [`WinHotkeySource::callback_panics`], and recovered: the hold starts over
-//! and `Cancelled` is sent.
+//! user32), counted in [`WinHotkeySource::callback_panics`], and recovered: the hold is abandoned
+//! and `Cancelled` is sent, while the key still down stays swallowed until it comes up.
 //!
 //! **Timestamps** are host time on the [`WinClock`] timebase: the hook's `time` (milliseconds on
 //! the tick counter) gives the event's age, which is taken off the clock's `now_ns`.
@@ -48,13 +48,16 @@ use windows::Win32::System::SystemInformation::GetTickCount;
 use windows::Win32::System::Threading::{
     GetCurrentThread, GetCurrentThreadId, SetThreadPriority, THREAD_PRIORITY_HIGHEST,
 };
+use windows::Win32::UI::Accessibility::FILTERKEYS;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, GetLastInputInfo, LASTINPUTINFO,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, GetMessageW, HC_ACTION, HHOOK, KBDLLHOOKSTRUCT, KillTimer, MSG, PM_NOREMOVE,
-    PeekMessageW, PostThreadMessageW, SetTimer, SetWindowsHookExW, UnhookWindowsHookEx,
-    WH_KEYBOARD_LL, WM_APP, WM_KEYDOWN, WM_KEYUP, WM_QUIT, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TIMER,
+    PeekMessageW, PostThreadMessageW, SPI_GETFILTERKEYS, SPI_GETKEYBOARDDELAY,
+    SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SetTimer, SetWindowsHookExW, SystemParametersInfoW,
+    UnhookWindowsHookEx, WH_KEYBOARD_LL, WM_APP, WM_KEYDOWN, WM_KEYUP, WM_QUIT, WM_SYSKEYDOWN,
+    WM_SYSKEYUP, WM_TIMER,
 };
 
 use crate::clock::WinClock;
@@ -63,6 +66,18 @@ use heartbeat::{Heartbeat, ReinstallBudget};
 use machine::{Edge, HoldMachine, HookInput};
 
 pub use binding::{DEFAULT_BINDING, KEYS};
+
+/// Whether the hook can watch `token` (a dictation or edit key the user chose): its canonical
+/// spelling ([`Binding::canonical`]), to store and compare, or why not, in the parser's own words.
+/// A [`WinHotkeySource`] binds exactly the tokens this accepts.
+pub fn check(token: &str) -> Result<String, &'static str> {
+    match Binding::parse(token) {
+        Ok(binding) => Ok(binding.canonical()),
+        Err(PlatformError::Unsupported(why)) => Err(why),
+        // The parser refuses only as Unsupported; anything else is still a refusal.
+        Err(_) => Err(binding::refusal::UNKNOWN_KEY),
+    }
+}
 
 /// The marker in `dwExtraInfo` on every key event this crate injects, so its own hook lets them
 /// through. Arbitrary; ASCII for "inkw".
@@ -94,6 +109,78 @@ pub(crate) fn event_time_ns(now_ns: u64, now_tick_ms: u32, event_tick_ms: u32) -
         return now_ns;
     }
     now_ns.saturating_sub(u64::from(age_ms) * 1_000_000)
+}
+
+/// The chord modifiers still down once `released` is up. The hook runs before the key state takes
+/// its event in, so the key coming up still reads as down: each modifier counts while a key of it
+/// other than `released` is down (left Ctrl let go of with right Ctrl held: still Ctrl). Reads key
+/// state only: no allocation, no lock.
+fn modifiers_after_release(released: u32) -> u8 {
+    // SAFETY: GetAsyncKeyState takes any virtual key and only reads state.
+    let down = |key: u32| key != released && unsafe { GetAsyncKeyState(key as i32) } < 0;
+    let mut bits = 0;
+    if down(vk::LCONTROL) || down(vk::RCONTROL) {
+        bits |= modifier::CTRL;
+    }
+    if down(vk::LSHIFT) || down(vk::RSHIFT) {
+        bits |= modifier::SHIFT;
+    }
+    if down(vk::LMENU) || down(vk::RMENU) {
+        bits |= modifier::ALT;
+    }
+    if down(vk::LWIN) || down(vk::RWIN) {
+        bits |= modifier::WIN;
+    }
+    bits
+}
+
+/// Whether the key state reads `key` as down before the event the hook is deciding (the hook runs
+/// before the state takes the event in): the OS saw the key go down and has not seen it come up.
+/// A key the hook swallows reads as up at its repeats and key-up too (see `machine`). Reads key
+/// state only. **Hook thread.**
+fn reads_down(key: u32) -> bool {
+    // SAFETY: GetAsyncKeyState takes any virtual key and only reads state.
+    let state = unsafe { GetAsyncKeyState(key as i32) };
+    state < 0
+}
+
+/// FilterKeys is on (`FKF_FILTERKEYSON`, which windows-rs does not bind).
+const FKF_FILTERKEYSON: u32 = 0x1;
+
+/// [`machine::repeat_gap_ms`] from the keyboard settings now, or the fallback if they cannot be
+/// read. **Hook thread**, outside the callback.
+fn repeat_gap_now() -> u32 {
+    let mut setting = 0u32;
+    // SAFETY: SPI_GETKEYBOARDDELAY writes one integer to the live variable passed.
+    let delay = unsafe {
+        SystemParametersInfoW(
+            SPI_GETKEYBOARDDELAY,
+            0,
+            Some((&raw mut setting).cast()),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        )
+    }
+    .map(|()| setting);
+    let mut keys = FILTERKEYS {
+        cbSize: size_of::<FILTERKEYS>() as u32,
+        ..Default::default()
+    };
+    // SAFETY: SPI_GETFILTERKEYS fills the live struct passed, its size set.
+    let filter = unsafe {
+        SystemParametersInfoW(
+            SPI_GETFILTERKEYS,
+            keys.cbSize,
+            Some((&raw mut keys).cast()),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        )
+    }
+    .map(|()| {
+        (keys.dwFlags & FKF_FILTERKEYSON != 0).then_some((keys.iDelayMSec, keys.iRepeatMSec))
+    });
+    match (delay, filter) {
+        (Ok(delay), Ok(filter)) => machine::repeat_gap_ms(delay, filter),
+        _ => machine::FALLBACK_REPEAT_GAP_MS,
+    }
 }
 
 /// The chord modifiers down now. **Hook thread.**
@@ -135,10 +222,11 @@ thread_local! {
     static CALLBACKS: Cell<u64> = const { Cell::new(0) };
 }
 
-/// Calls the sink; a panic is caught, counted and recovered (the hold is reset, `Cancelled` sent).
-fn emit(context: &HookContext, event: HotkeyEvent) {
+/// Calls the sink; a panic is caught, counted and recovered (the hold is abandoned, `Cancelled`
+/// sent). Whether the sink took the event.
+fn emit(context: &HookContext, event: HotkeyEvent) -> bool {
     if catch_unwind(AssertUnwindSafe(|| (context.sink)(event))).is_ok() {
-        return;
+        return true;
     }
     context.panics.fetch_add(1, Ordering::Relaxed);
     MACHINE.with(|m| {
@@ -148,6 +236,7 @@ fn emit(context: &HookContext, event: HotkeyEvent) {
         }
     });
     let _ = catch_unwind(AssertUnwindSafe(|| (context.sink)(HotkeyEvent::Cancelled)));
+    false
 }
 
 /// The hook. **Hook thread.**
@@ -177,16 +266,24 @@ fn decide(event: &KBDLLHOOKSTRUCT, message: u32) -> bool {
         HEARTBEAT_SEEN.set(true);
         return true; // ours alone: no app sees it
     }
+    let Some(mut machine) = MACHINE.with(Cell::get) else {
+        return false;
+    };
+    // The key state is read for the hotkey's own key only: the callback runs on every keystroke.
+    let ours = event.vkCode == machine.key_vk();
     let input = match message {
         WM_KEYDOWN | WM_SYSKEYDOWN => HookInput::KeyDown {
             vk: event.vkCode,
             modifiers: modifiers_down(),
+            reads_down: ours && reads_down(event.vkCode),
+            at_ms: event.time,
         },
-        WM_KEYUP | WM_SYSKEYUP => HookInput::KeyUp { vk: event.vkCode },
+        WM_KEYUP | WM_SYSKEYUP => HookInput::KeyUp {
+            vk: event.vkCode,
+            modifiers: modifiers_after_release(event.vkCode),
+            reads_down: ours && reads_down(event.vkCode),
+        },
         _ => return false,
-    };
-    let Some(mut machine) = MACHINE.with(Cell::get) else {
-        return false;
     };
     let verdict = machine.on(input);
     MACHINE.with(|m| m.set(Some(machine)));
@@ -201,13 +298,20 @@ fn decide(event: &KBDLLHOOKSTRUCT, message: u32) -> bool {
                 // SAFETY: no arguments; reads the tick counter.
                 let now_tick = unsafe { GetTickCount() };
                 let at_ns = event_time_ns(context.clock.now_ns(), now_tick, event.time);
-                emit(
-                    context,
-                    match edge {
-                        Edge::Pressed => HotkeyEvent::Pressed { at_ns },
-                        Edge::Released => HotkeyEvent::Released { at_ns },
-                    },
-                );
+                match edge {
+                    Edge::Pressed => {
+                        emit(context, HotkeyEvent::Pressed { at_ns });
+                    }
+                    Edge::Released => {
+                        emit(context, HotkeyEvent::Released { at_ns });
+                    }
+                    Edge::ReleasedThenPressed => {
+                        // If the release panicked, the key now trails (`emit`): no press after it.
+                        if emit(context, HotkeyEvent::Released { at_ns }) {
+                            emit(context, HotkeyEvent::Pressed { at_ns });
+                        }
+                    }
+                }
             }
         });
     }
@@ -225,7 +329,7 @@ fn run(
     let mut msg = MSG::default();
     // SAFETY: a live MSG; PM_NOREMOVE leaves the queue as it is.
     let _ = unsafe { PeekMessageW(&mut msg, None, 0, 0, PM_NOREMOVE) };
-    MACHINE.with(|m| m.set(Some(HoldMachine::new(binding))));
+    MACHINE.with(|m| m.set(Some(HoldMachine::new(binding, repeat_gap_now()))));
     CONTEXT.with(|c| *c.borrow_mut() = Some(context));
     // The hook's deadline is wall time: a busy machine must not starve this thread into it.
     // SAFETY: the pseudo-handle of this thread.
@@ -246,6 +350,15 @@ fn run(
             return forget();
         }
     };
+    // A shortcut recorded while hooks were suspended may still be physically held on resume.
+    // Before ready (and before pumping callbacks), let that initial hold finish without an
+    // action. The OS saw its down, so its repeats and release must continue reaching the app.
+    MACHINE.with(|slot| {
+        if let Some(mut machine) = slot.get() {
+            machine.wait_for_initial_release(reads_down(machine.key_vk()));
+            slot.set(Some(machine));
+        }
+    });
     // `start` gave up waiting (it said so to its caller): the hook must not outlive that answer.
     // SAFETY: no arguments.
     if cancelled.load(Ordering::Acquire) || ready.send(Ok(unsafe { GetCurrentThreadId() })).is_err()
@@ -311,9 +424,21 @@ fn pump(mut hook: HHOOK) -> (HHOOK, bool) {
         match msg.message {
             WM_INK_MASK => crate::insert::send_mask_key(),
             WM_TIMER if tick_timer != 0 && msg.wParam.0 == tick_timer => {
+                // The keyboard settings may have changed (FilterKeys switched on, say).
+                let gap = repeat_gap_now();
+                MACHINE.with(|m| {
+                    if let Some(mut machine) = m.get() {
+                        machine.set_repeat_gap(gap);
+                        m.set(Some(machine));
+                    }
+                });
                 // SAFETY: no arguments.
                 let now = unsafe { GetTickCount() };
-                let due = last_input_tick().is_some_and(|last| heartbeat.should_send(now, last));
+                // Not while an elevated window is in front: it would drop the heartbeat (UIPI).
+                let due = last_input_tick().is_some_and(|last| {
+                    heartbeat
+                        .should_send(now, last, || !crate::integrity::foreground_blocks_input())
+                });
                 if due && check_timer == 0 {
                     HEARTBEAT_SEEN.set(false);
                     if crate::insert::send_heartbeat() {
@@ -363,8 +488,8 @@ fn pump(mut hook: HHOOK) -> (HHOOK, bool) {
 }
 
 /// After a reinstall: counted. A hold in progress is kept, because the miss may have been false
-/// (another hook ate the heartbeat); if its release really was lost, the core's stuck-hold
-/// watchdog ends it.
+/// (another hook ate the heartbeat); if its release really was lost, the key's next press ends it,
+/// or the core's stuck-hold watchdog does.
 fn reinstalled() {
     CONTEXT.with(|c| {
         if let Some(context) = c.borrow().as_ref() {
@@ -460,7 +585,7 @@ impl WinHotkeySource {
     }
 
     /// Panics caught on the hook thread since this source was created. Each was recovered: the
-    /// hold was reset and `Cancelled` sent. A non-zero count is a bug to report.
+    /// hold was abandoned and `Cancelled` sent. A non-zero count is a bug to report.
     pub fn callback_panics(&self) -> u64 {
         self.panics.load(Ordering::Relaxed)
     }

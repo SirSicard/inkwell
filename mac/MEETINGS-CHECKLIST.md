@@ -65,10 +65,16 @@ name or a meeting title into this file or a bug: the repository is public.
 - [ ] During a recorded call where the other side is talking, turn Inkwell off in System Settings >
       Privacy & Security > Screen & System Audio Recording (the system-audio list).
 - [ ] **The warning appears within 20 s**: the Drop's border turns seal red, "The other side is
-      silent", "System audio is off, so only your voice is being recorded.", and "Allow system
-      audio". Today's banner says the same. Seconds from the switch to the warning: ______
-- [ ] Click back into Inkwell (it checks the permission when it becomes active): the Drop says
-      "System audio is off" at once, even before the silence is long enough for the watchdog.
+      silent", "Only silence is arriving from the call." (zeros alone do not prove the permission
+      is off: a call that goes quiet delivers them too, so no permission button yet). Today's
+      banner says "Inkwell can't hear the other side of this call" with "Allow system audio".
+      Seconds from the switch to the warning: ______
+- [ ] Click back into Inkwell with Today showing (it checks the permission when it becomes
+      active): the Drop now says "System audio is off, so only your voice is being recorded." with
+      "Allow system audio", even before the silence is long enough for the watchdog.
+- [ ] With the permission on, let the call go quiet for 15 s: the Drop says "The other side is
+      silent" and "Only silence is arriving from the call.", never "System audio is off", and
+      offers no permission button.
 - [ ] Turn it back on: the warning clears once their audio arrives again.
 
 ## 3. Crash recovery (needs you)
@@ -81,10 +87,13 @@ name or a meeting title into this file or a bug: the repository is public.
 
 ## 4. Settings
 
-- [ ] Settings > Meetings: turn "Offer to record calls" off; Today reads "Not listening for
-      meetings" and a call gets no Drop. Turn it on again.
-- [ ] "Use the headset's microphone" on, with Bluetooth headphones: the next meeting's header names
-      the headset's mic. Turn it off again.
+- [ ] Settings > Meetings: set "Calls in other apps" to Never with no app chosen for; Today reads
+      "Not listening for calls" and a call gets no Drop. Set it to Always: a call from an app not
+      chosen for is recorded at once, the Drop says "Recording {app} automatically" with Stop and
+      Stop and delete, and Stop and delete goes after its first minute. Set it back to Ask. In the
+      app list, choose Never for one app: its next call gets no Drop. Set it back to Default.
+- [ ] Settings > Sound, with Bluetooth headphones: choose the headset's mic as the microphone; the
+      next meeting's header names it. Set it back to Automatic.
 - [ ] Settings > Storage > Keep records: choose 30 days on a library that has meetings or
       dictations older than that (or wait): they leave the Library at once, imports stay, and
       Settings > Storage's sizes go down after a relaunch. Set it back to Forever.

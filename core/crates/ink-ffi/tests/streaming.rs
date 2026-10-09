@@ -554,6 +554,7 @@ fn a_registry_model_gives_a_meeting_its_live_partials() {
             wer: 27.9,
         }],
         runtime: Runtime::SherpaOnnx,
+        kind: ink_engines::RowKind::Speech,
         ..test_row("test-live")
     };
     // One segment per decode, over the whole window: settled when the stream finishes.

@@ -20,6 +20,8 @@ internal sealed class GlowTheme
 {
     private readonly AppearanceModel appearance;
     private readonly AccessibilitySettings accessibility = new();
+    /// <summary>Held, so its event stays subscribed.</summary>
+    private readonly UISettings uiSettings = new();
     private FrameworkElement? root;
     private AppWindow? window;
 
@@ -30,8 +32,10 @@ internal sealed class GlowTheme
         ArgumentNullException.ThrowIfNull(ui);
         this.appearance = appearance;
         appearance.PropertyChanged += (_, _) => Update();
-        // Raised off the UI thread.
-        accessibility.HighContrastChanged += (_, _) => ui.TryEnqueue(Update);
+        // High Contrast turned on or off changes Windows' colours. AccessibilitySettings'
+        // HighContrastChanged is not this event: it needs a CoreWindow, and subscribing to it in a
+        // desktop app throws (0x80070490), so the app crashed on launch. Raised off the UI thread.
+        uiSettings.ColorValuesChanged += (_, _) => ui.TryEnqueue(Update);
         Update();
     }
 
@@ -55,6 +59,9 @@ internal sealed class GlowTheme
 
     /// <summary>Whether the window's edge glows while something is live.</summary>
     public bool EdgeGlow => appearance.EdgeGlow;
+
+    /// <summary>How strongly the window's orb shows behind its text at rest, 0.1 to 1 (Settings > Appearance).</summary>
+    public float OrbStrength => appearance.OrbStrength / 100f;
 
     /// <summary>The user's Always still.</summary>
     public bool AlwaysStill => appearance.Motion == AppearanceMotion.Still;
@@ -102,8 +109,10 @@ internal sealed class GlowTheme
             Dark = appearance.IsDark(Application.Current.RequestedTheme == ApplicationTheme.Dark);
         }
         Colours = appearance.Colours(Dark);
+        // At rest the orb leans toward the preset (the main window's and the Drop's; the first run
+        // rests untinted, OnboardingSheet).
         Look = new GlowLook(Dark, Tuple(Colours.You), Tuple(Colours.YouPartner), Tuple(Colours.Them), Tuple(Colours.ThemPartner),
-            Tuple(Colours.Idle), Tuple(Colours.Ink));
+            Tuple(Colours.Idle), Tuple(Colours.Ink), GlowLook.ShellRestTint);
         var tokens = GlowScheme.Palette(Dark);
         DropLook = new DropLook(Dark, Tuple(tokens.Background), Tuple(tokens.Border), Tuple(tokens.Text), Tuple(tokens.Secondary),
             Tuple(tokens.Alert), Tuple(tokens.ButtonFill), Tuple(tokens.ButtonLabel));

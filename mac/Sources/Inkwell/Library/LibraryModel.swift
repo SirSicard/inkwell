@@ -26,6 +26,10 @@ final class LibraryModel {
         case todayOpen
         case statsDay
         case statsWeek
+        /// A name given to one of the open record's speakers.
+        case speaker
+        /// A record the user deleted.
+        case delete
     }
 
     /// Where an answer is: asked and not answered, answered, or failed.
@@ -74,6 +78,13 @@ final class LibraryModel {
     private(set) var openFailure: String?
     /// Plays the open record's audio.
     private(set) var player: RecordPlayer?
+    /// Why the last name given to a speaker was not saved (the core's words), until the next try.
+    private(set) var namingFailure: String?
+    /// Why the last record the user deleted was not deleted (the core's words), until the next try.
+    private(set) var deleteFailure: String?
+    /// What the last deletion left on this Mac, when it left anything: its words not yet cleared
+    /// from the library's files, or its recording.
+    private(set) var deletionNote: String?
 
     /// Today: the latest finished meeting, whole.
     private(set) var lastMeeting: RecordDocument?
@@ -125,6 +136,11 @@ final class LibraryModel {
     @ObservationIgnored private let send: SendCommand
     @ObservationIgnored private var sequence = 0
     @ObservationIgnored private var latest: [Slot: String] = [:]
+    /// The record the last `record.delete` asked about: its failure is shown only on it.
+    @ObservationIgnored private var deleting: String?
+    /// The names sent for the open record's speakers, by label: what the store holds once each is
+    /// saved, before the record is read again. Forgotten when one fails, and with the record.
+    @ObservationIgnored private var sentNames: [String: String] = [:]
     /// Where to put the playhead once the record being opened arrives.
     @ObservationIgnored private var pendingSeek: Int64?
     @ObservationIgnored private var pendingPlay = false
@@ -232,6 +248,10 @@ final class LibraryModel {
         selected = record
         document = nil
         openFailure = nil
+        namingFailure = nil
+        deleteFailure = nil
+        deletionNote = nil
+        sentNames = [:]
         replacePlayer(nil)
         send(.recordOpen(record: record, ref: ref(for: .open)))
     }
@@ -247,6 +267,64 @@ final class LibraryModel {
     /// shows a failure (it lists again); the record is read again when the core says it changed.
     func setDone(_ commitment: String, _ done: Bool) {
         send(.commitmentSetDone(id: commitment, done: done))
+    }
+
+    /// The longest name a speaker takes, in Unicode scalars, as the core counts it
+    /// (MAX_SPEAKER_NAME_CHARS): an emoji or an accent written as two scalars counts two.
+    static let maxSpeakerName = 80
+
+    /// A name's length as the core counts it, once on one line.
+    static func nameLength(_ name: String) -> Int {
+        oneLine(name).unicodeScalars.count
+    }
+
+    /// Names one of the open record's far-end speakers, by the diarizer's label, as the user typed
+    /// it: on one line (a pasted line break is a space), trimmed, and empty clears the name (the
+    /// speaker reads as "Speaker N" again). Nothing is sent when nothing changed, or for a label
+    /// the record's far end does not have (the mic is the user, never renamed). The record is read
+    /// again when the core says it is saved; a name the core refuses (too long) is said, as any
+    /// failure (`namingFailure`).
+    func nameSpeaker(_ label: String, _ name: String) {
+        guard let document, let speaker = document.speaker(labelled: label) else { return }
+        let name = Self.oneLine(name)
+        // Unchanged from what was last sent, or else from what the record says: a rename sent
+        // since the record was read makes the record's name stale.
+        guard name != (sentNames[label] ?? speaker.name ?? "") else { return }
+        namingFailure = nil
+        sentNames[label] = name
+        send(.speakerName(record: document.record.record, speaker: label, name: name, ref: ref(for: .speaker)))
+    }
+
+    /// Deletes `record` whole: asked only once the user confirmed (`deletionWarning`). Nothing
+    /// moves until the core says it is gone (`record.deleted`); a refusal (a record still being
+    /// recorded or finished) is said (`deleteFailure`).
+    func deleteRecord(_ record: String) {
+        deleteFailure = nil
+        deleting = record
+        send(.recordDelete(record: record, ref: ref(for: .delete)))
+    }
+
+    /// What the confirmation says goes with `record`, and that it can't be undone.
+    static func deletionWarning(for record: RecordRow) -> String {
+        let what = switch record.kind {
+        case .meeting:
+            "Its audio, transcript, notes and summary, and what's owed from it, are deleted from this Mac."
+        case .dictation:
+            "Its words are deleted from this Mac."
+        case .fileImport:
+            "Its transcript, notes and summary, and what's owed from it, are deleted from this Mac. The file you imported stays where it is."
+        }
+        return what + " This can't be undone."
+    }
+
+    /// `text` on one line: every run of spaces, line breaks and control characters (the core
+    /// refuses those) is one space, and none at either end.
+    static func oneLine(_ text: String) -> String {
+        text.split(whereSeparator: { character in
+            character.isWhitespace
+                || character.unicodeScalars.contains { $0.properties.generalCategory == .control }
+        })
+        .joined(separator: " ")
     }
 
     /// Puts the playhead at `ms` (a chip, a line, a search hit) and plays from there.
@@ -294,9 +372,23 @@ final class LibraryModel {
             case .commitmentUpdated, .noteAdded, .noteUpdated, .noteDeleted:
                 // The open record may hold it: read it again.
                 recordChanged = true
-            case .meetingFinished, .dictationInserted, .coreReady, .importFinished:
-                // A record was written or finished, or 0.2's came over: what the screens list has
-                // changed.
+            case .recordDeleted(let deleted):
+                removed(deleted)
+                // Today's counts and its last meeting may have changed.
+                libraryChanged = true
+            case .speakerNamed(let named):
+                // The name shows wherever that record does: the open record, and Today's last
+                // meeting.
+                if document?.record.record == named.record {
+                    recordChanged = true
+                    if current(named.ref) == .speaker { namingFailure = nil }
+                }
+                if lastMeeting?.record.record == named.record {
+                    send(.recordOpen(record: named.record, ref: ref(for: .todayOpen)))
+                }
+            case .meetingFinished, .meetingDiscarded, .dictationInserted, .coreReady, .importFinished:
+                // A record was written, finished or deleted with Stop and delete, or 0.2's came
+                // over: what the screens list has changed.
                 libraryChanged = true
             default:
                 break
@@ -334,9 +426,57 @@ final class LibraryModel {
         case .statsWeek:
             week = nil
             weekLoad = .failed
+        case .delete:
+            // Only on the record it was about: another may be open by now.
+            if selected == deleting { deleteFailure = failed.message }
+        case .speaker:
+            namingFailure = failed.message
+            // What was sent did not stick: the record's names are what stands.
+            sentNames = [:]
         default:
             break
         }
+    }
+
+    /// A record is gone: out of the list and the matches, out of Today, and the selection moves to
+    /// the record below it in what the column shows (the matches while searching, else the list;
+    /// above when it was the last), or to none. What it left behind is said until the next record
+    /// is opened.
+    private func removed(_ deleted: RecordDeleted) {
+        let gone = deleted.record
+        let searching = !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        func shown() -> [String] {
+            var seen = Set<String>()
+            return (searching ? hits.map(\.record) : records.map(\.record)).filter { seen.insert($0).inserted }
+        }
+        let index = shown().firstIndex(of: gone)
+        records.removeAll { $0.record == gone }
+        hits.removeAll { $0.record == gone }
+        if lastMeeting?.record.record == gone {
+            lastMeeting = nil
+            // Asked for again (libraryChanged): not "no meetings yet" meanwhile.
+            lastMeetingLoad = .loading
+        }
+        if selected == gone {
+            let rest = shown()
+            if let index, !rest.isEmpty {
+                open(rest[min(index, rest.count - 1)])
+            } else {
+                selected = nil
+                document = nil
+                openFailure = nil
+                pendingSeek = nil
+                replacePlayer(nil)
+            }
+        }
+        var left: [String] = []
+        if !deleted.scrubbed {
+            left.append("its words are still in the library's files while another app reads them, and Inkwell clears them as soon as it can")
+        }
+        if deleted.audioLeft {
+            left.append("its recording couldn't be removed from the library's folder")
+        }
+        deletionNote = left.isEmpty ? nil : "Deleted, but " + left.joined(separator: ", and ") + "."
     }
 
     private func receive(_ answer: LibraryRecords) {

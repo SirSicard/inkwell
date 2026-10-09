@@ -59,7 +59,7 @@ struct GeneralSection: View {
             if screens.import02.offered || screens.import02.checkFailed {
                 Import02Card(model: screens.import02)
                     .padding(14)
-                    .paperCard()
+                    .cardGroup()
             }
         }
         .onAppear { login = LoginItem.state }
@@ -78,22 +78,126 @@ struct GeneralSection: View {
     }
 }
 
-/// A setting: its name on the left, its controls on the right.
+/// A setting: its name on the left, its controls on the right (above them in a narrow window:
+/// SettingColumns).
 struct SettingRow<Content: View>: View {
     let title: String
+    /// The least room the controls get beside the name (SettingColumnsLayout).
+    var controlsMinimum: CGFloat = SettingColumnsLayout.controlsMinimum
     @ViewBuilder var content: Content
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
-            Text(title).frame(width: 150, alignment: .leading)
+        SettingColumns(controlsMinimum: controlsMinimum) {
+            Text(title)
+        } controls: {
             VStack(alignment: .leading, spacing: 6) {
                 content
             }
-            Spacer(minLength: 0)
         }
         .font(Typography.body)
         .padding(.vertical, 4)
         .accessibilityElement(children: .contain)
+    }
+}
+
+/// A Settings row's name and what goes with it: side by side, the name in a 150-pt column and its
+/// first line level with the controls' first line, where the row has room for both; narrower, the
+/// name above the controls, each as wide as the row. Settings sets the window's minimum width (the
+/// hosting controller sizes it from SwiftUI's), and a fixed name column beside fixed-width controls
+/// held that minimum above the window's 720.
+struct SettingColumns<Title: View, Controls: View>: View {
+    /// The name's column, side by side.
+    var titleWidth: CGFloat = SettingColumnsLayout.titleWidth
+    /// The least room the controls get beside the name.
+    var controlsMinimum: CGFloat = SettingColumnsLayout.controlsMinimum
+    @ViewBuilder var title: Title
+    @ViewBuilder var controls: Controls
+
+    var body: some View {
+        // Each side one subview, whatever it holds.
+        SettingColumnsLayout(titleWidth: titleWidth, controlsMinimum: controlsMinimum) {
+            VStack(alignment: .leading, spacing: 0) { title }
+            controls
+        }
+    }
+}
+
+/// SettingColumns' arithmetic: the name and the controls side by side from `sideBySideWidth`,
+/// stacked under it.
+struct SettingColumnsLayout: Layout {
+    static let titleWidth: CGFloat = 150
+    static let spacing: CGFloat = 12
+    /// The least room a row's controls get beside the name, unless it asks for more: as much as
+    /// the dictation keys' controls need with their button stacked (KeyControls).
+    static let controlsMinimum: CGFloat = 240
+    /// The room a row with the Mode picker asks for: its segments' width (325.5 pt on macOS 26), so
+    /// segments shown in the stacked row still fit beside the name, and as the window widens the
+    /// picker turns from a menu to segments once (SegmentsOrMenu). The ink-motion picker's
+    /// segments fit in the default.
+    static let segmentedModeRoom: CGFloat = 330
+    /// Between the name and the controls under it.
+    static let stackedSpacing: CGFloat = 4
+
+    var titleWidth: CGFloat = Self.titleWidth
+    var controlsMinimum: CGFloat = Self.controlsMinimum
+    var sideBySideWidth: CGFloat { titleWidth + Self.spacing + controlsMinimum }
+
+    private struct Arrangement {
+        var size: CGSize
+        var title: (origin: CGPoint, proposal: ProposedViewSize)
+        var controls: (origin: CGPoint, proposal: ProposedViewSize)
+    }
+
+    /// Measuring and placing both arrange for the width proposed, so they always agree.
+    private func arrange(_ proposed: CGFloat?, _ subviews: Subviews) -> Arrangement? {
+        guard subviews.count == 2 else { return nil }
+        let (title, controls) = (subviews[0], subviews[1])
+        // An unbounded width is the ideal size, as no width is.
+        let width = proposed.flatMap { $0.isFinite ? $0 : nil }
+        // No width proposed: side by side, as on a wide window.
+        if width.map({ $0 >= sideBySideWidth }) ?? true {
+            let titleProposal = ProposedViewSize(width: titleWidth, height: nil)
+            let room = width.map { $0 - titleWidth - Self.spacing }
+            let controlsProposal = ProposedViewSize(width: room, height: nil)
+            let titleSize = title.sizeThatFits(titleProposal)
+            let controlsSize = controls.sizeThatFits(controlsProposal)
+            // The first lines level: whichever's baseline sits lower sets where the other starts.
+            let titleBaseline = title.dimensions(in: titleProposal)[VerticalAlignment.firstTextBaseline]
+            let controlsBaseline = controls.dimensions(in: controlsProposal)[VerticalAlignment.firstTextBaseline]
+            let titleY = max(0, controlsBaseline - titleBaseline)
+            let controlsY = max(0, titleBaseline - controlsBaseline)
+            let natural = titleWidth + Self.spacing + controlsSize.width
+            return Arrangement(
+                size: CGSize(
+                    // Ideally at least wide enough to stay side by side.
+                    width: max(width ?? sideBySideWidth, natural),
+                    height: max(titleY + titleSize.height, controlsY + controlsSize.height)),
+                title: (CGPoint(x: 0, y: titleY), titleProposal),
+                controls: (CGPoint(x: titleWidth + Self.spacing, y: controlsY), controlsProposal))
+        }
+        let proposal = ProposedViewSize(width: width, height: nil)
+        let titleSize = title.sizeThatFits(proposal)
+        let controlsSize = controls.sizeThatFits(proposal)
+        let controlsY = titleSize.height + Self.stackedSpacing
+        // As wide as the row, or wider when the controls can't be narrower (the minimum size).
+        let natural = max(titleSize.width, controlsSize.width)
+        return Arrangement(
+            size: CGSize(width: max(width ?? natural, natural), height: controlsY + controlsSize.height),
+            title: (.zero, proposal),
+            controls: (CGPoint(x: 0, y: controlsY), proposal))
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        arrange(proposal.width, subviews)?.size ?? .zero
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard let arrangement = arrange(proposal.width, subviews) else { return }
+        for (subview, place) in zip(subviews, [arrangement.title, arrangement.controls]) {
+            subview.place(
+                at: CGPoint(x: bounds.minX + place.origin.x, y: bounds.minY + place.origin.y),
+                anchor: .topLeading, proposal: place.proposal)
+        }
     }
 }
 
@@ -115,20 +219,23 @@ struct AppearanceSection: View {
                     .foregroundStyle(Theme.alert)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            SettingRow(title: "Mode") {
-                // Not fixed in size: at its full width (325 pt on macOS 26) beside the row's title it
-                // would set the Settings screen's minimum width above the window's.
-                Picker("Mode", selection: Binding(get: { theme.settings.mode }, set: { theme.setMode($0) })) {
-                    ForEach(GlowTheme.Mode.allCases) { Text($0.title).tag($0) }
+            SettingRow(title: "Mode", controlsMinimum: SettingColumnsLayout.segmentedModeRoom) {
+                // In a window a segmented control keeps its full width (325 pt on macOS 26), and
+                // that would set Settings' minimum width: a menu where the row is narrower.
+                SegmentsOrMenu {
+                    Picker("Mode", selection: Binding(get: { theme.settings.mode }, set: { theme.setMode($0) })) {
+                        ForEach(GlowTheme.Mode.allCases) { Text($0.title).tag($0) }
+                    }
+                    .labelsHidden()
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
             }
             SettingRow(title: "Dots") {
                 Text("\(modeName) keeps its own choice")
                     .font(Typography.caption)
                     .foregroundStyle(Theme.secondaryText)
-                LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
+                // Two columns where a tile beside a tile has room for the longest name on one line,
+                // else one: a name never breaks inside a word.
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: PresetButton.minimumWidth), spacing: 8)], spacing: 8) {
                     ForEach(Glow.presets) { preset in
                         PresetButton(preset: preset, selected: preset.id == theme.preset.id) {
                             theme.setPreset(preset.id)
@@ -160,13 +267,29 @@ struct AppearanceSection: View {
                     .font(Typography.caption)
                     .foregroundStyle(Theme.secondaryText)
             }
-            SettingRow(title: "The ink moves") {
-                Picker("The ink moves", selection: Binding(get: { theme.settings.motion }, set: { theme.setMotion($0) })) {
-                    ForEach(GlowTheme.Motion.allCases) { Text($0.title).tag($0) }
+            SettingRow(title: "Orb strength") {
+                HStack {
+                    Slider(value: Binding(
+                        get: { Double(theme.settings.orbStrength) },
+                        set: { theme.setOrbStrength(Int($0)) }), in: 10...100, step: 10)
+                        .accessibilityLabel("Orb strength")
+                    Text("\(theme.settings.orbStrength) %")
+                        .font(Typography.caption)
+                        .monospacedDigit()
+                        .frame(width: 48, alignment: .trailing)
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .fixedSize()
+                Text("How strongly the orb shows behind the window's text. It steps back while recording.")
+                    .font(Typography.caption)
+                    .foregroundStyle(Theme.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            SettingRow(title: "The ink moves") {
+                SegmentsOrMenu {
+                    Picker("The ink moves", selection: Binding(get: { theme.settings.motion }, set: { theme.setMotion($0) })) {
+                        ForEach(GlowTheme.Motion.allCases) { Text($0.title).tag($0) }
+                    }
+                    .labelsHidden()
+                }
                 Text("Following the system, Reduce Motion holds the orb and the edge still.")
                     .font(Typography.caption)
                     .foregroundStyle(Theme.secondaryText)
@@ -181,11 +304,125 @@ struct AppearanceSection: View {
     }
 }
 
+/// A row of fields and buttons on one line from `minWidth`, and narrower, one under another. One
+/// set of views either way, so a field being typed in keeps the keyboard as the window is resized.
+struct LineOrStack<Content: View>: View {
+    let minWidth: CGFloat
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        LineOrStackLayout(minWidth: minWidth) { content }
+    }
+}
+
+/// LineOrStack's arithmetic, chosen from the width proposed when measuring and placing alike. On
+/// one line (from `minWidth`, or with no width proposed): left to right, first text baselines
+/// level, the fixed-width views at their width and the flexible ones (the text fields without a
+/// width) sharing the rest. Stacked: one under another, each offered the whole width.
+struct LineOrStackLayout: Layout {
+    let minWidth: CGFloat
+    static let lineSpacing: CGFloat = 8
+    static let stackSpacing: CGFloat = 6
+
+    private struct Arrangement {
+        var size: CGSize
+        var places: [(origin: CGPoint, proposal: ProposedViewSize)]
+    }
+
+    private func arrange(_ proposed: CGFloat?, _ subviews: Subviews) -> Arrangement {
+        let width = proposed.flatMap { $0.isFinite ? $0 : nil }
+        guard let width, width < minWidth else { return line(width, subviews) }
+        var places: [(origin: CGPoint, proposal: ProposedViewSize)] = []
+        var y: CGFloat = 0
+        var widest: CGFloat = 0
+        let proposal = ProposedViewSize(width: width, height: nil)
+        for subview in subviews {
+            let size = subview.sizeThatFits(proposal)
+            places.append((CGPoint(x: 0, y: y), proposal))
+            y += size.height + Self.stackSpacing
+            widest = max(widest, size.width)
+        }
+        return Arrangement(
+            size: CGSize(width: max(width, widest), height: max(0, y - Self.stackSpacing)), places: places)
+    }
+
+    private func line(_ width: CGFloat?, _ subviews: Subviews) -> Arrangement {
+        // Each view's width: its ideal with no width proposed; else the fixed ones' own, and the
+        // flexible ones an equal share of what is left (never under their minimum).
+        var widths: [CGFloat?] = Array(repeating: nil, count: subviews.count)
+        if let width {
+            let least = subviews.map { $0.sizeThatFits(ProposedViewSize(width: 0, height: nil)).width }
+            let most = subviews.map { $0.sizeThatFits(ProposedViewSize(width: .infinity, height: nil)).width }
+            let flexible = subviews.indices.filter { most[$0] > least[$0] + 0.5 }
+            var left = width - Self.lineSpacing * CGFloat(max(0, subviews.count - 1))
+            for index in subviews.indices where !flexible.contains(index) {
+                widths[index] = least[index]
+                left -= least[index]
+            }
+            var sharing = flexible.count
+            for index in flexible.sorted(by: { most[$0] < most[$1] }) {
+                let share = min(max(least[index], left / CGFloat(sharing)), most[index])
+                widths[index] = share
+                left -= share
+                sharing -= 1
+            }
+        }
+        let proposals = widths.map { ProposedViewSize(width: $0, height: nil) }
+        let sizes = zip(subviews, proposals).map { $0.sizeThatFits($1) }
+        let baselines = zip(subviews, proposals).map { $0.dimensions(in: $1)[VerticalAlignment.firstTextBaseline] }
+        let baseline = baselines.max() ?? 0
+        var places: [(origin: CGPoint, proposal: ProposedViewSize)] = []
+        var x: CGFloat = 0
+        var height: CGFloat = 0
+        for index in subviews.indices {
+            let y = baseline - baselines[index]
+            places.append((CGPoint(x: x, y: y), proposals[index]))
+            x += sizes[index].width + Self.lineSpacing
+            height = max(height, y + sizes[index].height)
+        }
+        return Arrangement(size: CGSize(width: max(0, x - Self.lineSpacing), height: height), places: places)
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        arrange(proposal.width, subviews).size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let arrangement = arrange(proposal.width, subviews)
+        for (subview, place) in zip(subviews, arrangement.places) {
+            subview.place(
+                at: CGPoint(x: bounds.minX + place.origin.x, y: bounds.minY + place.origin.y),
+                anchor: .topLeading, proposal: place.proposal)
+        }
+    }
+}
+
+/// A picker as segments where its row has room for all of them, else as a menu.
+struct SegmentsOrMenu<Content: View>: View {
+    @ViewBuilder var picker: Content
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            picker.pickerStyle(.segmented).fixedSize()
+            picker.pickerStyle(.menu).fixedSize()
+        }
+    }
+}
+
 /// A preset: its two dots, each its colour shading into its lighter partner, and its name.
 struct PresetButton: View {
     let preset: Glow.Preset
     let selected: Bool
     let pick: () -> Void
+
+    static let nameSize: CGFloat = 14
+    /// The narrowest tile with every preset's name on one line: the margins, the dots and the
+    /// longest name (a point over it, clear of rounding).
+    static let minimumWidth: CGFloat = {
+        let font = NSFont.systemFont(ofSize: nameSize)
+        let longest = Glow.presets.map { ($0.name as NSString).size(withAttributes: [.font: font]).width }.max() ?? 0
+        return 12 + 42 + 12 + ceil(longest) + 1 + 12
+    }()
 
     var body: some View {
         Button(action: pick) {
@@ -197,10 +434,13 @@ struct PresetButton: View {
                 .frame(width: 42, height: 26, alignment: .leading)
                 .accessibilityHidden(true)
                 Text(preset.name)
-                    .font(.system(size: 14))
+                    .font(.system(size: Self.nameSize))
                     .foregroundStyle(Theme.text)
-                Spacer(minLength: 0)
+                    .lineLimit(1)
             }
+            // The tile's width, not a Spacer's: the stack's spacing before a Spacer took 12 pt
+            // from the name, and the longest ("Indigo & Coral") was cut in the narrowest tile.
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 12)
             .frame(minHeight: 46)
             .background(RoundedRectangle(cornerRadius: 14).fill(selected ? PaperPalette.chip : Color.clear))
@@ -264,11 +504,32 @@ private struct ColourRow: View {
 
 // MARK: - The language model you bring (Settings > AI)
 
-/// The provider, its server and key, the model, Use and Test, and the local-only switch.
+/// The provider, its server and key, the model, Use and Test, and the local-only switch. The first
+/// run's Polish step shows the same rows with `firstRun` (polish): there Use asks polish's consent
+/// before choosing, so local-only mode goes off only with it, and the switch is left to Settings.
 struct LanguageModelRows: View {
     let cloud: CloudModel
+    var firstRun: PolishModel?
     /// The key being typed: sent once on Save key, then cleared. Never kept anywhere else.
     @State private var key = ""
+    /// The provider whose key Delete asks about, while it asks.
+    @State private var deleting: String?
+    /// Settings' "How to get a free Groq key" is open (closed at first, as the first run's is).
+    @State private var groqGuide = false
+    /// The key's button, which Settings' guide names (GroqKeyGuide.steps).
+    static let saveKeyTitle = "Save key"
+    /// The width from which the key's field shares its line with Save key and Delete: 160 pt of
+    /// field beside the buttons' widest (about 200 pt with a provider's name in Delete).
+    static let keyLineWidth: CGFloat = 380
+
+    /// Use: in the first run, polish's consent step first; in Settings, the choice itself.
+    private func use() {
+        if let firstRun {
+            firstRun.useOwnKey(cloud)
+        } else {
+            cloud.use()
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -290,19 +551,25 @@ struct LanguageModelRows: View {
                             .textFieldStyle(.roundedBorder)
                             .frame(maxWidth: 340)
                     }
-                    HStack(spacing: 8) {
-                        SecureField(provider.hasKey ? "Paste a new key to replace the stored one" : "Paste your API key", text: $key)
+                    // The key and its buttons on one line where the field keeps room for a key,
+                    // else the buttons under it: beside them in a narrow card, the field was 72 pt.
+                    LineOrStack(minWidth: Self.keyLineWidth) {
+                        // Short enough to fit the field: a longer one was cut off ("Paste a new key to replace t…").
+                        SecureField(provider.hasKey ? "Paste a new key" : "Paste your API key", text: $key)
                             .textFieldStyle(.roundedBorder)
                             .frame(maxWidth: 340)
                             .accessibilityLabel("API key")
-                        Button("Save key") {
-                            // Sent once, then gone from the field.
-                            let typed = key
-                            key = ""
-                            cloud.saveKey(typed)
+                        HStack(spacing: 8) {
+                            Button(Self.saveKeyTitle) {
+                                // Sent once, then gone from the field.
+                                let typed = key
+                                key = ""
+                                cloud.saveKey(typed)
+                            }
+                            Button(cloud.deleteKeyLabel) { deleting = provider.id }
+                                .disabled(!provider.hasKey)
                         }
-                        Button("Delete key") { cloud.deleteKey() }
-                            .disabled(!provider.hasKey)
+                        .fixedSize()
                     }
                     Text(cloud.keyStatus)
                         .font(Typography.caption)
@@ -313,15 +580,16 @@ struct LanguageModelRows: View {
                         .frame(maxWidth: 340)
                         .accessibilityLabel("Model")
                 }
-                Text(cloud.useNote)
+                let useNote = firstRun == nil ? cloud.useNote : cloud.firstRunUseNote
+                Text(useNote)
                     .font(Typography.caption)
                     .foregroundStyle(Theme.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 8) {
-                    Button(cloud.useLabel) { cloud.use() }
+                    Button(cloud.useLabel) { use() }
                         .buttonStyle(.borderedProminent)
-                        .disabled(!cloud.canUse)
-                        .accessibilityHint(cloud.useNote)
+                        .disabled(!(firstRun?.canUseOwnKey(cloud) ?? cloud.canUse))
+                        .accessibilityHint(useNote)
                     Button("Test") { cloud.test() }
                         .disabled(!cloud.canTest)
                         .accessibilityLabel("Test the language model")
@@ -336,23 +604,261 @@ struct LanguageModelRows: View {
                     .font(Typography.caption)
                     .foregroundStyle(cloud.failure != nil || cloud.readError != nil ? Theme.alert : Theme.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
+                // Settings only: the first run has the guide over Groq's own rows (GroqKeyRows).
+                if firstRun == nil {
+                    LabelledDisclosure(title: GroqKeyGuide.title, isExpanded: $groqGuide) {
+                        GroqKeyGuide(place: .settings)
+                            .padding(.top, 4)
+                    }
+                }
             }
-            SettingRow(title: "Local only") {
-                Toggle("Local only", isOn: Binding(get: { cloud.localOnly }, set: { cloud.setLocalOnly($0) }))
-                    .toggleStyle(.switch)
-                    .labelsHidden()
-                    .disabled(!cloud.loaded)
-                Text(cloud.localOnly
-                    ? "On: nothing leaves this Mac. No language model off it is called, whatever is chosen above."
-                    : "Off: a language model you chose off this Mac can be called, by each feature you allow below.")
+            if firstRun == nil {
+                SettingRow(title: "Local only") {
+                    Toggle("Local only", isOn: Binding(get: { cloud.localOnly }, set: { cloud.setLocalOnly($0) }))
+                        .toggleStyle(.switch)
+                        .labelsHidden()
+                        .disabled(!cloud.loaded)
+                    Text(cloud.localOnly
+                        ? "On: nothing leaves this Mac. No language model off it is called, whatever is chosen above."
+                        : "Off: a language model you chose off this Mac can be called, by each feature you allow below.")
+                        .font(Typography.caption)
+                        .foregroundStyle(Theme.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Text("Polish, voice edit, summaries and Ask use the language model you choose here. With none chosen, they use Apple Intelligence, which runs on this Mac. To bring your own: pick a provider, paste your API key (kept in your keychain for this Mac account, shared by every Inkwell on it, never in Inkwell's files), choose a model and press Use. Test sends the provider your key and one short fixed question, never your words. Nothing else is sent until you turn a feature on below and allow it.")
                     .font(Typography.caption)
                     .foregroundStyle(Theme.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Text("Polish, voice edit, summaries and Ask use the language model you choose here. With none chosen, they use Apple Intelligence, which runs on this Mac. To bring your own: pick a provider, paste your API key (kept in your keychain, never in Inkwell's files), choose a model and press Use. Test sends the provider your key and one short fixed question, never your words. Nothing else is sent until you turn a feature on below and allow it.")
+        }
+        // The key is the Mac account's, not the library's: Delete says so and asks first.
+        // The provider is handed to the actions (presenting:), not read back from @State when
+        // they run: the delete is of the key the question named.
+        .confirmationDialog(
+            cloud.deleteKeyTitle(deleting),
+            isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
+            titleVisibility: .visible,
+            presenting: deleting
+        ) { id in
+            Button("Delete Key", role: .destructive) { cloud.deleteKey(id) }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text(CloudModel.deleteKeyMessage)
+        }
+    }
+}
+
+/// The first run's own key as one choice: Groq's free model, with how to get its key
+/// (GroqKeyGuide), the key field and Save, and Use, which asks polish's consent before
+/// choosing Groq (PolishModel.useOwnKey), so Local only goes off only with it. Another provider or
+/// model is under "Other providers or models…": Settings > AI's rows, with the same consent.
+struct GroqKeyRows: View {
+    let cloud: CloudModel
+    let polish: PolishModel
+    /// The key being typed: sent once on Save, then cleared. Never kept anywhere else.
+    @State private var key = ""
+    /// The key's button, which the first run's guide names (GroqKeyGuide.steps).
+    static let saveTitle = "Save"
+    /// The other providers' rows are shown instead. Set when the rows are made, so a provider
+    /// already chosen or picked never flashes Groq's rows first.
+    @State private var others: Bool
+
+    init(cloud: CloudModel, polish: PolishModel) {
+        self.cloud = cloud
+        self.polish = polish
+        _others = State(initialValue: cloud.firstRunStartsOnOthers)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if others {
+                LanguageModelRows(cloud: cloud, firstRun: polish)
+                Button {
+                    key = ""
+                    cloud.pickGroq()
+                    others = false
+                } label: {
+                    Self.link("Back to Groq's free model")
+                }
+                .buttonStyle(.plain)
+            } else {
+                groq
+                Button {
+                    key = ""
+                    others = true
+                } label: {
+                    Self.link("Other providers or models\u{2026}")
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .onAppear {
+            // Nothing chosen or picked: Groq goes in the picker (the rows start on it).
+            cloud.suggest("groq")
+        }
+        .onChange(of: cloud.loaded) {
+            // Opened before the providers were read: Groq goes in the picker once they are.
+            cloud.suggest("groq")
+            if cloud.firstRunStartsOnOthers { others = true }
+        }
+    }
+
+    /// A link in the ink, as the guide's console.groq.com/keys link is (the system's blue is not the app's).
+    private static func link(_ title: String) -> some View {
+        Text(title).font(Typography.caption).underline().foregroundStyle(Theme.text)
+    }
+
+    private var groq: some View {
+        let provider = cloud.selectedProvider
+        return VStack(alignment: .leading, spacing: 8) {
+            GroqKeyGuide(place: .firstRun)
+            HStack(spacing: 8) {
+                SecureField("Paste your Groq key", text: $key)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: 260)
+                    .accessibilityLabel("Groq API key")
+                Button(Self.saveTitle) {
+                    // Sent once, then gone from the field.
+                    let typed = key
+                    key = ""
+                    cloud.saveKey(typed)
+                }
+            }
+            .disabled(provider?.id != "groq")
+            if provider?.id == "groq" {
+                Text(cloud.keyStatus)
+                    .font(Typography.caption)
+                    .foregroundStyle(Theme.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            HStack(spacing: 8) {
+                Button(cloud.useLabel) { polish.useOwnKey(cloud) }
+                    .buttonStyle(.borderedProminent)
+                    .fixedSize()
+                    .disabled(!polish.canUseOwnKey(cloud))
+                    .accessibilityHint(cloud.firstRunUseNote)
+                // The note takes the row's width beside the button and wraps in it, its full
+                // height, rather than being clipped when the row is laid out again.
+                Text(cloud.firstRunUseNote)
+                    .font(Typography.caption)
+                    .foregroundStyle(Theme.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .layoutPriority(1)
+            }
+            Text(cloud.failure ?? cloud.status)
                 .font(Typography.caption)
-                .foregroundStyle(Theme.secondaryText)
+                .foregroundStyle(cloud.failure != nil || cloud.readError != nil ? Theme.alert : Theme.secondaryText)
                 .fixedSize(horizontal: false, vertical: true)
         }
+    }
+}
+
+/// How to get a free Groq key, step by step: the first run's, over Groq's key field, and Settings >
+/// AI's, under the language model's rows. The same words as the Windows app's guide.
+///
+/// Only what Groq's own pages say, checked 2026-10-05:
+/// - https://console.groq.com/keys ("API Keys - GroqCloud"): the "Create API Key" button, a Name
+///   for each key, and "Remember to keep your API keys safe".
+/// - https://console.groq.com/settings/billing/plans: "Free", "Great for anyone to get started
+///   with our APIs", "$0".
+/// - https://console.groq.com/docs/rate-limits: the "Free Plan Limits" table.
+/// None of them says whether the Free plan needs a card or whether a key is shown only once, so the
+/// guide says neither.
+struct GroqKeyGuide: View {
+    /// Where the guide is, which is what its last step says to press.
+    enum Place {
+        case firstRun, settings
+    }
+
+    let place: Place
+
+    static let title = "How to get a free Groq key"
+    static let cost = "Groq's Free plan costs $0 and has rate limits, listed on its Rate Limits page."
+    /// The part of `cost` that is the link to `rateLimitsURL`.
+    static let rateLimitsLink = "Rate Limits page"
+    static let rateLimitsURL = URL(string: "https://console.groq.com/docs/rate-limits")!
+    static let keysURL = URL(string: "https://console.groq.com/keys")!
+    /// The first step's link, as it reads.
+    static let keysLink = "console.groq.com/keys"
+    /// The first step's link, as VoiceOver names it.
+    static let keysLinkName = "Open Groq's API Keys page in your browser"
+
+    /// Four steps, not five: copying the key and pasting it are one, so the first run's Polish
+    /// step still fits its sheet with the guide open (OnboardingLayoutTests; five ran 15 pt over).
+    static func steps(_ place: Place) -> [String] {
+        let last = switch place {
+        case .firstRun: "Copy the key, paste it below and press Save, then Use Groq."
+        case .settings: "Copy the key, choose Groq above, paste it and press Save key, then Use Groq."
+        }
+        return [
+            "Open Groq's API Keys page:",
+            "Log in, or make a Groq account.",
+            "Press Create API Key and give the key a name, such as Inkwell.",
+            last,
+        ]
+    }
+
+    /// A step as VoiceOver reads it: its number and how many there are, then the words.
+    static func stepName(_ number: Int, of count: Int, _ text: String) -> String {
+        "Step \(number) of \(count): \(text)"
+    }
+
+    /// The cost line, its Rate Limits page a link (in the tint, as the old sentence's link was).
+    static let costText: AttributedString = {
+        var text = AttributedString(cost)
+        if let range = text.range(of: rateLimitsLink) {
+            text[range].link = rateLimitsURL
+        }
+        return text
+    }()
+
+    var body: some View {
+        let steps = Self.steps(place)
+        VStack(alignment: .leading, spacing: 4) {
+            Text(Self.costText)
+                .fixedSize(horizontal: false, vertical: true)
+            ForEach(Array(steps.enumerated()), id: \.offset) { index, text in
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text("\(index + 1).")
+                        .monospacedDigit()
+                        .accessibilityHidden(true)
+                    let step = stepText(text, index, steps.count)
+                    if index == 0 {
+                        // The link beside the step where it fits, under it where it doesn't.
+                        ViewThatFits(in: .horizontal) {
+                            HStack(alignment: .firstTextBaseline, spacing: 4) { step; keysLink }
+                            VStack(alignment: .leading, spacing: 2) { step; keysLink }
+                        }
+                    } else {
+                        step
+                    }
+                }
+            }
+        }
+        .font(Typography.caption)
+        .foregroundStyle(Theme.secondaryText)
+        .accessibilityElement(children: .contain)
+        // Named in the first run only: in Settings the disclosure over it already says this.
+        .accessibilityLabel(place == .firstRun ? Self.title : "")
+    }
+
+    private func stepText(_ text: String, _ index: Int, _ count: Int) -> some View {
+        Text(text)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityLabel(Self.stepName(index + 1, of: count, text))
+    }
+
+    /// Opens the page in the browser. In the ink, as the app's other links are.
+    private var keysLink: some View {
+        Link(destination: Self.keysURL) {
+            Text(Self.keysLink).underline().foregroundStyle(Theme.text)
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+        .accessibilityLabel(Self.keysLinkName)
+        // Voice Control matches what is on screen ("click console.groq.com/keys") too.
+        .accessibilityInputLabels([Text(Self.keysLink), Text(Self.keysLinkName)])
+        .help(Self.keysURL.absoluteString)
     }
 }

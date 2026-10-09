@@ -126,6 +126,24 @@ final class NeedsYouTests: XCTestCase {
         store.dismissNotice(id)
         XCTAssertEqual(items(store: store).count, 1)
     }
+
+    func testNoAudioWarningNamesOnlyTheSideThatCapturedNothing() throws {
+        for (channel, title, detail) in [
+            ("far", "The other side of the last meeting recorded nothing", "No audio reached Inkwell from the other side. Your microphone's recording is separate."),
+            ("mic", "Your side of the last meeting recorded nothing", "No audio reached Inkwell from your microphone. The other side's recording is separate."),
+        ] {
+            let store = CoreStore()
+            store.apply([event(#"{"type":"meeting.warning","record":"r1","kind":"nothing_captured","channel":"\#(channel)","phase":"final"}"#)])
+            let item = try XCTUnwrap(items(store: store).first)
+            XCTAssertEqual(item.title, title)
+            XCTAssertEqual(item.detail, detail)
+        }
+        let store = CoreStore()
+        store.apply([event(#"{"type":"meeting.warning","record":"r1","kind":"nothing_captured","phase":"final"}"#)])
+        let item = try XCTUnwrap(items(store: store).first)
+        XCTAssertEqual(item.title, "One side of the last meeting recorded nothing")
+        XCTAssertEqual(item.detail, "No audio reached Inkwell from one side. The warning did not identify which side.")
+    }
 }
 
 /// The calendar's permission, as the test sets it (PermissionsModel's CalendarAccess).
@@ -248,5 +266,25 @@ final class UpNextTests: XCTestCase {
         XCTAssertEqual(MeetingApp.startsIn(now.addingTimeInterval(3_900), now: now), "in 1 h 5 min")
         XCTAssertEqual(MeetingApp.startsIn(now.addingTimeInterval(7_200), now: now), "in 2 h")
         XCTAssertEqual(MeetingApp.startsIn(now.addingTimeInterval(-10), now: now), "now")
+    }
+}
+
+/// Review fix: Today said "Hold Control-Shift-Space to dictate" while Settings' key cap showed
+/// ⌃⇧Space. Both now come from one formatter (DictationModel.cap).
+@MainActor
+final class TodayStatusLineTests: XCTestCase {
+    func testTodayNamesTheDictationKeyAsSettingsShowsIt() {
+        let dictation = DictationModel(send: { _ in })
+        dictation.apply(event(#"{"type":"dictation.ready","key":"ctrl+shift+space"}"#))
+        XCTAssertEqual(dictation.status, "Hold \u{2303}\u{21E7}Space, speak, let go.")
+        let line = TodayScreen.statusLine(listening: "Listening for calls", key: dictation.key, offersDictation: true)
+        XCTAssertEqual(line, "Listening for calls · Hold \u{2303}\u{21E7}Space to dictate")
+        XCTAssertEqual(DictationModel.cap(dictation.key), "\u{2303}\u{21E7}Space", "Settings' key cap")
+        XCTAssertFalse(line.contains("Control"), line)
+        XCTAssertEqual(
+            TodayScreen.statusLine(listening: "Listening for calls", key: dictation.key, offersDictation: true, spoken: true),
+            "Listening for calls · Hold Control-Shift-Space to dictate", "VoiceOver hears the name")
+        XCTAssertEqual(TodayScreen.statusLine(listening: "", key: "fn", offersDictation: true), "Hold fn to dictate")
+        XCTAssertEqual(TodayScreen.statusLine(listening: "Listening for calls", key: "fn", offersDictation: false), "Listening for calls")
     }
 }

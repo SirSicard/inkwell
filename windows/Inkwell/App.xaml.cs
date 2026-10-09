@@ -6,9 +6,13 @@
 // tray icon's state dot follow the appearance settings. Before any of it, Microsoft's terms
 // (TermsStep, TermsWindow): until they are agreed to, nothing else is made, shown or started.
 //
-// The tray icon shows the state (idle, dictating in your colour, recording in theirs, a problem
-// in the alert colour: TrayGlyph draws the dot) and its menu is made when it opens (TrayMenu): a
-// left click opens the window. The automatic update check, when on, runs once here at launch.
+// The tray icon and the window's taskbar button show the state (LiveIconHost: dictating in your
+// colour, recording in theirs, the final pass's progress, a problem in the alert
+// colour) and the tray's menu is made when it opens (TrayMenu): a left click opens the window. The automatic update check, when on, runs once here at launch.
+//
+// From the start, the screens' log and the core's log lines go to the local log in the library's
+// folder (LocalLog, "logs"), and an exception that ends the app leaves a crash note there.
+using Inkwell.Core;
 using Inkwell.Core.Screens;
 using Inkwell.Ink;
 using Inkwell.Screens;
@@ -27,26 +31,89 @@ public partial class App : Application
     private TermsWindow? terms;
     private MainWindow? window;
     private TrayIcon? tray;
+    /// <summary>Held for the app's life: its hook follows what covers the window.</summary>
+    private WindowCover? windowCover;
     private CoreController? core;
     private ScreenModels? screens;
     private ShellInk? ink;
     private GlowTheme? theme;
     private DropModel? dropModel;
-    /// <summary>The tray icon's state icons, made for the colours shown (TrayGlyph), by state.</summary>
-    private readonly Dictionary<TrayState, nint> trayIcons = [];
-    private TrayState? trayShown;
+    /// <summary>The tray icon's and the taskbar button's live state (made with the tray icon).</summary>
+    private LiveIconHost? liveIcon;
     /// <summary>What stops the Drop working now, or null: kept for the tray icon made after it.</summary>
     private string? inkProblem;
     private bool quitting;
     private readonly Router router = new();
+    private readonly LocalLog? localLog = OpenLocalLog();
 
     public App()
     {
         InitializeComponent();
+        // A crash note for whatever ends the app: the UI thread's exceptions, then any other thread's.
+        UnhandledException += (_, e) => localLog?.WriteCrashNote(e.Exception, AppVersion.Release);
+        AppDomain.CurrentDomain.UnhandledException += (_, e) =>
+        {
+            if (e.ExceptionObject is Exception exception)
+            {
+                localLog?.WriteCrashNote(exception, AppVersion.Release);
+            }
+        };
+        // Not a crash in .NET, but nothing else would ever say it happened.
+        TaskScheduler.UnobservedTaskException += (_, e) =>
+            localLog?.Write("shell", $"a task failed and nothing waited for it ({e.Exception.InnerException?.GetType().Name ?? "unknown"})");
+    }
+
+    /// <summary>
+    /// The local log in the library's folder, now taking the screens' log and the core's lines
+    /// (stderr), or null when that folder is not known (the core then says why).
+    /// </summary>
+    private static LocalLog? OpenLocalLog()
+    {
+        LocalLog log;
+        try
+        {
+            log = LocalLog.In(DataLocation.DataDirectory());
+        }
+        catch (IOException)
+        {
+            return null;
+        }
+        ScreenLog.Also = message => log.Write("shell", message);
+        // The ink's lines (its GPU, its failures) too, still to the trace as before.
+        var trace = InkLog.Write;
+        InkLog.Write = line =>
+        {
+            trace(line);
+            log.Write("ink", line);
+        };
+        if (!CoreLogCapture.Start(line =>
+            {
+                var (source, text) = LocalLog.FromStderr(line);
+                log.Write(source, text);
+            }))
+        {
+            log.Write("shell", "the core's log lines could not be captured");
+        }
+        log.Write("shell", $"Inkwell {AppVersion.Release ?? "development build"} started");
+        return log;
     }
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
+        // A second start of the app on this library hands its activation here (Program), off the
+        // UI thread: what is up shows, the terms or the window.
+        var ui = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread();
+        Microsoft.Windows.AppLifecycle.AppInstance.GetCurrent().Activated += (_, _) => ui.TryEnqueue(() =>
+        {
+            if (terms is not null)
+            {
+                terms.Activate();
+            }
+            else
+            {
+                ShowWindow();
+            }
+        });
         var step = new TermsStep(TermsFile(), Launch, Exit);
         step.Launch();
         if (step.Showing)
@@ -88,7 +155,7 @@ public partial class App : Application
         };
         core = new CoreController(window.DispatcherQueue);
         // The ink's pipeline compiles off the UI thread from here; the Drop waits, hidden.
-        ink = new ShellInk(window.DispatcherQueue, InkProblem, action => screens?.Meetings.Perform(action));
+        ink = new ShellInk(window.DispatcherQueue, InkProblem, action => screens?.PerformDropAction(action));
         InkPanel.Clock = ink.Clock;
         window.ShowInk(ink);
         screens = AppScreens.Models(core, window.DispatcherQueue, new VelopackUpdater(Quit));
@@ -101,25 +168,35 @@ public partial class App : Application
         glow.Changed += () =>
         {
             shownInk.SetLook(glow.Look, glow.DropLook, glow.AlwaysStill);
-            ColoursChanged();
         };
         shownInk.SetLook(glow.Look, glow.DropLook, glow.AlwaysStill);
         // What the Drop says, after the store has taken each batch.
         var drop = new DropModel(
             new DispatcherWake(window.DispatcherQueue), () => models.Polish.HasWorkingEngine,
-            () => models.Meetings.FailureOn(MeetingPlace.Drop));
+            () => models.DropFailure, noSpeechModel: () => models.Catalogue.HasSpeechModel == false,
+            deletable: record => models.Meetings.CanDiscard(record),
+            discarding: record => models.Meetings.Discarding == record,
+            policyOf: app => models.Calls.PolicyOf(app),
+            reminds: record => models.Meetings.Reminds(record));
         dropModel = drop;
         var shellInk = ink;
         drop.Changed += () =>
         {
             shellInk.Show(drop.Line, drop.Ink);
-            ShowTrayState();
         };
         var store = core.Store;
         var applying = false;
         // An answer sent again clears the Drop's failure line at once, not at the next batch (a
-        // change during a batch is the batch's: the Drop takes it whole, after the screens).
+        // change during a batch is the batch's: the Drop takes it whole, after the screens). Stop
+        // and delete's minute ending (one wake) and a choice from the Drop show the same way.
         models.Meetings.PropertyChanged += (_, _) =>
+        {
+            if (!applying)
+            {
+                drop.Refresh(store);
+            }
+        };
+        models.Calls.PropertyChanged += (_, _) =>
         {
             if (!applying)
             {
@@ -140,16 +217,44 @@ public partial class App : Application
             }
             drop.Apply(store, batch);
         };
-        var made = new AppScreens(core.Store, models, router, glow, shownInk);
+        var shownWindow = window;
+        var made = new AppScreens(core.Store, models, router, glow, shownInk)
+        {
+            WindowHandle = () => (nint)Microsoft.UI.Win32Interop.GetWindowFromWindowId(shownWindow.AppWindow.Id),
+        };
+        window.MeetingShortcut = models.MeetingShortcut;
         window.Attach(core.Store, router, made.Screen, made.Search, models.Meetings, models.Owed);
         made.AttachFirstRun(window.Content as FrameworkElement);
-        // Up next's minute redraws only while the window is on screen (rule 9).
-        window.VisibilityChanged += (_, e) => made.Presence.Update(e.Visible, Minimized(window), occlusionVisible: true);
+        window.ShowMilestones(models.Stats, made.Presence);
+        // Up next's minute redraws only while the window is on screen (rule 9): shown, not
+        // minimised, and not hidden behind other windows (WindowCover).
+        var cover = new WindowCover((nint)Microsoft.UI.Win32Interop.GetWindowFromWindowId(window.AppWindow.Id));
+        windowCover = cover;
+        cover.Changed += covered => made.Presence.Update(window.AppWindow.IsVisible, Minimized(window), occlusionVisible: !covered);
+        // Uncovered, the orb at rest goes to a new spot, as on coming on screen.
+        cover.Uncovered += window.WindowUncovered;
+        window.VisibilityChanged += (_, e) =>
+        {
+            // Hidden in the tray, nothing on the desktop wakes the app to measure.
+            cover.WindowShown(e.Visible);
+            made.Presence.Update(e.Visible, Minimized(window), occlusionVisible: !cover.Covered);
+        };
         window.AppWindow.Changed += (sender, e) =>
         {
             if (e.DidPresenterChange || e.DidVisibilityChange)
             {
-                made.Presence.Update(sender.IsVisible, Minimized(window), occlusionVisible: true);
+                cover.WindowShown(sender.IsVisible);
+                made.Presence.Update(sender.IsVisible, Minimized(window), occlusionVisible: !cover.Covered);
+                // A shortcut being recorded is the window's: hidden or minimised, it is cancelled.
+                if (!sender.IsVisible || Minimized(window))
+                {
+                    models.Recorder.Cancel();
+                }
+            }
+            window.FrameChanged();
+            if (e.DidPositionChange || e.DidSizeChange)
+            {
+                window.PlaceChanged();
             }
         };
         // Coming back to the app re-checks what may have changed outside it (permissions, the keys).
@@ -158,17 +263,39 @@ public partial class App : Application
             if (e.WindowActivationState != WindowActivationState.Deactivated)
             {
                 models.AppBecameActive();
+                window.WindowActivated();
+                liveIcon?.AppActive();
+            }
+            else
+            {
+                // The recorder takes this window's keys only: losing focus cancels it, so dictation
+                // never stays paused behind a recorder nobody sees.
+                models.Recorder.Cancel();
             }
         };
         tray = new TrayIcon(1, IconPath, "Inkwell");
         tray.Selected += (_, _) => ShowWindow();
         tray.ContextMenu += (_, e) => e.Flyout = TrayMenuFlyout();
-        tray.Tooltip = TrayTooltip(inkProblem);
         tray.IsVisible = true;
-        ShowTrayState();
+        liveIcon = new LiveIconHost(
+            (nint)Win32Interop.GetWindowFromWindowId(window.AppWindow.Id), drop, store, glow, tray, IconPath,
+            start =>
+            {
+                if (start)
+                {
+                    models.Meetings.RecordNow();
+                }
+                else
+                {
+                    models.Meetings.Stop();
+                }
+            });
+        liveIcon.InkProblem(inkProblem);
         window.Activate();
+        window.FitToWorkArea();
         // On screen from the start: the window's own change events may not come for the first show.
-        made.Presence.Update(window.AppWindow.IsVisible, Minimized(window), occlusionVisible: true);
+        cover.WindowShown(window.AppWindow.IsVisible);
+        made.Presence.Update(window.AppWindow.IsVisible, Minimized(window), occlusionVisible: !cover.Covered);
         core.Start();
         // Once, at launch, when the user turned the automatic check on (never on a timer).
         _ = models.Updates.CheckAtLaunch();
@@ -180,6 +307,17 @@ public partial class App : Application
     private MenuFlyout TrayMenuFlyout()
     {
         var menu = new MenuFlyout();
+        // It opens in the icon's own window, outside the main window's tree: without this it takes
+        // Windows' mode, not the one Inkwell shows (Light while Windows is Dark, say). That window's
+        // backdrop follows Windows, so the menu gets the mode's own opaque background too.
+        if (theme is not null)
+        {
+            var style = new Style(typeof(MenuFlyoutPresenter));
+            style.Setters.Add(new Setter(FrameworkElement.RequestedThemeProperty, theme.Dark ? ElementTheme.Dark : ElementTheme.Light));
+            var background = GlowTheme.ColorOf(Inkwell.Core.Glow.GlowRgb.From(Inkwell.Core.Glow.GlowScheme.Palette(theme.Dark).Background));
+            style.Setters.Add(new Setter(Control.BackgroundProperty, new Microsoft.UI.Xaml.Media.SolidColorBrush(background)));
+            menu.MenuFlyoutPresenterStyle = style;
+        }
         if (core is null || screens is null)
         {
             return menu;
@@ -247,65 +385,6 @@ public partial class App : Application
         router.Open(Route.Settings);
     }
 
-    /// <summary>The tray icon for the Drop's state now: its dot in the colours shown.</summary>
-    private void ShowTrayState()
-    {
-        if (tray is null || dropModel is null)
-        {
-            return;
-        }
-        var state = TrayMenu.State(dropModel.Ink);
-        if (state == trayShown)
-        {
-            return;
-        }
-        if (!trayIcons.TryGetValue(state, out var icon))
-        {
-            try
-            {
-                icon = TrayGlyph.Make(IconPath, DotColour(state));
-            }
-            catch (InkRendererException e)
-            {
-                // The icon keeps the state it showed; the tooltip and the Drop still say it.
-                InkLog.Write(e.Message);
-                return;
-            }
-            trayIcons[state] = icon;
-        }
-        tray.SetIcon(Win32Interop.GetIconIdFromIcon(icon));
-        trayShown = state;
-    }
-
-    /// <summary>The colours changed: the icons are drawn again; the old ones go once the new one shows (the shell keeps its own copy).</summary>
-    private void ColoursChanged()
-    {
-        var old = trayIcons.Values.ToList();
-        trayIcons.Clear();
-        trayShown = null;
-        ShowTrayState();
-        foreach (var icon in old)
-        {
-            TrayGlyph.Destroy(icon);
-        }
-    }
-
-    /// <summary>A state's dot: your colour, theirs, or the alert colour; none at rest.</summary>
-    private (float R, float G, float B)? DotColour(TrayState state)
-    {
-        if (theme is null)
-        {
-            return null;
-        }
-        return state switch
-        {
-            TrayState.Dictating => theme.Look.YouA,
-            TrayState.Recording => theme.Look.ThemA,
-            TrayState.Problem => theme.DropLook.Alert,
-            _ => null,
-        };
-    }
-
     /// <summary>
     /// UI thread. The Drop's problem, where it stays seen: the window's status line, and the tray
     /// icon's tooltip, which is there while the window is hidden.
@@ -314,18 +393,18 @@ public partial class App : Application
     {
         inkProblem = problem;
         window?.ShowInkFailure(problem);
-        if (tray is not null)
-        {
-            tray.Tooltip = TrayTooltip(problem);
-        }
+        liveIcon?.InkProblem(problem);
     }
 
-    /// <summary>The tray icon's tooltip: "Inkwell", or what stops the Drop (Windows keeps 128 characters).</summary>
-    internal static string TrayTooltip(string? problem)
+    /// <summary>
+    /// The tray icon's tooltip, which Narrator reads: the state (LiveIcon.Spoken), or what stops the
+    /// Drop (Windows keeps 128 characters).
+    /// </summary>
+    internal static string TrayTooltip(string? problem, DropInk state)
     {
         if (problem is null)
         {
-            return "Inkwell";
+            return LiveIcon.Spoken(state);
         }
         var text = $"Inkwell. The Drop: {problem}";
         return text.Length <= 127 ? text : string.Concat(text.AsSpan(0, 126), "\u2026");
@@ -336,6 +415,8 @@ public partial class App : Application
 
     private void ShowWindow()
     {
+        // From the tray: where it was hidden, which may be a display since unplugged.
+        window?.FitToWorkArea();
         window?.AppWindow.Show();
         window?.Activate();
     }
@@ -348,6 +429,7 @@ public partial class App : Application
             return;
         }
         quitting = true;
+        localLog?.Write("shell", "quitting");
         // Quitting is not skipping the first run; and what the screens hold unsaved (the notes line
         // under the caret) reaches the core before it stops.
         screens?.AppQuitting();
@@ -357,13 +439,12 @@ public partial class App : Application
         {
             ink?.Dispose();
             ink = null;
+            liveIcon?.Dispose();
+            liveIcon = null;
+            windowCover?.Dispose();
+            windowCover = null;
             tray?.Dispose();
             tray = null;
-            foreach (var (_, icon) in trayIcons)
-            {
-                TrayGlyph.Destroy(icon);
-            }
-            trayIcons.Clear();
             window.Close();
             Exit();
         });

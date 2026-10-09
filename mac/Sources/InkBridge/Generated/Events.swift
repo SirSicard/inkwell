@@ -75,12 +75,18 @@ public enum InkEvent: Codable, Sendable, Equatable {
     case meetingStarted(MeetingStarted)
     /// `meeting.far_end_fallback`
     case meetingFarEndFallback(MeetingFarEndFallback)
+    /// `meeting.mic_switched`
+    case meetingMicSwitched(MeetingMicSwitched)
     /// `meeting.detected`
     case meetingDetected(MeetingDetected)
     /// `meeting.detection_ended`
     case meetingDetectionEnded(MeetingDetectionEnded)
     /// `meeting.detection`
     case meetingDetection(MeetingDetection)
+    /// `meetings.calls`
+    case meetingsCalls(MeetingsCalls)
+    /// `meeting.discarded`
+    case meetingDiscarded(MeetingDiscarded)
     /// `meeting.answered`
     case meetingAnswered(MeetingAnswered)
     /// `meeting.recovered`
@@ -141,10 +147,28 @@ public enum InkEvent: Codable, Sendable, Equatable {
     case noteUpdated(NoteUpdated)
     /// `note.deleted`
     case noteDeleted(NoteDeleted)
+    /// `speaker.named`
+    case speakerNamed(SpeakerNamed)
+    /// `record.deleted`
+    case recordDeleted(RecordDeleted)
     /// `models.listed`
     case modelsListed(ModelsListed)
     /// `setting.value`
     case settingValue(SettingValue)
+    /// `audio.devices`
+    case audioDevices(AudioDevices)
+    /// `audio.devices_changed`
+    case audioDevicesChanged(AudioDevicesChanged)
+    /// `audio.input_fallback`
+    case audioInputFallback(AudioInputFallback)
+    /// `audio.test_started`
+    case audioTestStarted(AudioTestStarted)
+    /// `audio.test_level`
+    case audioTestLevel(AudioTestLevel)
+    /// `audio.tested`
+    case audioTested(AudioTested)
+    /// `hotkey.checked`
+    case hotkeyChecked(HotkeyChecked)
     /// `consent.state`
     case consentState(ConsentState)
     /// `llm.providers`
@@ -173,6 +197,12 @@ public enum InkEvent: Codable, Sendable, Equatable {
     case libraryStats(LibraryStats)
     /// `library.swept`
     case librarySwept(LibrarySwept)
+    /// `stats.counted`
+    case statsCounted(StatsCounted)
+    /// `milestones.reached`
+    case milestonesReached(MilestonesReached)
+    /// `meetings.shortcut.state`
+    case meetingsShortcutState(MeetingsShortcutState)
     /// An event this build does not know. The core and the shell ship together, so this
     /// means a mismatched build.
     case unknown(type: String)
@@ -229,9 +259,12 @@ public enum InkEvent: Codable, Sendable, Equatable {
             case "dictation.mic_failed": self = .dictationMicFailed(try DictationMicFailed(from: decoder))
             case "meeting.started": self = .meetingStarted(try MeetingStarted(from: decoder))
             case "meeting.far_end_fallback": self = .meetingFarEndFallback(try MeetingFarEndFallback(from: decoder))
+            case "meeting.mic_switched": self = .meetingMicSwitched(try MeetingMicSwitched(from: decoder))
             case "meeting.detected": self = .meetingDetected(try MeetingDetected(from: decoder))
             case "meeting.detection_ended": self = .meetingDetectionEnded(try MeetingDetectionEnded(from: decoder))
             case "meeting.detection": self = .meetingDetection(try MeetingDetection(from: decoder))
+            case "meetings.calls": self = .meetingsCalls(try MeetingsCalls(from: decoder))
+            case "meeting.discarded": self = .meetingDiscarded(try MeetingDiscarded(from: decoder))
             case "meeting.answered": self = .meetingAnswered(try MeetingAnswered(from: decoder))
             case "meeting.recovered": self = .meetingRecovered(try MeetingRecovered(from: decoder))
             case "meetings.recovered": self = .meetingsRecovered(try MeetingsRecovered(from: decoder))
@@ -262,8 +295,17 @@ public enum InkEvent: Codable, Sendable, Equatable {
             case "note.added": self = .noteAdded(try NoteAdded(from: decoder))
             case "note.updated": self = .noteUpdated(try NoteUpdated(from: decoder))
             case "note.deleted": self = .noteDeleted(try NoteDeleted(from: decoder))
+            case "speaker.named": self = .speakerNamed(try SpeakerNamed(from: decoder))
+            case "record.deleted": self = .recordDeleted(try RecordDeleted(from: decoder))
             case "models.listed": self = .modelsListed(try ModelsListed(from: decoder))
             case "setting.value": self = .settingValue(try SettingValue(from: decoder))
+            case "audio.devices": self = .audioDevices(try AudioDevices(from: decoder))
+            case "audio.devices_changed": self = .audioDevicesChanged(try AudioDevicesChanged(from: decoder))
+            case "audio.input_fallback": self = .audioInputFallback(try AudioInputFallback(from: decoder))
+            case "audio.test_started": self = .audioTestStarted(try AudioTestStarted(from: decoder))
+            case "audio.test_level": self = .audioTestLevel(try AudioTestLevel(from: decoder))
+            case "audio.tested": self = .audioTested(try AudioTested(from: decoder))
+            case "hotkey.checked": self = .hotkeyChecked(try HotkeyChecked(from: decoder))
             case "consent.state": self = .consentState(try ConsentState(from: decoder))
             case "llm.providers": self = .llmProviders(try LlmProviders(from: decoder))
             case "llm.tested": self = .llmTested(try LlmTested(from: decoder))
@@ -278,6 +320,9 @@ public enum InkEvent: Codable, Sendable, Equatable {
             case "library.record": self = .libraryRecord(try LibraryRecord(from: decoder))
             case "library.stats": self = .libraryStats(try LibraryStats(from: decoder))
             case "library.swept": self = .librarySwept(try LibrarySwept(from: decoder))
+            case "stats.counted": self = .statsCounted(try StatsCounted(from: decoder))
+            case "milestones.reached": self = .milestonesReached(try MilestonesReached(from: decoder))
+            case "meetings.shortcut.state": self = .meetingsShortcutState(try MeetingsShortcutState(from: decoder))
             default: self = .unknown(type: type)
             }
         } catch {
@@ -320,9 +365,12 @@ public enum InkEvent: Codable, Sendable, Equatable {
         case .dictationMicFailed(let event): try event.encode(to: encoder)
         case .meetingStarted(let event): try event.encode(to: encoder)
         case .meetingFarEndFallback(let event): try event.encode(to: encoder)
+        case .meetingMicSwitched(let event): try event.encode(to: encoder)
         case .meetingDetected(let event): try event.encode(to: encoder)
         case .meetingDetectionEnded(let event): try event.encode(to: encoder)
         case .meetingDetection(let event): try event.encode(to: encoder)
+        case .meetingsCalls(let event): try event.encode(to: encoder)
+        case .meetingDiscarded(let event): try event.encode(to: encoder)
         case .meetingAnswered(let event): try event.encode(to: encoder)
         case .meetingRecovered(let event): try event.encode(to: encoder)
         case .meetingsRecovered(let event): try event.encode(to: encoder)
@@ -353,8 +401,17 @@ public enum InkEvent: Codable, Sendable, Equatable {
         case .noteAdded(let event): try event.encode(to: encoder)
         case .noteUpdated(let event): try event.encode(to: encoder)
         case .noteDeleted(let event): try event.encode(to: encoder)
+        case .speakerNamed(let event): try event.encode(to: encoder)
+        case .recordDeleted(let event): try event.encode(to: encoder)
         case .modelsListed(let event): try event.encode(to: encoder)
         case .settingValue(let event): try event.encode(to: encoder)
+        case .audioDevices(let event): try event.encode(to: encoder)
+        case .audioDevicesChanged(let event): try event.encode(to: encoder)
+        case .audioInputFallback(let event): try event.encode(to: encoder)
+        case .audioTestStarted(let event): try event.encode(to: encoder)
+        case .audioTestLevel(let event): try event.encode(to: encoder)
+        case .audioTested(let event): try event.encode(to: encoder)
+        case .hotkeyChecked(let event): try event.encode(to: encoder)
         case .consentState(let event): try event.encode(to: encoder)
         case .llmProviders(let event): try event.encode(to: encoder)
         case .llmTested(let event): try event.encode(to: encoder)
@@ -369,6 +426,9 @@ public enum InkEvent: Codable, Sendable, Equatable {
         case .libraryRecord(let event): try event.encode(to: encoder)
         case .libraryStats(let event): try event.encode(to: encoder)
         case .librarySwept(let event): try event.encode(to: encoder)
+        case .statsCounted(let event): try event.encode(to: encoder)
+        case .milestonesReached(let event): try event.encode(to: encoder)
+        case .meetingsShortcutState(let event): try event.encode(to: encoder)
         case .unknown(let type):
             var keys = encoder.container(keyedBy: TypeKey.self)
             try keys.encode(type, forKey: .type)
@@ -409,6 +469,121 @@ public struct AudioChunk: Codable, Sendable, Equatable {
     }
 }
 
+/// A connected input or output device.
+public struct AudioDevice: Codable, Sendable, Equatable {
+    /// The OS's id for it (a Core Audio UID, a WASAPI endpoint id): what audio.input and
+    /// audio.output take. Opaque: never shown.
+    public let id: String
+    /// Whether it is the system default for its direction.
+    public let isDefault: Bool
+    /// Its name as the OS shows it.
+    public let name: String
+    /// How it connects.
+    public let transport: MicTransport
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case isDefault = "is_default"
+        case name
+        case transport
+    }
+}
+
+/// The answer to audio.devices: the devices, the user's choice, and what Inkwell records with
+/// now.
+public struct AudioDevices: Codable, Sendable, Equatable {
+    /// What Automatic records now ("Automatic (<name>)"); absent when there is no microphone.
+    public let automatic: AudioInput?
+    /// The mic choice (audio.input): auto, or the chosen device's id.
+    public let input: String
+    /// The connected microphones, the default first.
+    public let inputs: [AudioDevice]
+    /// The output choice (audio.output), with outputs: default, or the chosen device's id.
+    public let output: String?
+    /// The output a meeting's far end is to record, and why; absent when there is no output.
+    /// Record now, and a call whose app could not be heard alone, record it; an app heard from
+    /// its own output keeps that output.
+    public let outputUsing: AudioOutput?
+    /// The chosen output as remembered, when output is a device.
+    public let outputWanted: AudioWanted?
+    /// The connected outputs, the default first, where there is an output picker (Windows);
+    /// absent on macOS, whose far end is tapped from its app wherever it plays.
+    public let outputs: [AudioDevice]?
+    /// The id of the command this answers, when it carried one.
+    public let ref: String?
+    /// Always `audio.devices`.
+    public let type: String
+    /// The mic Inkwell opens now for a take, a meeting or a test, and why: the chosen one, or
+    /// Automatic (chosen_missing when it stands in for a chosen mic that is not connected).
+    /// Absent when there is no microphone. A meeting already recording keeps its own mic
+    /// (meeting.started, meeting.mic_switched).
+    public let using: AudioInput?
+    /// The chosen mic as remembered, when input is a device: Settings shows its name even while
+    /// it is not connected.
+    public let wanted: AudioWanted?
+
+    private enum CodingKeys: String, CodingKey {
+        case automatic
+        case input
+        case inputs
+        case output
+        case outputUsing = "output_using"
+        case outputWanted = "output_wanted"
+        case outputs
+        case ref
+        case type
+        case using
+        case wanted
+    }
+}
+
+/// Devices came or went, a default changed, or the choice did: the same as audio.devices, once
+/// a burst of changes has gone quiet (300 ms after the last, at most 1 s after the first). Sent
+/// after a setting.set of audio.input or audio.output, and on a device change where the
+/// platform tells the core of them.
+public struct AudioDevicesChanged: Codable, Sendable, Equatable {
+    /// What Automatic records now ("Automatic (<name>)"); absent when there is no microphone.
+    public let automatic: AudioInput?
+    /// The mic choice (audio.input): auto, or the chosen device's id.
+    public let input: String
+    /// The connected microphones, the default first.
+    public let inputs: [AudioDevice]
+    /// The output choice (audio.output), with outputs: default, or the chosen device's id.
+    public let output: String?
+    /// The output a meeting's far end is to record, and why; absent when there is no output.
+    /// Record now, and a call whose app could not be heard alone, record it; an app heard from
+    /// its own output keeps that output.
+    public let outputUsing: AudioOutput?
+    /// The chosen output as remembered, when output is a device.
+    public let outputWanted: AudioWanted?
+    /// The connected outputs, the default first, where there is an output picker (Windows);
+    /// absent on macOS, whose far end is tapped from its app wherever it plays.
+    public let outputs: [AudioDevice]?
+    /// Always `audio.devices_changed`.
+    public let type: String
+    /// The mic Inkwell opens now for a take, a meeting or a test, and why: the chosen one, or
+    /// Automatic (chosen_missing when it stands in for a chosen mic that is not connected).
+    /// Absent when there is no microphone. A meeting already recording keeps its own mic
+    /// (meeting.started, meeting.mic_switched).
+    public let using: AudioInput?
+    /// The chosen mic as remembered, when input is a device: Settings shows its name even while
+    /// it is not connected.
+    public let wanted: AudioWanted?
+
+    private enum CodingKeys: String, CodingKey {
+        case automatic
+        case input
+        case inputs
+        case output
+        case outputUsing = "output_using"
+        case outputWanted = "output_wanted"
+        case outputs
+        case type
+        case using
+        case wanted
+    }
+}
+
 /// The pump dropped capture blocks because a chain's queue was full (the chain fell behind).
 /// Sent once per stretch, when the queue takes audio again or closes.
 public struct AudioDropped: Codable, Sendable, Equatable {
@@ -425,6 +600,117 @@ public struct AudioDropped: Codable, Sendable, Equatable {
     public let type: String
 }
 
+/// A microphone Inkwell picks, and why.
+public struct AudioInput: Codable, Sendable, Equatable {
+    /// The OS's id for it.
+    public let id: String
+    /// Its name as the OS shows it.
+    public let name: String
+    /// Why it is the one.
+    public let reason: MicReason
+    /// How it connects.
+    public let transport: MicTransport
+}
+
+/// The mic the user chose is not connected, and a mic just opened on Automatic in its place (a
+/// take, a meeting, a meeting's mic that went, a test): said once until the chosen mic is seen
+/// again or the choice changes. The shell says "<wanted> isn't connected. Inkwell is using
+/// <mic> until it is."
+public struct AudioInputFallback: Codable, Sendable, Equatable {
+    /// The mic recording instead, as the OS names it.
+    public let micName: String
+    /// How that mic connects.
+    public let micTransport: MicTransport
+    /// Always `audio.input_fallback`.
+    public let type: String
+    /// The chosen mic.
+    public let wanted: AudioWanted
+
+    private enum CodingKeys: String, CodingKey {
+        case micName = "mic_name"
+        case micTransport = "mic_transport"
+        case type
+        case wanted
+    }
+}
+
+/// The output a meeting's far end is to record (Windows), and why. Record now, and a call whose
+/// app could not be heard alone, record it; an app heard from its own output keeps that output.
+public struct AudioOutput: Codable, Sendable, Equatable {
+    /// The OS's id for it.
+    public let id: String
+    /// Its name as the OS shows it.
+    public let name: String
+    /// Why it is the one.
+    public let reason: OutputReason
+    /// How it connects.
+    public let transport: MicTransport
+}
+
+/// How a mic test ended: its time was up (done), audio.test_stop or the core's shutdown ended
+/// it (stopped), a meeting started recording (meeting), or the mic failed or went away (failed,
+/// with a message).
+public enum AudioTestEnd: String, Codable, Sendable, Equatable, CaseIterable {
+    case done
+    case stopped
+    case meeting
+    case failed
+}
+
+/// The mic test's level over the last 100 ms: the loudest moment, from the ink's band analyzer
+/// with no gain applied, on a meter scale.
+public struct AudioTestLevel: Codable, Sendable, Equatable {
+    /// 0 at -60 dBFS and below, 1 at full scale, linear in dB between.
+    public let level: Double
+    /// The id of the command this answers, when it carried one.
+    public let ref: String?
+    /// Always `audio.test_level`.
+    public let type: String
+}
+
+/// A mic test has opened the mic (audio.test): the one dictation and meetings would use now.
+/// audio.test_level follows about ten times a second, then audio.tested.
+public struct AudioTestStarted: Codable, Sendable, Equatable {
+    /// The mic, as the OS names it.
+    public let micName: String
+    /// Why that mic.
+    public let micReason: MicReason
+    /// How it connects.
+    public let micTransport: MicTransport
+    /// The id of the command this answers, when it carried one.
+    public let ref: String?
+    /// How long the test runs at most, in seconds.
+    public let seconds: Int64
+    /// Always `audio.test_started`.
+    public let type: String
+
+    private enum CodingKeys: String, CodingKey {
+        case micName = "mic_name"
+        case micReason = "mic_reason"
+        case micTransport = "mic_transport"
+        case ref
+        case seconds
+        case type
+    }
+}
+
+/// The mic test is over. Nothing it heard was kept.
+public struct AudioTested: Codable, Sendable, Equatable {
+    /// How it ended.
+    public let ended: AudioTestEnd
+    /// Whether the mic heard anything louder than a quiet room (-50 dBFS) at any moment: false
+    /// is the screen's cue for "Not hearing you?".
+    public let heard: Bool
+    /// Why it failed, naming the device, when ended is failed.
+    public let message: String?
+    /// The loudest moment, on audio.test_level's scale.
+    public let peak: Double
+    /// The id of the command this answers, when it carried one.
+    public let ref: String?
+    /// Always `audio.tested`.
+    public let type: String
+}
+
 /// How a record's chunks were placed on its timeline: recorded (from the start the meeting
 /// wrote beside them) or estimated (from its earliest chunk, because that start is missing: an
 /// older record, or one whose write failed). Estimated: the two sides may be out of step, and
@@ -434,6 +720,101 @@ public enum AudioTimeline: String, Codable, Sendable, Equatable, CaseIterable {
     case estimated
 }
 
+/// A device the user chose, as the core remembers it from when it was chosen (it may not be
+/// connected now).
+public struct AudioWanted: Codable, Sendable, Equatable {
+    /// The OS's id for it.
+    public let id: String
+    /// Its name when it was chosen; absent for a choice stored without one.
+    public let name: String?
+    /// How it connected when it was chosen; absent likewise.
+    public let transport: MicTransport?
+}
+
+/// A personal best: the dictation held longest, the fastest held at least 30 s (neither a take
+/// the stuck-key watchdog stopped), the most words in a day, the best week, the longest
+/// meeting, the longest monologue.
+public enum BestId: String, Codable, Sendable, Equatable, CaseIterable {
+    case longestDictation = "longest_dictation"
+    case fastestDictation = "fastest_dictation"
+    case mostWordsDay = "most_words_day"
+    case bestWeek = "best_week"
+    case longestMeeting = "longest_meeting"
+    case longestMonologue = "longest_monologue"
+}
+
+/// A best just set, for a short note in the Drop (a dictation's) or at the meeting's end (a
+/// meeting's).
+public struct BestNews: Codable, Sendable, Equatable {
+    /// When, as a BestRow's date.
+    public let date: String
+    /// Which.
+    public let id: BestId
+    /// The best now.
+    public let new: Int64
+    /// The best before.
+    public let old: Int64
+    /// The take holding it, as a BestRow's record.
+    public let record: String?
+    /// What old and new count.
+    public let unit: BestUnit
+}
+
+/// A personal best held.
+public struct BestRow: Codable, Sendable, Equatable {
+    /// When, YYYY-MM-DD: the take's local day, the day, or the week's first day.
+    public let date: String
+    /// Which.
+    public let id: BestId
+    /// The take holding it, for a take's best; absent for a day's or a week's.
+    public let record: String?
+    /// What value counts.
+    public let unit: BestUnit
+    /// The best, in its unit.
+    public let value: Int64
+}
+
+/// What a best's value counts: ms, words a minute, or words.
+public enum BestUnit: String, Codable, Sendable, Equatable, CaseIterable {
+    case ms
+    case wpm
+    case words
+}
+
+/// An app in the call policies' list: one detection has seen hold the microphone for a call, or
+/// one the user chose for. Never shown by its identity: a shell names it and shows its icon
+/// from the identity, as for a mode's apps.
+public struct CallApp: Codable, Sendable, Equatable {
+    /// Its identity, as detection reports it: a bundle id on the Mac, the executable (or the
+    /// package's app id) on Windows, where it is kept in lowercase.
+    public let app: String
+    /// Its name as detection last saw it; absent for an app chosen for that has not been seen.
+    public let appName: String?
+    /// Whether the user chose its policy; false while it follows the default.
+    public let chosen: Bool
+    /// What happens for it now: the user's choice, else the default (Always is Ask while the
+    /// stored list could not be read).
+    public let policy: CallPolicy
+    /// When detection last saw it hold the microphone for a call, Unix ms.
+    public let seenUnixMs: Int64?
+
+    private enum CodingKeys: String, CodingKey {
+        case app
+        case appName = "app_name"
+        case chosen
+        case policy
+        case seenUnixMs = "seen_unix_ms"
+    }
+}
+
+/// What happens when an app holds the microphone for a call: always (recorded at once, visibly,
+/// as by Record), ask (the consent Drop offers it) or never (neither).
+public enum CallPolicy: String, Codable, Sendable, Equatable, CaseIterable {
+    case always
+    case ask
+    case never
+}
+
 /// A model in the catalogue that runs on this OS.
 public struct CatalogueEntry: Codable, Sendable, Equatable {
     /// Its id.
@@ -441,10 +822,17 @@ public struct CatalogueEntry: Codable, Sendable, Equatable {
     /// Whether its files are installed and complete.
     public let installed: Bool
     /// The jobs it fills, each with its measured error rate. None for a model the core only
-    /// downloads because the shell runs it (the Mac's Parakeet, parakeet-tdt-0.6b-v3-coreml).
+    /// downloads because the shell runs it (the Mac's Parakeet, parakeet-tdt-0.6b-v3-coreml),
+    /// and none for a language model.
     public let jobs: [JobScore]
+    /// What it is for. Always sent; a shell built before language models reads its absence as
+    /// speech.
+    public let kind: ModelKind?
     /// Its weights' licence.
     public let licence: String
+    /// For a language model, its name for the user (Qwen3 4B Instruct); absent for a speech
+    /// model, which the shell names itself.
+    public let name: String?
     /// Its download size.
     public let sizeBytes: Int64
 
@@ -452,7 +840,9 @@ public struct CatalogueEntry: Codable, Sendable, Equatable {
         case id
         case installed
         case jobs
+        case kind
         case licence
+        case name
         case sizeBytes = "size_bytes"
     }
 }
@@ -531,12 +921,27 @@ public struct CommandFailed: Codable, Sendable, Equatable {
     public let code: FailureCode?
     /// The command's "cmd".
     public let command: String
+    /// For not_enough_space: the bytes free to this user on the volume models go on.
+    public let freeBytes: Int64?
     /// The command's "id", when it had one.
     public let id: String?
     /// Why. Names what failed, never what was said.
     public let message: String
+    /// For not_enough_space: the bytes that must be free, the download's remaining bytes plus
+    /// the 1 GiB margin.
+    public let neededBytes: Int64?
     /// Always `command.failed`.
     public let type: String
+
+    private enum CodingKeys: String, CodingKey {
+        case code
+        case command
+        case freeBytes = "free_bytes"
+        case id
+        case message
+        case neededBytes = "needed_bytes"
+        case type
+    }
 }
 
 /// A commitment: something promised in a record.
@@ -599,18 +1004,35 @@ public struct CommitmentsListed: Codable, Sendable, Equatable {
     public let type: String
 }
 
+/// One destination the user agreed a feature may send to.
+public struct ConsentEntry: Codable, Sendable, Equatable {
+    /// For cloud, its destination: what consent.revoke names to take it away.
+    public let endpoint: String?
+    /// For cloud, the provider's name the user agreed to.
+    public let name: String?
+    /// Where.
+    public let to: LlmDestination
+}
+
 /// A feature that sends the user's words to a language model: its switch, where the model it
 /// would use now sends them, and where the user agreed it may. The feature runs only when on
-/// and allowed. In answer to consent.get and consent.allow, and after the feature's switch is
-/// set to off.
+/// and allowed. In answer to consent.get, consent.allow and consent.revoke, and after the
+/// feature's switch is set to off.
 public struct ConsentState: Codable, Sendable, Equatable {
-    /// Whether that consent covers the model now: false while the feature is on means it is
-    /// paused until the user agrees again.
+    /// Whether a consent covers the model it would use now: false while the feature is on means
+    /// it is paused until the user agrees again. For polish, a mode on its own model is judged
+    /// on that model (modes.listed's polish_models).
     public let allowed: Bool
     /// For a cloud consent, the provider's name the user agreed to.
     public let allowedName: String?
-    /// Where the user agreed it may send; absent when never agreed (or turned off since).
+    /// Where the user agreed it may send: for polish, the consent covering the model it would
+    /// use now, else the first (all of them are consents); absent when never agreed (or turned
+    /// off since).
     public let allowedTo: LlmDestination?
+    /// Every destination the user agreed the feature may send to. Polish holds one per
+    /// destination (a mode may polish on a model elsewhere than the AI setting's: consent.allow
+    /// adds one, consent.revoke takes one away); voice edit and meetings hold one at most.
+    public let consents: [ConsentEntry]?
     /// For cloud, the destination consent.allow must name; absent otherwise.
     public let endpoint: String?
     /// Why part of this could not be read (the switch or the consent), as a sentence starting
@@ -633,6 +1055,7 @@ public struct ConsentState: Codable, Sendable, Equatable {
         case allowed
         case allowedName = "allowed_name"
         case allowedTo = "allowed_to"
+        case consents
         case endpoint
         case error
         case feature
@@ -853,6 +1276,83 @@ public struct DictationStarted: Codable, Sendable, Equatable {
     public let type: String
 }
 
+/// The user's dictation, counted on this computer: finished dictations by the local day they
+/// started. Speed and time saved count only dictations that know how long the key was held.
+public struct DictationStats: Codable, Sendable, Equatable {
+    /// Local days with a dictation since the month started.
+    public let activeDaysMonth: Int64?
+    /// Dictations, all time.
+    public let dictationsAll: Int64
+    /// The heatmap's first local day, YYYY-MM-DD: the first day of the week eleven weeks before
+    /// this one.
+    public let heatmapFirstDay: String
+    /// Words dictated per local day, from heatmap_first_day to today.
+    public let heatmapWords: [Int64]
+    /// The latest streak, running or ended: what it reached. Once a streak has ended, the shell
+    /// shows this and the longest, never a streak as lost.
+    public let latestStreakDays: Int64?
+    /// The longest streak, all time.
+    public let longestStreakDays: Int64
+    /// The weekdays the streak rests on (stats.rest_days), ISO: 1 Monday to 7 Sunday; empty for
+    /// none. A rest day neither counts nor breaks the streak.
+    public let restDays: [Int64]?
+    /// What saved_ms_all is about, as saved_about_week.
+    public let savedAboutAll: [TimeEquivalent]?
+    /// What saved_ms_week is about, largest first ("about two feature films"). Absent when
+    /// there is nothing to picture: time lost, under about 12 minutes, or between two counts.
+    public let savedAboutWeek: [TimeEquivalent]?
+    /// Time saved all time, ms, as saved_ms_week.
+    public let savedMsAll: Int64
+    /// Time saved this week, ms: the same words typed at typing_wpm less the time spent
+    /// speaking. Negative when speaking took longer.
+    public let savedMsWeek: Int64
+    /// The current streak: local days with a dictation in a row, one missed day forgiven, two
+    /// ending it. A rest day neither counts nor breaks it, with a dictation or without; a
+    /// paused day without a dictation is not missed, and one with a dictation counts. Running
+    /// while at most one day was missed since the last active one (today is never missed).
+    public let streakDays: Int64
+    /// Whether the user hid the streak (stats.streak): show no streak line and offer none on
+    /// the share card. The numbers are still counted.
+    public let streakHidden: Bool?
+    /// The first day of the pause running today (streak.pause), YYYY-MM-DD. Absent while none
+    /// runs; a pause ends by itself after 90 days.
+    public let streakPausedSince: String?
+    /// Words dictated, all time.
+    public let wordsAll: Int64
+    /// Words dictated today.
+    public let wordsToday: Int64
+    /// Words dictated since this week started (the shell's first weekday).
+    public let wordsWeek: Int64
+    /// Words per minute over the last 30 days, today included: the user's own average. Absent
+    /// with less than a minute of speech in them.
+    public let wpmAverage: Int64?
+    /// Words per minute this week: words over the time the key was held. Absent with less than
+    /// a minute of speech this week.
+    public let wpmWeek: Int64?
+
+    private enum CodingKeys: String, CodingKey {
+        case activeDaysMonth = "active_days_month"
+        case dictationsAll = "dictations_all"
+        case heatmapFirstDay = "heatmap_first_day"
+        case heatmapWords = "heatmap_words"
+        case latestStreakDays = "latest_streak_days"
+        case longestStreakDays = "longest_streak_days"
+        case restDays = "rest_days"
+        case savedAboutAll = "saved_about_all"
+        case savedAboutWeek = "saved_about_week"
+        case savedMsAll = "saved_ms_all"
+        case savedMsWeek = "saved_ms_week"
+        case streakDays = "streak_days"
+        case streakHidden = "streak_hidden"
+        case streakPausedSince = "streak_paused_since"
+        case wordsAll = "words_all"
+        case wordsToday = "words_today"
+        case wordsWeek = "words_week"
+        case wpmAverage = "wpm_average"
+        case wpmWeek = "wpm_week"
+    }
+}
+
 /// The take is closed and being processed.
 public struct DictationStopped: Codable, Sendable, Equatable {
     /// Always `dictation.stopped`.
@@ -876,7 +1376,10 @@ public struct DictationVoiceDetection: Codable, Sendable, Equatable {
 /// there and processed. polish_not_allowed: polish is on, but the user has not agreed to send
 /// dictations where its model goes now (never agreed, or the model changed destination since):
 /// nothing was sent, the text went in as said, and message names the model; consent.get says
-/// more.
+/// more. polish_model_missing: polish is on for this mode, and the mode names a language model
+/// of its own that the core does not hold now (let go of, or another provider chosen in
+/// Settings > AI): nothing was sent anywhere and the text went in as said; polish never falls
+/// back to another model.
 public enum DictationWarning: String, Codable, Sendable, Equatable, CaseIterable {
     case vadFailed = "vad_failed"
     case audioLost = "audio_lost"
@@ -886,6 +1389,7 @@ public enum DictationWarning: String, Codable, Sendable, Equatable, CaseIterable
     case polishFailed = "polish_failed"
     case polishTimedOut = "polish_timed_out"
     case polishNotAllowed = "polish_not_allowed"
+    case polishModelMissing = "polish_model_missing"
     case noModeForStyle = "no_mode_for_style"
     case saveFailed = "save_failed"
     case deletedTextNotScrubbed = "deleted_text_not_scrubbed"
@@ -1102,11 +1606,51 @@ public enum FailedStage: String, Codable, Sendable, Equatable, CaseIterable {
     case other
 }
 
-/// A command.failed a shell acts on: list_unreadable (a snippets.save or voice_commands.save
-/// refused because the stored list cannot be read; send it again with replace_unreadable to
-/// start over).
+/// A command.failed a shell acts on. list_unreadable: a snippets.save, voice_commands.save,
+/// meetings.calls.set, modes.save or modes.delete refused because the stored list cannot be
+/// read (send a save again with replace_unreadable to start over). meeting_recording: an
+/// audio.test refused because a meeting records: the mic test waits until it ends.
+/// delete_window_over: a meeting.discard after the meeting's first minute: only Stop is left,
+/// and the record can be deleted from the library once it is finished. For modes.save and
+/// modes.delete: name_blank (a mode needs a name), name_taken (another mode's name sounds the
+/// same: case and spacing aside), name_is_style (formal, casual and relaxed are the styles'
+/// names in voice commands), too_long (a name over 64 characters, polish instructions over
+/// 2,000, more than 64 apps in a mode or an app identity over 256 characters, or more than 50
+/// modes; a mode the 0.2 import brought with more than 64 apps saves a change to its apps only
+/// once they are 64 or fewer, so the editor says "Shorten to 64 apps or fewer."), default_mode
+/// (the default mode can't be deleted or given apps), app_taken (an app the mode is given is
+/// another mode's: send the save again with take_apps to move it), mode_not_found (no mode has
+/// that id) model_unknown (no language model the core holds has that id: modes.listed lists
+/// them), model_name_invalid (a polish_model_name that is over 128 characters or holds a
+/// control character, or one given for a model that is not a provider's, or without a model),
+/// destination_changed (a polish_model_confirm whose model sends somewhere else now than its
+/// polish_model_confirm_to, the destination the user agreed to: list the modes again and ask
+/// again; nothing was saved) and app_invalid (an app identity with a control character, of one
+/// character, or with no letter: as a substring of the frontmost app's identity it would match
+/// nearly every app). For the models: not_enough_space (a model.update refused before anything
+/// is fetched: the volume models go on has less free than the download still needs plus a 1 GiB
+/// margin; needed_bytes and free_bytes say how much, and nothing on disk changed), model_in_use
+/// (a model.remove refused while a job, a call or an update holds the model: nothing was
+/// deleted; try again once it ends) and not_downloading (a model.cancel naming a model no
+/// download is running or queued for).
 public enum FailureCode: String, Codable, Sendable, Equatable, CaseIterable {
     case listUnreadable = "list_unreadable"
+    case meetingRecording = "meeting_recording"
+    case deleteWindowOver = "delete_window_over"
+    case nameBlank = "name_blank"
+    case nameTaken = "name_taken"
+    case nameIsStyle = "name_is_style"
+    case tooLong = "too_long"
+    case defaultMode = "default_mode"
+    case appTaken = "app_taken"
+    case modeNotFound = "mode_not_found"
+    case modelUnknown = "model_unknown"
+    case modelNameInvalid = "model_name_invalid"
+    case destinationChanged = "destination_changed"
+    case appInvalid = "app_invalid"
+    case notEnoughSpace = "not_enough_space"
+    case modelInUse = "model_in_use"
+    case notDownloading = "not_downloading"
 }
 
 /// What a meeting records as the other side: the sound of its app alone (a call recorded from
@@ -1116,6 +1660,27 @@ public enum FailureCode: String, Codable, Sendable, Equatable, CaseIterable {
 public enum FarEnd: String, Codable, Sendable, Equatable, CaseIterable {
     case app
     case everything
+}
+
+/// Whether this computer can watch a key binding as the dictation key or the edit key, in
+/// answer to hotkey.check. A shell checks a shortcut the user recorded before it stores it with
+/// setting.set; nothing is stored here.
+public struct HotkeyChecked: Codable, Sendable, Equatable {
+    /// The binding as the command spelled it.
+    public let binding: String
+    /// When ok: its one spelling, to store with setting.set and to compare keys by (two
+    /// spellings of one chord are one key). For example ctrl+shift+space, right_option or f13.
+    public let canonical: String?
+    /// Whether this computer can watch it.
+    public let ok: Bool
+    /// When not ok: why not, in plain words starting in lower case and without a full stop, to
+    /// show after "can't use that:". For example "that key on its own would stop working
+    /// everywhere else; add Control, Option or Command".
+    public let reason: String?
+    /// The command's "id", when it had one.
+    public let ref: String?
+    /// Always `hotkey.checked`.
+    public let type: String
 }
 
 /// What import.check found: Inkwell 0.2's data at 0.2's own data directory on this computer
@@ -1281,6 +1846,46 @@ public struct KindStats: Codable, Sendable, Equatable {
     }
 }
 
+/// A language model a mode can be polished on: one the shell registered, the core's own on this
+/// machine, or the own-key provider chosen in Settings > AI.
+public struct LanguageModelChoice: Codable, Sendable, Equatable {
+    /// Whether polish may use it now: one of the user's polish consents covers it
+    /// (consent.state's consents) and local-only mode lets it (blocked_local_only false).
+    /// False, a mode on it goes in as said (polish_not_allowed, or polish_failed while
+    /// local-only mode refuses it) until that changes.
+    public let allowed: Bool
+    /// Local-only mode is on and this model is not on this machine: nothing goes to it,
+    /// whatever the consent (turn local-only off in Settings > AI first).
+    public let blockedLocalOnly: Bool?
+    /// For a cloud model, the endpoint it sends to, as consent.state names one. To confirm a
+    /// mode's model (polish_model_state moved or unrecorded), show where it sends and send that
+    /// back as polish_model_confirm_to: {"to":"on_device"} or
+    /// {"to":"cloud","endpoint":"<this>"}.
+    public let endpoint: String?
+    /// Its id, as a mode names it (polish_model): engine:<id> for a model the shell registered
+    /// (engine:apple-foundation-models), engine:local for the core's own model on this machine
+    /// (whichever size is downloaded), provider:<id> for the chosen own-key provider. Show the
+    /// name, never the id.
+    public let id: String
+    /// The model it asks for: for the own-key provider, the one chosen in Settings > AI, which
+    /// a mode's polish_model_name replaces (the editor's placeholder).
+    public let model: String?
+    /// Its name, as consent.state names a model (a shell may name its own engine better).
+    public let name: String
+    /// Where it sends a dictation.
+    public let to: LlmDestination
+
+    private enum CodingKeys: String, CodingKey {
+        case allowed
+        case blockedLocalOnly = "blocked_local_only"
+        case endpoint
+        case id
+        case model
+        case name
+        case to
+    }
+}
+
 /// One record whole, in answer to record.open. Carries the library's words: never log it.
 public struct LibraryRecord: Codable, Sendable, Equatable {
     /// Its audio, when it kept some and the directory is there.
@@ -1398,13 +2003,15 @@ public enum LlmFeature: String, Codable, Sendable, Equatable, CaseIterable {
     case meetings
 }
 
-/// An own-key (BYOK) language model provider the user can choose: its id, what it uses unless
-/// told otherwise, and whether its API key is stored. The key itself never leaves the OS key
-/// store.
+/// A language model provider the user can choose: an own-key (BYOK) one, or this machine's
+/// model (on_device, listed only where the OS has language models of the core's own: Windows).
+/// Its id, what it uses unless told otherwise, and whether its API key is stored. The key
+/// itself never leaves the OS key store.
 public struct LlmProviderEntry: Codable, Sendable, Equatable {
     /// Whether llm.choose may name another address (custom only).
     public let customUrl: Bool
-    /// The model used when llm.choose names none.
+    /// The model used when llm.choose names none; for on_device, the registry id of the
+    /// language model downloaded, else of the one this OS offers (models.listed).
     public let defaultModel: String
     /// Its address: fixed for a built-in provider; for custom, the address used when llm.choose
     /// names none.
@@ -1413,8 +2020,12 @@ public struct LlmProviderEntry: Codable, Sendable, Equatable {
     /// when that could not be asked (llm.providers' error says so).
     public let hasKey: Bool
     /// The provider: openai, groq, anthropic, openrouter or custom (any OpenAI-compatible
-    /// server).
+    /// server), or on_device (the core's own model on this machine, which needs no key and
+    /// keeps local-only mode on).
     public let id: String
+    /// For on_device, whether a language model is downloaded: llm.choose on_device needs one.
+    /// Absent for the others.
+    public let installed: Bool?
     /// Whether a call needs its API key (a custom server usually runs without one).
     public let needsKey: Bool
 
@@ -1424,18 +2035,22 @@ public struct LlmProviderEntry: Codable, Sendable, Equatable {
         case endpoint
         case hasKey = "has_key"
         case id
+        case installed
         case needsKey = "needs_key"
     }
 }
 
-/// The own-key language model providers and the one chosen, in answer to llm.providers,
-/// llm.key.save, llm.key.delete and llm.choose. A feature (polish, voice edit, summaries and
-/// Ask) sends to the chosen provider only when no model is registered by the shell, and only
-/// with the user's consent for its endpoint (consent.state).
+/// The own-key language model providers, this machine's model where the OS has one, and the
+/// choice, in answer to llm.providers, llm.key.save, llm.key.delete and llm.choose. The
+/// features (polish, voice edit, summaries and Ask) use the chosen provider; with none chosen,
+/// the core's own model on this machine once one is downloaded (Windows), else the model the
+/// shell registered (Apple's on the Mac). Each only with the user's consent for where it sends
+/// (consent.state).
 public struct LlmProviders: Codable, Sendable, Equatable {
     /// For custom, the server's address as chosen; absent otherwise.
     public let baseUrl: String?
-    /// The chosen provider's id; absent when none is chosen.
+    /// The chosen provider's id, or on_device for this machine's model; absent when none is
+    /// chosen.
     public let chosen: String?
     /// Where the chosen provider sends, as consent.state names it; absent with chosen.
     public let endpoint: String?
@@ -1445,12 +2060,14 @@ public struct LlmProviders: Codable, Sendable, Equatable {
     /// Local-only mode (llm.local_only): while on, a provider that is not on this machine is
     /// never called.
     public let localOnly: Bool
-    /// The model the chosen provider is asked for; absent with chosen.
+    /// The model the chosen provider is asked for; for on_device, the registry id of the
+    /// language model downloaded (models.listed), absent while none is. Absent with chosen.
     public let model: String?
     /// Every provider, in preference order.
     public let providers: [LlmProviderEntry]
     /// Whether the chosen provider can be called: its key is stored (when it needs one), and
-    /// local-only mode lets it through. Each feature still needs its own consent.
+    /// local-only mode lets it through; for on_device, whether a language model is downloaded.
+    /// Each feature still needs its own consent.
     public let ready: Bool
     /// The command's "id", when it had one.
     public let ref: String?
@@ -1476,16 +2093,23 @@ public struct LlmProviders: Codable, Sendable, Equatable {
 }
 
 /// The answer to llm.test: one short fixed request (never the user's words) sent to the chosen
-/// provider with its stored key, and whether it answered.
+/// provider with its stored key, or, with none chosen, to the core's own model on this machine
+/// (loaded first if it is not), and whether it answered, timed.
 public struct LlmTested: Codable, Sendable, Equatable {
+    /// How long the answer took, in milliseconds, the load apart; absent when it did not
+    /// answer. A short request: a dictation's polish reads and writes more.
+    public let answerMs: Int64?
     /// Why it did not answer, as a sentence starting "couldn't"; absent when ok. Names what
     /// failed, never the key.
     public let error: String?
-    /// The model asked.
+    /// For on_device, how long loading the model took, in milliseconds (near 0 when it was
+    /// loaded already). Absent for a provider.
+    public let loadMs: Int64?
+    /// The model asked; for on_device, its registry id (models.listed).
     public let model: String
     /// Whether the provider answered.
     public let ok: Bool
-    /// The provider tested.
+    /// The provider tested; on_device for this machine's model.
     public let provider: String
     /// The command's "id", when it had one.
     public let ref: String?
@@ -1494,6 +2118,18 @@ public struct LlmTested: Codable, Sendable, Equatable {
     public let status: Int64?
     /// Always `llm.tested`.
     public let type: String
+
+    private enum CodingKeys: String, CodingKey {
+        case answerMs = "answer_ms"
+        case error
+        case loadMs = "load_ms"
+        case model
+        case ok
+        case provider
+        case ref
+        case status
+        case type
+    }
 }
 
 /// An answer to meeting.ask about the live meeting: the model's words. Render them as text only
@@ -1533,26 +2169,38 @@ public struct MeetingCommitments: Codable, Sendable, Equatable {
 
 /// An app has held the microphone long enough to be a call, and no meeting is being recorded:
 /// the shell offers to record it (the consent Drop), and records only if the user says so
-/// (meeting.start with this app).
+/// (meeting.start with this app). Its policy is Ask (meetings.calls), or Always when its
+/// recording could not start by itself (message says why: a start that failed, or a far end
+/// that would not be the app's sound alone), when the user stopped a recording by hand during
+/// this call, or when the app was made Always during this call. The Drop can also set the app's
+/// policy (meetings.calls.set): Always (then meeting.start) or Never.
 public struct MeetingDetected: Codable, Sendable, Equatable {
     /// The app, by id (a bundle id on the Mac).
     public let app: String
     /// Its name, as the shell shows it.
     public let appName: String
+    /// Why it is offered rather than recorded, when its policy is Always: its recording could
+    /// not start by itself (the platform's error), or its own sound cannot be recorded alone,
+    /// so the recording would hold everything this computer plays (the Mac's fallback, Windows'
+    /// device loopback): an Always app is recorded by itself only when its sound alone is.
+    /// Never content.
+    public let message: String?
     /// Always `meeting.detected`.
     public let type: String
 
     private enum CodingKeys: String, CodingKey {
         case app
         case appName = "app_name"
+        case message
         case type
     }
 }
 
 /// Whether the core is listening for calls now: sent once at start whatever the state (off
-/// included, with a message when the setting could not be read), then when detection starts,
-/// stops (the meetings.detect setting), fails to start, or stops on its own (the platform
-/// stopped answering). The shell shows this state, not the setting.
+/// included, with a message when the default call policy could not be read), then when
+/// detection starts, stops (the call policies: it listens while any app could be offered or
+/// recorded, so a default of Never with no app chosen for is off), fails to start, or stops on
+/// its own (the platform stopped answering). The shell shows this state, not the setting.
 public struct MeetingDetection: Codable, Sendable, Equatable {
     /// Whether apps taking the microphone are being watched.
     public let listening: Bool
@@ -1563,11 +2211,13 @@ public struct MeetingDetection: Codable, Sendable, Equatable {
 }
 
 /// The offer to record an app is over before it was taken: the app released the microphone, or
-/// the user said not this one (meeting.dismiss).
+/// the user said not this one (meeting.dismiss), or its policy became Never
+/// (meetings.calls.set).
 public struct MeetingDetectionEnded: Codable, Sendable, Equatable {
     /// The app, by id.
     public let app: String
-    /// Whether the user dismissed it (rather than the app releasing the microphone).
+    /// Whether the user dismissed it, by Not this one or Never (rather than the app releasing
+    /// the microphone).
     public let dismissed: Bool
     /// Always `meeting.detection_ended`.
     public let type: String
@@ -1587,6 +2237,30 @@ public struct MeetingDiarized: Codable, Sendable, Equatable {
     public let substantial: Int64
     /// Always `meeting.diarized`.
     public let type: String
+}
+
+/// A meeting stopped with meeting.discard (Stop and delete), or one a crash interrupted on its
+/// way to being deleted, is gone as if it had never been made: no final pass ran and nothing
+/// was sent to a language model; its transcript, notes and search entries were deleted with
+/// their words overwritten in the library's files, then its audio. Follows meeting.stopped; no
+/// meeting.finished comes. The screens drop it.
+public struct MeetingDiscarded: Codable, Sendable, Equatable {
+    /// Its recorded audio is still on disk: it could not be removed, or its folder is outside
+    /// the library and was left alone. The record itself is gone.
+    public let audioLeft: Bool
+    /// The record that is gone.
+    public let record: String
+    /// No copy of its words is left in the library's files (as for record.deleted).
+    public let scrubbed: Bool
+    /// Always `meeting.discarded`.
+    public let type: String
+
+    private enum CodingKeys: String, CodingKey {
+        case audioLeft = "audio_left"
+        case record
+        case scrubbed
+        case type
+    }
 }
 
 /// Whether the live mic is protected from echo, when it changes. Which fields are present
@@ -1791,6 +2465,37 @@ public struct MeetingLooksDone: Codable, Sendable, Equatable {
     public let type: String
 }
 
+/// A recording meeting's mic went (unplugged, switched off) and the meeting records with
+/// another now: the choice as it is now, else Automatic. A meeting never moves to a mic that
+/// was plugged in or made the default mid-call; only its own mic going moves it. The mic_*
+/// fields are meeting.started's, for the mic now.
+public struct MeetingMicSwitched: Codable, Sendable, Equatable {
+    /// The mic that went, as the OS named it, when known.
+    public let fromName: String?
+    /// How that mic connected, when known.
+    public let fromTransport: MicTransport?
+    /// The mic it records now.
+    public let micName: String
+    /// Why that mic.
+    public let micReason: MicReason
+    /// How that mic connects.
+    public let micTransport: MicTransport
+    /// The meeting's record id.
+    public let record: String
+    /// Always `meeting.mic_switched`.
+    public let type: String
+
+    private enum CodingKeys: String, CodingKey {
+        case fromName = "from_name"
+        case fromTransport = "from_transport"
+        case micName = "mic_name"
+        case micReason = "mic_reason"
+        case micTransport = "mic_transport"
+        case record
+        case type
+    }
+}
+
 /// Provisional live text; each replaces the last and none is saved. Carries the meeting's
 /// words: never log it.
 public struct MeetingPartial: Codable, Sendable, Equatable {
@@ -1854,12 +2559,25 @@ public struct MeetingSideState: Codable, Sendable, Equatable {
 }
 
 /// A meeting's record exists and its capture is being transcribed live. Names what the shell
-/// shows of it: its title, its app and its mic, when known.
+/// shows of it: its title, its app and its mic, when known. Sent for every meeting, however it
+/// started (Record, the consent Drop's offer, or an app's Always policy): the shell shows the
+/// recording indicator from this event, so a call recorded by its policy shows exactly as one
+/// the user started.
 public struct MeetingStarted: Codable, Sendable, Equatable {
     /// The app it records, by id (a bundle id on the Mac), when it was started for one.
     public let app: String?
     /// That app's name, as the shell shows it.
     public let appName: String?
+    /// True when the app's call policy (Always) started it, without a tap: the shell says so
+    /// where the recording shows, keeps the reminder to tell the others, and offers Stop and
+    /// Stop and delete. Absent for a start the user made. A policy start always records the
+    /// app's own sound alone (far_end app).
+    public let auto: Bool?
+    /// Until this moment, Unix ms (a minute after the start), meeting.discard (Stop and delete)
+    /// may delete this meeting as if it had never been made; after it only Stop is offered
+    /// (meeting.discard is refused with delete_window_over). Absent for a meeting that cannot
+    /// be deleted so (a replay).
+    public let deleteUntilUnixMs: Int64?
     /// What it records as the other side.
     public let farEnd: FarEnd?
     /// The microphone it records, as the OS names it.
@@ -1879,6 +2597,8 @@ public struct MeetingStarted: Codable, Sendable, Equatable {
     private enum CodingKeys: String, CodingKey {
         case app
         case appName = "app_name"
+        case auto
+        case deleteUntilUnixMs = "delete_until_unix_ms"
         case farEnd = "far_end"
         case micName = "mic_name"
         case micReason = "mic_reason"
@@ -1886,6 +2606,34 @@ public struct MeetingStarted: Codable, Sendable, Equatable {
         case record
         case title
         case type
+    }
+}
+
+/// Meetings recorded here and finished, counted (imported meetings are left out: their channels
+/// came from elsewhere). Me versus them is stream identity: the mic is the user, the far end
+/// everyone else.
+public struct MeetingStats: Codable, Sendable, Equatable {
+    /// The user's longest stretch of speech with no one else speaking and no pause over 3
+    /// seconds, ms.
+    public let longestMonologueMs: Int64
+    /// Meetings.
+    public let meetings: Int64
+    /// The user's lines ending in a question mark: a plain count.
+    public let questions: Int64
+    /// Their total length, ms.
+    public let recordedMs: Int64
+    /// Everyone else's talk time, ms.
+    public let themMs: Int64
+    /// The user's talk time, ms: how long their lines cover.
+    public let youMs: Int64
+
+    private enum CodingKeys: String, CodingKey {
+        case longestMonologueMs = "longest_monologue_ms"
+        case meetings
+        case questions
+        case recordedMs = "recorded_ms"
+        case themMs = "them_ms"
+        case youMs = "you_ms"
     }
 }
 
@@ -2049,6 +2797,27 @@ public struct MeetingWorkerFailed: Codable, Sendable, Equatable {
     public let type: String
 }
 
+/// The call policies: the default for apps not chosen for, and every app seen or chosen for (at
+/// most 64), most recently seen first. In answer to meetings.calls.list, meetings.calls.set and
+/// meetings.calls.remove (with ref), and unasked when the default changed or detection saw a
+/// new app.
+public struct MeetingsCalls: Codable, Sendable, Equatable {
+    /// The apps.
+    public let apps: [CallApp]
+    /// The policy for apps not chosen for (meetings.calls.default; ask unless set).
+    public let `default`: CallPolicy
+    /// Why the stored choices could not be read, while they are set aside: every app follows
+    /// the default then, with Always lowered to Ask, and meetings.calls.set is refused
+    /// (list_unreadable) unless it says replace_unreadable, which starts the list over. In the
+    /// answer to that start over under a default of Always: that the default is Ask now
+    /// (written), so the user sets Always again knowingly.
+    public let message: String?
+    /// The command's "id", when it had one, so the shell can match the answer to what it sent.
+    public let ref: String?
+    /// Always `meetings.calls`.
+    public let type: String
+}
+
 /// Recovery (meetings.recover) is done.
 public struct MeetingsRecovered: Codable, Sendable, Equatable {
     /// Interrupted meetings it finished or tried to.
@@ -2061,13 +2830,35 @@ public struct MeetingsRecovered: Codable, Sendable, Equatable {
     public let type: String
 }
 
-/// Why a meeting records this microphone: the system default input; the built-in mic because
-/// the output is Bluetooth (a headset mic is call-quality audio; on Windows a USB mic may be
-/// the one kept); the headset's own mic because the user's setting says so; the default because
-/// this Mac has no built-in mic (on Windows: every mic is Bluetooth); the first input because
-/// no default is set; it was named; the LE Audio headset's own mic, which keeps full quality
-/// (Windows); or a reason this build of the core does not name (unknown).
+/// The confirmed global meeting shortcut and whether it is held. Suspension acknowledges that
+/// no meeting shortcut can fire while the shell records a new key.
+public struct MeetingsShortcutState: Codable, Sendable, Equatable {
+    /// The global hook is held and can toggle recording.
+    public let active: Bool
+    /// Why the configured shortcut could not be held.
+    public let error: String?
+    /// The configured canonical shortcut, or off.
+    public let key: String
+    /// The suspend/resume command id, when answering one.
+    public let ref: String?
+    /// The shell suspended the hook while recording a shortcut.
+    public let suspended: Bool
+    /// Always `meetings.shortcut.state`.
+    public let type: String
+}
+
+/// Why Inkwell records this microphone: the one the user chose in Settings > Sound (chosen,
+/// found by its id or by its name and transport); Automatic standing in for a chosen mic that
+/// is not connected (chosen_missing); or Automatic's reason: the system default input; the
+/// built-in mic because the output is Bluetooth (a headset mic is call-quality audio; on
+/// Windows a USB mic may be the one kept); the headset's own mic because a platform's retired
+/// headset-mic switch is on; the default because this Mac has no built-in mic (on Windows:
+/// every mic is Bluetooth); the first input because no default is set; it was named; the LE
+/// Audio headset's own mic, which keeps full quality (Windows); or a reason this build of the
+/// core does not name (unknown).
 public enum MicReason: String, Codable, Sendable, Equatable, CaseIterable {
+    case chosen
+    case chosenMissing = "chosen_missing"
     case defaultInput = "default_input"
     case builtInForBluetoothOutput = "built_in_for_bluetooth_output"
     case headsetMicSetting = "headset_mic_setting"
@@ -2078,8 +2869,8 @@ public enum MicReason: String, Codable, Sendable, Equatable, CaseIterable {
     case unknown
 }
 
-/// How a microphone connects: built in, Bluetooth (call-quality audio, and zeros while its user
-/// is silent), USB, a virtual or aggregate device, or anything else.
+/// How a device connects: built in, Bluetooth (call-quality audio, and zeros while its user is
+/// silent), USB, a virtual or aggregate device, or anything else.
 public enum MicTransport: String, Codable, Sendable, Equatable, CaseIterable {
     case builtIn = "built_in"
     case bluetooth
@@ -2088,7 +2879,61 @@ public enum MicTransport: String, Codable, Sendable, Equatable, CaseIterable {
     case other
 }
 
-/// A mode: how dictation writes in the apps it names.
+/// What a milestone counts: words dictated all time, or the longest streak in days.
+public enum MilestoneKind: String, Codable, Sendable, Equatable, CaseIterable {
+    case words
+    case streak
+}
+
+/// A milestone's name, a key the shells word: first_page (1,000 words), notebook (10,000),
+/// short_novel (50,000), novels_worth (100,000), seven_days, thirty_days and hundred_days
+/// (streaks).
+public enum MilestoneName: String, Codable, Sendable, Equatable, CaseIterable {
+    case firstPage = "first_page"
+    case notebook
+    case shortNovel = "short_novel"
+    case novelsWorth = "novels_worth"
+    case sevenDays = "seven_days"
+    case thirtyDays = "thirty_days"
+    case hundredDays = "hundred_days"
+}
+
+/// A milestone and whether the library has reached it.
+public struct MilestoneRow: Codable, Sendable, Equatable {
+    /// Its id: words_1000, words_10000, words_50000, words_100000, streak_7, streak_30,
+    /// streak_100.
+    public let id: String
+    /// What it counts.
+    public let kind: MilestoneKind
+    /// Its name, worded by the shell: the same on the chip, in the celebration and on the share
+    /// card's seal.
+    public let name: MilestoneName?
+    /// Whether it is reached.
+    public let reached: Bool
+    /// The count that reaches it.
+    public let threshold: Int64
+}
+
+/// In answer to milestones.check: the milestones reached since the last check, to celebrate,
+/// and a best the take just set, for a short note. Each milestone is reported once ever; a
+/// library's first check, and any check while stats.celebrate is off, reports none (what is
+/// reached is noted all the same). A hidden streak's milestones are noted, not reported.
+public struct MilestonesReached: Codable, Sendable, Equatable {
+    /// A best the newest take, today or this week just set: at most one a day, never on a
+    /// library's first check or with stats.celebrate off, and only once it beat at least five
+    /// earlier entries. Absent otherwise.
+    public let best: BestNews?
+    /// The newly reached milestones, in the fixed order of stats.counted's; usually none.
+    public let milestones: [MilestoneRow]
+    /// The id of the command this answers, echoed so the shell can match the answer to its
+    /// question.
+    public let ref: String?
+    /// Always `milestones.reached`.
+    public let type: String
+}
+
+/// A mode: how dictation writes in the apps it names. Carries the user's words (its name,
+/// polish instructions and apps): never log it.
 public struct ModeInfo: Codable, Sendable, Equatable {
     /// The apps it is picked for, matched against the frontmost app's identity. Never shown to
     /// the user as they are: a shell names each app.
@@ -2099,6 +2944,18 @@ public struct ModeInfo: Codable, Sendable, Equatable {
     public let name: String
     /// Whether its dictations are polished (when a language model can).
     public let polish: Bool
+    /// The language model it is polished on, by its id in polish_models; absent for the AI
+    /// setting's (setting_polish_model). Whether a take can use it now is polish_model_state.
+    public let polishModel: String?
+    /// A model at the provider polish_model names (provider: ids only), sent as the request's
+    /// model on the same endpoint; absent for the model chosen with the provider in Settings >
+    /// AI. Free text the user typed: never log it.
+    public let polishModelName: String?
+    /// With polish_model: whether its takes can use it now.
+    public let polishModelState: PolishModelState?
+    /// Its polish instructions, as the user wrote them; blank for the default (modes.listed's
+    /// default_polish_prompt). The user's words: never log them.
+    public let polishPrompt: String
     /// Whether fillers and stutters are removed.
     public let removeFillers: Bool
     /// How it writes.
@@ -2109,6 +2966,10 @@ public struct ModeInfo: Codable, Sendable, Equatable {
         case id
         case name
         case polish
+        case polishModel = "polish_model"
+        case polishModelName = "polish_model_name"
+        case polishModelState = "polish_model_state"
+        case polishPrompt = "polish_prompt"
         case removeFillers = "remove_fillers"
         case style
     }
@@ -2120,6 +2981,14 @@ public enum ModeStyle: String, Codable, Sendable, Equatable, CaseIterable {
     case casual
     case relaxed
     case other
+}
+
+/// What a model in the catalogue is for: speech (transcription, live words, voice detection,
+/// the diarizer) or language (polish, voice edit, a meeting's summary and Ask, run by the core
+/// on this computer; Windows only).
+public enum ModelKind: String, Codable, Sendable, Equatable, CaseIterable {
+    case speech
+    case language
 }
 
 /// A job asked for a model that is held exclusively (being updated), and was refused. The job
@@ -2135,8 +3004,12 @@ public struct ModelRefused: Codable, Sendable, Equatable {
     public let type: String
 }
 
-/// A model update ended, and its hold is released.
+/// A model update ended, and its hold is released. A model.cancel of an update still queued
+/// answers with this at once, without a model.update_started before it.
 public struct ModelUpdateFinished: Codable, Sendable, Equatable {
+    /// Whether model.cancel stopped it. A cancelled download keeps its part files, so the next
+    /// model.update resumes it. Always sent.
+    public let cancelled: Bool?
     /// The model that was to be replaced.
     public let id: String
     /// Why it failed, when it did.
@@ -2151,6 +3024,7 @@ public struct ModelUpdateFinished: Codable, Sendable, Equatable {
     public let type: String
 
     private enum CodingKeys: String, CodingKey {
+        case cancelled
         case id
         case message
         case next
@@ -2218,28 +3092,59 @@ public struct ModelWarmed: Codable, Sendable, Equatable {
     public let type: String
 }
 
-/// The catalogue's models for this OS, in answer to models.list. What serves each job now is
-/// engine.route's answer.
+/// The catalogue's models for this OS, in answer to models.list and model.remove. What serves
+/// each job now is engine.route's answer.
 public struct ModelsListed: Codable, Sendable, Equatable {
+    /// The bytes free to this user on the volume models are installed on; absent when the OS
+    /// could not say.
+    public let freeBytes: Int64?
     /// The models, in the catalogue's order.
     public let models: [CatalogueEntry]
+    /// The command's "id", when it had one.
+    public let ref: String?
     /// Always `models.listed`.
     public let type: String
+
+    private enum CodingKeys: String, CodingKey {
+        case freeBytes = "free_bytes"
+        case models
+        case ref
+        case type
+    }
 }
 
-/// The user's modes, in answer to modes.list, in the order they are matched: the first mode
-/// naming the frontmost app wins, else the default.
+/// The user's modes, in answer to modes.list, modes.save and modes.delete, in the order they
+/// are matched: the first mode naming the frontmost app wins, else the default. Carries the
+/// user's words: never log it.
 public struct ModesListed: Codable, Sendable, Equatable {
     /// The mode used when no other matches.
     public let defaultId: String
+    /// The polish instructions a mode with blank ones uses: the editor's placeholder.
+    public let defaultPolishPrompt: String
     /// The modes.
     public let modes: [ModeInfo]
+    /// Every language model a mode can be polished on now, the AI setting's first. Empty when
+    /// the core holds none.
+    public let polishModels: [LanguageModelChoice]
+    /// The command's "id", when it had one.
+    public let ref: String?
+    /// In answer to modes.save: the id of the mode saved (a new mode's id is the core's), so
+    /// the editor can select it.
+    public let saved: String?
+    /// The id (in polish_models) of the model a mode without one of its own is polished on now:
+    /// the AI setting's. Absent when there is none.
+    public let settingPolishModel: String?
     /// Always `modes.listed`.
     public let type: String
 
     private enum CodingKeys: String, CodingKey {
         case defaultId = "default_id"
+        case defaultPolishPrompt = "default_polish_prompt"
         case modes
+        case polishModels = "polish_models"
+        case ref
+        case saved
+        case settingPolishModel = "setting_polish_model"
         case type
     }
 }
@@ -2287,6 +3192,15 @@ public struct NoteUpdated: Codable, Sendable, Equatable {
     public let ref: String?
     /// Always `note.updated`.
     public let type: String
+}
+
+/// Why a meeting's far end records this output (Windows): the one the user chose (chosen), the
+/// default because the chosen one is not connected (chosen_missing), or the default output,
+/// chosen (default_output).
+public enum OutputReason: String, Codable, Sendable, Equatable, CaseIterable {
+    case chosen
+    case chosenMissing = "chosen_missing"
+    case defaultOutput = "default_output"
 }
 
 /// An open commitment: not done, and not merged into another.
@@ -2391,6 +3305,34 @@ public enum Phase: String, Codable, Sendable, Equatable, CaseIterable {
     case `final`
 }
 
+/// Whether a mode's own language model can polish its takes now: ready (the core holds it, and
+/// it sends where it did when the mode was saved), missing (the core does not hold it now: let
+/// go of, or another provider chosen; its takes go in as said with polish_model_missing) or
+/// moved (it sends somewhere else now than when the mode was saved, such as a custom server
+/// re-pointed from this machine to another: its takes go in as said with polish_model_missing
+/// until the user confirms it there: modes.save with polish_model_confirm and
+/// polish_model_confirm_to, where polish_models says it sends) or unrecorded (where it sends
+/// was never recorded, as for a pin saved by an early build: the same until the user confirms
+/// it).
+public enum PolishModelState: String, Codable, Sendable, Equatable, CaseIterable {
+    case ready
+    case missing
+    case moved
+    case unrecorded
+}
+
+/// Promises from meetings (commitments not merged into another), in Owed's states.
+public struct PromiseStats: Codable, Sendable, Equatable {
+    /// Marked done.
+    public let kept: Int64
+    /// Promises made: kept, open and overdue together.
+    public let made: Int64
+    /// Not done, and not past their due day.
+    public let `open`: Int64
+    /// Not done, past their due day (due today is not late).
+    public let overdue: Int64
+}
+
 /// Where a record's audio is: its chunks per side, placed on its timeline.
 public struct RecordAudio: Codable, Sendable, Equatable {
     /// Readable chunks, mic first then far end, each in order. Unreadable ones are left out
@@ -2407,6 +3349,38 @@ public struct RecordAudio: Codable, Sendable, Equatable {
         case chunks
         case leftOut = "left_out"
         case timeline
+    }
+}
+
+/// A record was deleted whole, in answer to record.delete: its transcript, notes, summary,
+/// commitments, speaker names and search entries, its words overwritten in the library's files
+/// as the retention setting deletes them, then its audio. The screens drop it.
+public struct RecordDeleted: Codable, Sendable, Equatable {
+    /// Its recorded audio is still on disk: it could not be removed, or its folder is outside
+    /// the library and was left alone. The record itself is gone.
+    public let audioLeft: Bool
+    /// What it was.
+    public let kind: RecordKind
+    /// The record that is gone.
+    public let record: String
+    /// The command's "id", when it had one, so the shell can match the answer to what it sent.
+    public let ref: String?
+    /// No copy of its words is left in the library's files. False, as for
+    /// deleted_text_not_scrubbed, while another process reading the database keeps them in its
+    /// log: the deletion is saved, and the library keeps trying; a dictation's or meeting's
+    /// deleted_text_scrubbed says when it has. This answer counts as that change's report: each
+    /// change reaches the shell once.
+    public let scrubbed: Bool
+    /// Always `record.deleted`.
+    public let type: String
+
+    private enum CodingKeys: String, CodingKey {
+        case audioLeft = "audio_left"
+        case kind
+        case record
+        case ref
+        case scrubbed
+        case type
     }
 }
 
@@ -2653,6 +3627,72 @@ public struct SpeakerName: Codable, Sendable, Equatable {
     public let speaker: String
 }
 
+/// A far-end speaker of a record was named, renamed or cleared, in answer to speaker.name. The
+/// name stays with the shell that sent it: record.open carries it.
+public struct SpeakerNamed: Codable, Sendable, Equatable {
+    /// Whether the speaker has a name now: false when it was cleared, and reads as numbered
+    /// again.
+    public let named: Bool
+    /// The record.
+    public let record: String
+    /// The command's "id", when it had one, so the shell can match the answer to what it sent.
+    public let ref: String?
+    /// The diarizer's label.
+    public let speaker: String
+    /// Always `speaker.named`.
+    public let type: String
+}
+
+/// The Stats screen's numbers, in answer to stats.get, streak.pause or streak.resume: counted
+/// on this computer from the library, on the user's calendar. Nothing here is sent anywhere or
+/// drawn from what was said.
+public struct StatsCounted: Codable, Sendable, Equatable {
+    /// The user's personal bests, from takes made here (never an import's), in a fixed order:
+    /// longest_dictation, fastest_dictation, most_words_day, best_week, longest_meeting,
+    /// longest_monologue. A best not held yet is absent: nothing to show, never a zero.
+    public let bests: [BestRow]?
+    /// Dictation.
+    public let dictation: DictationStats
+    /// Meetings, all time.
+    public let meetingsAll: MeetingStats
+    /// Meetings that started this month.
+    public let meetingsMonth: MeetingStats
+    /// Every milestone, in a fixed order; with the streak hidden, the words milestones only.
+    public let milestones: [MilestoneRow]
+    /// Promises, all time.
+    public let promisesAll: PromiseStats
+    /// Promises made in meetings that started this month.
+    public let promisesMonth: PromiseStats
+    /// The id of the command this answers, echoed so the shell can match the answer to its
+    /// question.
+    public let ref: String?
+    /// Today on the user's calendar, YYYY-MM-DD.
+    public let today: String
+    /// Always `stats.counted`.
+    public let type: String
+    /// The typing speed time saved is measured against (stats.typing_wpm, 40 unless set).
+    public let typingWpm: Int64
+    /// Last week, reviewed, to lead the screen with until the user dismisses it
+    /// (stats.review_dismissed, its week's first day). Absent when last week had no dictation
+    /// and no meeting, or once dismissed.
+    public let weekReview: WeekReview?
+
+    private enum CodingKeys: String, CodingKey {
+        case bests
+        case dictation
+        case meetingsAll = "meetings_all"
+        case meetingsMonth = "meetings_month"
+        case milestones
+        case promisesAll = "promises_all"
+        case promisesMonth = "promises_month"
+        case ref
+        case today
+        case type
+        case typingWpm = "typing_wpm"
+        case weekReview = "week_review"
+    }
+}
+
 /// Whether a summary item is a decision or an action.
 public enum SummaryItemKind: String, Codable, Sendable, Equatable, CaseIterable {
     case decision
@@ -2667,6 +3707,25 @@ public struct SummaryItemRow: Codable, Sendable, Equatable {
     public let span: Span
     /// The item as the summary states it. The library's words: never log it.
     public let text: String
+}
+
+/// Time saved, pictured: about count of key, the nearest whole number, within a fifth of the
+/// time. Always said with "about".
+public struct TimeEquivalent: Codable, Sendable, Equatable {
+    /// How many: 1 to 5, or any number of the largest (working_week).
+    public let count: Int64
+    /// What it is about.
+    public let key: TimeEquivalentKey
+}
+
+/// Something time saved is about, as long as: working_week 40 h, working_day 8 h, feature_film
+/// 2 h, lunch_hour 1 h, coffee_break 15 min.
+public enum TimeEquivalentKey: String, Codable, Sendable, Equatable, CaseIterable {
+    case workingWeek = "working_week"
+    case workingDay = "working_day"
+    case featureFilm = "feature_film"
+    case lunchHour = "lunch_hour"
+    case coffeeBreak = "coffee_break"
 }
 
 /// Why no voice detection model is in use.
@@ -2726,5 +3785,48 @@ public struct VoiceCommandsListed: Codable, Sendable, Equatable {
         case ref
         case type
         case wakePrefix = "wake_prefix"
+    }
+}
+
+/// Last week, reviewed: gains and plain facts only, nothing said to be down.
+public struct WeekReview: Codable, Sendable, Equatable {
+    /// The day with the most words, YYYY-MM-DD (the earliest on a tie). Absent without words.
+    public let bestDay: String?
+    /// Its words.
+    public let bestDayWords: Int64?
+    /// Their length, ms.
+    public let meetingMs: Int64
+    /// Meetings recorded here.
+    public let meetings: Int64
+    /// Of the promises made in its meetings, those done now (no time is kept for when one was
+    /// done). Absent when none.
+    public let promisesKept: Int64?
+    /// What saved_ms is about, as saved_about_week.
+    public let savedAbout: [TimeEquivalent]?
+    /// Time saved, ms, as saved_ms_week. Absent unless there was some.
+    public let savedMs: Int64?
+    /// Its first day, YYYY-MM-DD: what stats.review_dismissed takes to dismiss it (kept
+    /// dismissed if the week's first day changes later).
+    public let week: String
+    /// Words dictated.
+    public let words: Int64
+    /// Words per minute, with at least a minute of speech.
+    public let wpm: Int64?
+    /// How many words a minute faster than the four weeks before it. Absent unless it was
+    /// faster: a slower week is never compared.
+    public let wpmGain: Int64?
+
+    private enum CodingKeys: String, CodingKey {
+        case bestDay = "best_day"
+        case bestDayWords = "best_day_words"
+        case meetingMs = "meeting_ms"
+        case meetings
+        case promisesKept = "promises_kept"
+        case savedAbout = "saved_about"
+        case savedMs = "saved_ms"
+        case week
+        case words
+        case wpm
+        case wpmGain = "wpm_gain"
     }
 }

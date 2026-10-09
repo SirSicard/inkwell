@@ -1,5 +1,6 @@
 // Dictation as the shell shows it: whether it is live and on which keys (Settings > Dictation), the
-// choice of keys, and what the Drop says about a take that ended without its text going in.
+// choice of keys, and what the Drop says about a take that ended without its text going in (and a
+// personal best one just set, from the Stats check that follows it).
 //
 // The core holds the keys and the mic (architecture rule 1). Once the core is ready the shell reads
 // the user's switch (dictation.enabled, never set: on) and, unless it is off, sends
@@ -44,18 +45,23 @@ final class DictationModel {
         let text: DropText
     }
 
-    /// The keys a user can pick (the core's tokens: modifiers held on their own).
-    static let keys: [DictationKey] = [
-        DictationKey(token: "fn", name: "fn (Globe)", cap: "fn"),
-        DictationKey(token: "right_option", name: "Right Option", cap: "right ⌥"),
-        DictationKey(token: "right_command", name: "Right Command", cap: "right ⌘"),
-        DictationKey(token: "right_control", name: "Right Control", cap: "right ⌃"),
-        DictationKey(token: "right_shift", name: "Right Shift", cap: "right ⇧"),
-    ]
+    /// The quick picks (the core's tokens for modifiers held on their own). Any other key the core
+    /// can watch is recorded instead ("Record a shortcut…", ShortcutRecorderModel).
+    static let keys: [DictationKey] = ["fn", "right_option", "right_command", "right_control", "right_shift"]
+        .map { KeyNotation.describe($0) }
 
-    /// A token's key, for showing it.
+    /// A token's key, for showing it: a quick pick, or any token in Mac notation, typing keys as the
+    /// user's keyboard layout labels them (KeyNotation).
     static func key(_ token: String?) -> DictationKey? {
-        keys.first { $0.token == token }
+        token.map { KeyNotation.display($0) }
+    }
+
+    /// How a key is written wherever the app names it in a line (Today, Settings' status) and on
+    /// its key cap: one formatter, so they never name the same key two ways (⌃⇧Space, never
+    /// Control-Shift-Space beside it). Where VoiceOver reads the line, it hears the name from
+    /// `key(_:)` (Today's status line does).
+    static func cap(_ token: String) -> String {
+        key(token)?.cap ?? token
     }
 
     private(set) var state: State = .starting
@@ -77,6 +83,8 @@ final class DictationModel {
     /// A dictation.enable or dictation.disable that failed as a command (never ran, or a bug in the
     /// core stopped it), until the core answers the next one.
     private(set) var commandFailure: CommandFailure?
+    /// Off while a shortcut is recorded (ShortcutRecorderModel), to come back on when it ends.
+    private(set) var suspendedForRecording = false
 
     enum CommandFailure: Equatable, Sendable {
         case enable
@@ -95,6 +103,9 @@ final class DictationModel {
     /// Whether a language model can rewrite a selection (Polish's engine), for the words of a
     /// failed edit.
     @ObservationIgnored var hasLanguageModel: @MainActor () -> Bool = { false }
+    /// Whether a speech model is installed (the catalogue's answer), for the words after a take
+    /// nothing could transcribe.
+    @ObservationIgnored var speechModels: @MainActor () -> SpeechModels = { .unknown }
 
     init(send: @escaping SendCommand, timeZone: @escaping @MainActor () -> TimeZone = { .current }) {
         self.send = send
@@ -109,6 +120,8 @@ final class DictationModel {
 
     /// Turns dictation on (or, when on, rebinds its keys).
     func enable() {
+        // A shortcut is being recorded: the keys stay let go of until it ends, which enables then.
+        guard !suspendedForRecording else { return }
         nextRef += 1
         let minutes = timeZone().secondsFromGMT() / 60
         send(.dictationEnable(utcOffsetMinutes: minutes, ref: "\(Self.refPrefix)\(nextRef)"))
@@ -153,7 +166,7 @@ final class DictationModel {
 
     /// Back from System Settings, perhaps with Accessibility granted: try again.
     func appBecameActive() {
-        guard wantsOn != false else { return }
+        guard wantsOn != false, !suspendedForRecording else { return }
         if case .off(let reason, _) = state, reason == .needsAccessibility || reason == .keyRefused {
             enable()
         } else if keyLost || editKeyProblem == Self.editKeyLostText {
@@ -161,9 +174,38 @@ final class DictationModel {
         }
     }
 
+    /// A shortcut is being recorded: the keys are let go of, or the current key would start a take
+    /// and the core's tap would swallow it before the recorder saw it. Nothing turns them on again
+    /// until the recording ends (enable() waits), whatever the switch says meanwhile.
+    @discardableResult
+    func suspendForRecording() -> String? {
+        guard !suspendedForRecording else { return nil }
+        suspendedForRecording = true
+        // Always obtain an acknowledgement, including while the switch is unread or off.
+        nextRef += 1
+        let ref = "\(Self.refPrefix)\(nextRef)"
+        send(.dictationDisable(ref: ref))
+        return ref
+    }
+
+    /// The recording ended (saved, refused or cancelled): dictation comes back, on the key just
+    /// saved if one was (setting.set was sent first, and the core runs both in order).
+    func resumeAfterRecording() {
+        guard suspendedForRecording else { return }
+        suspendedForRecording = false
+        if wantsOn == true {
+            enable()
+        }
+    }
+
     func setKey(_ token: String) {
         keyFailure = nil
         send(.settingSet(.dictationKey, token))
+        // Off because the key before was refused: the core binds nothing until asked, so a new
+        // key turns dictation on again (after the save, which the core runs first).
+        if case .off(.keyRefused, _) = state, wantsOn == true {
+            enable()
+        }
     }
 
     /// `nil` turns the edit key off.
@@ -189,6 +231,7 @@ final class DictationModel {
     /// Whether dictation is off for a reason turning it on again may fix (the Dictation section offers
     /// that): not for Accessibility, which has its own Allow, nor for an unsupported build.
     var canRetry: Bool {
+        if suspendedForRecording { return false }
         if commandFailure != nil { return true }
         if case .off(let reason, _) = state {
             // Off by the user's switch is the switch's to change.
@@ -206,19 +249,19 @@ final class DictationModel {
     var status: String {
         // The user's latest action first: a turn-off that failed outranks an older lost key.
         if commandFailure == .disable { return "Dictation couldn't be turned off." }
+        if suspendedForRecording { return "Dictation is paused while you record a shortcut." }
         if keyLost { return Self.keyLostText }
         switch state {
         case .starting:
             return "Starting…"
         case .live(let key, _):
-            let cap = Self.key(key)?.cap ?? key
-            return "Hold \(cap), speak, let go."
+            return "Hold \(Self.cap(key)), speak, let go."
         case .off(let reason, let message):
             switch reason {
             case .needsAccessibility:
                 return "Dictation needs \u{201C}Type for you\u{201D} (Accessibility) to hold its key."
             case .keyRefused:
-                return "That key can't be used here\(message.map { ": \($0)" } ?? ".")"
+                return "That key can't be used here\(message.map { ": \($0)" } ?? ""). Pick another, or record a shortcut."
             case .unsupported:
                 return "Dictation isn't available in this build."
             case .workerStopped:
@@ -233,6 +276,7 @@ final class DictationModel {
 
     /// Whether the status is a problem to show in the alert colour.
     var isProblem: Bool {
+        if suspendedForRecording { return false }
         if case .off(let reason, _) = state { return reason != .disabled }
         return keyFailure != nil || keyLost || editKeyProblem != nil || commandFailure != nil
     }
@@ -248,6 +292,9 @@ final class DictationModel {
         case .coreStopped:
             state = .starting
             wantsOn = nil
+            // The restarted core turns dictation on from its switch; a recording it cut short
+            // leaves nothing to resume.
+            suspendedForRecording = false
         case .dictationReady(let ready):
             state = .live(key: ready.key, editKey: ready.editKey)
             keyLost = false
@@ -300,7 +347,7 @@ final class DictationModel {
                 ? "Couldn't save the key. The one before still works."
                 : "Couldn't read your key settings."
         default:
-            show(Self.note(for: event, hasLanguageModel: hasLanguageModel()))
+            show(Self.note(for: event, hasLanguageModel: hasLanguageModel(), speech: speechModels()))
         }
     }
 
@@ -311,8 +358,13 @@ final class DictationModel {
     }
 
     /// What the Drop says for `event`, or nil when it says nothing (the text went in as it should,
-    /// or a screen shows it).
-    static func note(for event: InkEvent, hasLanguageModel: Bool) -> DropText? {
+    /// or a screen shows it). With no speech model, a take that found nothing to type found it
+    /// because nothing could transcribe it (without voice detection either, the gain stage's
+    /// fallback can judge quiet speech silence): that is said, never the microphone.
+    static func note(for event: InkEvent, hasLanguageModel: Bool, speech: SpeechModels = .unknown) -> DropText? {
+        if speech.dictation == .missing, nothingTranscribed(event) {
+            return SpeechModels.dropNote(downloading: speech.downloading)
+        }
         switch event {
         case .dictationDiscarded(let discarded):
             switch discarded.reason {
@@ -364,6 +416,10 @@ final class DictationModel {
             case .other:
                 return DropText(title: "The edit failed", detail: "The selection was left alone", tone: .alert)
             }
+        case .milestonesReached(let reached):
+            // A best the take (or today, or this week) just set: the core reports it once, never
+            // for an import, and never with celebrations off. A note to read, not an alert.
+            return reached.best.map { StatsFormat.bestNote($0) }
         case .dictationMicFailed:
             // At a press (it would not open) or mid-take (it went away or changed under the take,
             // which then ends with what it heard).
@@ -375,16 +431,35 @@ final class DictationModel {
             case .polishNotAllowed:
                 // Polish is on, but its model now sends somewhere the user has not agreed to.
                 return DropText(title: "Not polished", detail: "Polish needs your OK again in Settings", tone: .alert)
+            case .polishModelMissing:
+                // The mode names a model of its own that the core does not hold now, or that sends
+                // elsewhere than where the user agreed: nothing was sent, and Settings > Modes says
+                // which and how to fix it.
+                return DropText(title: "Not polished", detail: "Check this mode's model in Settings > Modes", tone: .alert)
             case .releaseMissed:
                 return DropText(title: "Stopped after 3 minutes", detail: "The key's release never arrived")
             // Shown elsewhere (Today's notices, Settings) or nothing the user acts on at once.
             case .vadFailed, .audioLost, .tailCutShort, .focusUnreadable, .polishUnavailable,
-                 .polishFailed, .noModeForStyle, .saveFailed, .deletedTextNotScrubbed,
-                 .deletedTextScrubbed, .other:
+                 .polishFailed, .noModeForStyle, .saveFailed,
+                 .deletedTextNotScrubbed, .deletedTextScrubbed, .other:
                 return nil
             }
         default:
             return nil
+        }
+    }
+
+    /// A take that ended with nothing typed for a reason a missing speech model explains.
+    private static func nothingTranscribed(_ event: InkEvent) -> Bool {
+        switch event {
+        case .dictationDiscarded(let discarded):
+            [.silence, .noSpeech, .nothingHeard, .nothingLeft].contains(discarded.reason)
+        case .dictationFailed(let failed):
+            failed.stage == .transcription
+        case .dictationEditFailed(let failed):
+            failed.reason == .transcription
+        default:
+            false
         }
     }
 

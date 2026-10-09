@@ -4,7 +4,9 @@
 import Foundation
 
 /// The orb's colours, sRGB 0...1: yours (yA, and yB, its lighter partner), theirs (tA, tB), the
-/// orb at rest (idle) and the blotted drop (ink), and whether the theme is dark.
+/// orb at rest (idle) and the blotted drop (ink), and whether the theme is dark. At rest the orb
+/// leans from idle toward the dots by restTint (0...1): its first shade toward yA, its second
+/// toward tA; 0 rests in idle alone.
 public struct OrbPalette: Equatable, Sendable {
     public var yA: SIMD3<Float>
     public var yB: SIMD3<Float>
@@ -13,10 +15,13 @@ public struct OrbPalette: Equatable, Sendable {
     public var idle: SIMD3<Float>
     public var ink: SIMD3<Float>
     public var dark: Bool
+    public var restTint: Float
+    /// Extra resting coverage in the shader ink.w lane; leaves live and blotting unchanged.
+    public var restBoost: Float
 
     public init(
         yA: SIMD3<Float>, yB: SIMD3<Float>, tA: SIMD3<Float>, tB: SIMD3<Float>, idle: SIMD3<Float>,
-        ink: SIMD3<Float>, dark: Bool
+        ink: SIMD3<Float>, dark: Bool, restTint: Float = 0, restBoost: Float = 0
     ) {
         self.yA = yA
         self.yB = yB
@@ -25,6 +30,18 @@ public struct OrbPalette: Equatable, Sendable {
         self.idle = idle
         self.ink = ink
         self.dark = dark
+        self.restTint = restTint
+        self.restBoost = restBoost
+    }
+
+    /// Match the shared shell control: above 70%, ease into stronger tint and coverage.
+    public func withShellStrength(_ strength: Float) -> OrbPalette {
+        let k = min(1, max(0, (strength - 0.7) / 0.3))
+        let boost = k * k * (3 - 2 * k)
+        var result = self
+        result.restTint = restTint + (1 - restTint) * boost
+        result.restBoost = boost
+        return result
     }
 
     /// Greys, until the shell has read the theme (and for tests).

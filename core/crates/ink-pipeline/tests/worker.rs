@@ -462,7 +462,8 @@ fn a_sink_that_panics_while_reporting_a_failure_is_logged_before_the_worker_stop
 /// How long [`SlowLlm`] takes: longer than a cold on-device polish (about 1.4 s).
 const SLOW: Duration = Duration::from_millis(1_500);
 
-/// Answers "Polished take N." to its Nth call after [`SLOW`], watching its token meanwhile.
+/// Answers "Sent from the worker, take N." to its Nth call after [`SLOW`], watching its token
+/// meanwhile: a cleanup of what the engine heard, as polish's answer must be.
 #[derive(Default)]
 struct SlowLlm {
     calls: AtomicUsize,
@@ -489,7 +490,7 @@ impl Llm for SlowLlm {
             std::thread::sleep(Duration::from_millis(5));
         }
         Ok(LlmResponse {
-            text: format!("Polished take {n}."),
+            text: format!("Sent from the worker, take {n}."),
         })
     }
 }
@@ -503,12 +504,20 @@ fn a_press_while_polish_runs_leaves_that_take_polished_and_is_processed_after_it
     let llm = Arc::new(SlowLlm::default());
     let mut settings = DictationSettings::default();
     settings.modes.modes[0].polish_enabled = true;
-    settings.polish_consent = Some(ink_pipeline::consent::LlmConsent::OnDevice);
+    settings.polish_consents = vec![ink_pipeline::consent::LlmConsent::OnDevice];
+    // Stored too: the chain reads polish's consents again at the call.
+    let store = Arc::new(MemStore::new());
+    ink_core::Store::set_setting(
+        store.as_ref(),
+        ink_pipeline::consent::Feature::Polish.setting_key(),
+        &ink_pipeline::consent::consents_to_setting(&settings.polish_consents),
+    )
+    .unwrap();
     let sink_events = events.clone();
     let chain = DictationChain::new(
         Services {
             engine: Arc::new(answering("sent from the worker")),
-            store: Arc::new(MemStore::new()),
+            store,
             inserter: platform.clone(),
             focus: platform.clone(),
             clock: platform.clock(),
@@ -546,8 +555,8 @@ fn a_press_while_polish_runs_leaves_that_take_polished_and_is_processed_after_it
     assert_eq!(
         platform.inserted(),
         vec![
-            "Polished take 1. ".to_owned(),
-            "Polished take 2. ".to_owned()
+            "Sent from the worker, take 1. ".to_owned(),
+            "Sent from the worker, take 2. ".to_owned()
         ]
     );
     assert_eq!(

@@ -117,7 +117,11 @@ impl Llm for ExternalLlm {
                 Endpoint::InProcess
             } else {
                 // Named by the engine's id: its address, if it has one, is the shell's business.
-                Endpoint::Remote(format!("shell engine {}", self.info.id))
+                Endpoint::Remote(format!(
+                    "{}{}",
+                    ink_pipeline::consent::SHELL_ENGINE_ENDPOINT,
+                    self.info.id
+                ))
             },
         }
     }

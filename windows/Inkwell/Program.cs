@@ -9,6 +9,13 @@
 // passes through: Velopack's own default would install an update that was downloaded but not yet
 // restarted into, at the next start, and restart; auto-apply is off, so an update installs only
 // when the user presses Restart to Update (UpdatesModel).
+//
+// One app per library: a second start (Start with Windows and a click, say) hands its activation
+// to the running one, which shows its window, and exits before it starts a core. Two ran side by
+// side before, each with its own core on the one library, its own tray icon and its own dictation
+// key hook, so a dictation was typed twice. The key is the library's folder, so a library moved
+// with INK_DATA_DIR runs beside the user's.
+using Microsoft.Windows.AppLifecycle;
 using Velopack;
 
 namespace Inkwell;
@@ -19,6 +26,45 @@ internal static class Program
     private static void Main()
     {
         VelopackApp.Build().SetAutoApplyOnStartup(false).Run();
+        if (!IsTheLibrarysApp())
+        {
+            return;
+        }
         XamlGeneratedProgram.XamlGeneratedMain();
+    }
+
+    /// <summary>
+    /// Whether this process is the library's app: true when none was running (this one is now), or
+    /// when the library's folder is not known (the core then says why). Otherwise the activation
+    /// went to the one that runs.
+    /// </summary>
+    private static bool IsTheLibrarysApp()
+    {
+        string key;
+        try
+        {
+            key = "library:" + Path.GetFullPath(DataLocation.DataDirectory()).TrimEnd('\\').ToUpperInvariant();
+        }
+        catch (IOException)
+        {
+            return true;
+        }
+        var owner = AppInstance.FindOrRegisterForKey(key);
+        if (owner.IsCurrent)
+        {
+            return true;
+        }
+        // Off this STA thread, whose message loop has not started: the redirection is a COM call
+        // into the other process. One that hangs or is ending must not keep this start alive or
+        // crash it: it waits a while, then exits quietly all the same.
+        var args = AppInstance.GetCurrent().GetActivatedEventArgs();
+        try
+        {
+            Task.Run(() => owner.RedirectActivationToAsync(args).AsTask()).Wait(TimeSpan.FromSeconds(10));
+        }
+        catch (AggregateException)
+        {
+        }
+        return false;
     }
 }

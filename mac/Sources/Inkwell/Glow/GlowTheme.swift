@@ -62,6 +62,7 @@ final class GlowTheme {
         var themDark: String?
         var edgeGlow = true
         var motion = Motion.system
+        var orbStrength = 70
     }
 
     private(set) var settings = Settings()
@@ -69,6 +70,9 @@ final class GlowTheme {
     private(set) var effectiveDark = false
     /// Increase Contrast or Reduce Transparency is on: solid cards, a dimmed orb.
     private(set) var solidSurfaces = false
+    /// The system's Reduce Motion, followed as it changes: the live icon's pulse stops with it.
+    /// (The ink's views read it as they draw.)
+    private(set) var reduceMotion = false
     /// A key could not be read or saved.
     private(set) var failure: String?
 
@@ -90,7 +94,7 @@ final class GlowTheme {
     /// The keys this engine reads and writes.
     static let keys: [ShellSetting] = [
         .appearanceMode, .appearanceDotsLight, .appearanceDotsDark, .appearanceYouLight, .appearanceThemLight,
-        .appearanceYouDark, .appearanceThemDark, .appearanceEdgeGlow, .appearanceMotion,
+        .appearanceYouDark, .appearanceThemDark, .appearanceEdgeGlow, .appearanceMotion, .appearanceOrb,
     ]
 
     /// The ids of its setting commands (a command.failed carries one).
@@ -121,6 +125,8 @@ final class GlowTheme {
         let solid = workspace.accessibilityDisplayShouldIncreaseContrast
             || workspace.accessibilityDisplayShouldReduceTransparency
         if solid != solidSurfaces { solidSurfaces = solid }
+        let still = workspace.accessibilityDisplayShouldReduceMotion
+        if still != reduceMotion { reduceMotion = still }
     }
 
     nonisolated static func isDark(_ appearance: NSAppearance) -> Bool {
@@ -156,6 +162,12 @@ final class GlowTheme {
         GlowColours.dots(preset: preset, you: customYou, them: customThem, dark: isDark)
     }
 
+    /// Yours and theirs as the dark mode shows them, whichever mode is shown: for what is drawn
+    /// on night in either mode (the app icon's plate, in the Dock).
+    var nightDots: (you: GlowColours.RGB, them: GlowColours.RGB) {
+        GlowColours.dots(preset: Glow.preset(settings.dotsDark), you: settings.youDark, them: settings.themDark, dark: true)
+    }
+
     var you: Color { GlowColours.color(dots.you) }
     var them: Color { GlowColours.color(dots.them) }
 
@@ -166,6 +178,9 @@ final class GlowTheme {
 
     /// The ink holds still: the user's "Always still" (Reduce Motion is the renderer's own check).
     var motionStill: Bool { settings.motion == .still }
+
+    /// The main window alone strengthens its resting tint; the Drop retains its look.
+    var shellPalette: OrbPalette { palette.withShellStrength(Float(settings.orbStrength) / 100) }
 
     // MARK: Changes
 
@@ -238,6 +253,14 @@ final class GlowTheme {
         write(.appearanceEdgeGlow, on ? "on" : "off")
     }
 
+    func setOrbStrength(_ strength: Int) {
+        let bounded = min(100, max(10, strength))
+        let value = Int((Double(bounded) / 10).rounded()) * 10
+        failure = nil
+        settings.orbStrength = value
+        write(.appearanceOrb, String(value))
+    }
+
     func setMotion(_ motion: Motion) {
         failure = nil
         settings.motion = motion
@@ -250,10 +273,24 @@ final class GlowTheme {
     }
 
     private func applyMode() {
+        applyAppearance(appearance)
+    }
+
+    /// The mode as an appearance: Light's or Dark's, or nil to follow the system.
+    var appearance: NSAppearance? {
         switch settings.mode {
-        case .light: applyAppearance(NSAppearance(named: .aqua))
-        case .dark: applyAppearance(NSAppearance(named: .darkAqua))
-        case .system: applyAppearance(nil)
+        case .light: NSAppearance(named: .aqua)
+        case .dark: NSAppearance(named: .darkAqua)
+        case .system: nil
+        }
+    }
+
+    /// The mode as SwiftUI's colour scheme: nil follows the system.
+    var colorScheme: ColorScheme? {
+        switch settings.mode {
+        case .light: .light
+        case .dark: .dark
+        case .system: nil
         }
     }
 
@@ -298,11 +335,34 @@ final class GlowTheme {
         case .appearanceYouDark: next.youDark = colour(value)
         case .appearanceThemDark: next.themDark = colour(value)
         case .appearanceEdgeGlow: next.edgeGlow = value != "off"
+        case .appearanceOrb:
+            let strength = value.flatMap(Int.init)
+            next.orbStrength = strength.map { (10...100).contains($0) && $0 % 10 == 0 ? $0 : 70 } ?? 70
         case .appearanceMotion: next.motion = value.flatMap(Motion.init(rawValue:)) ?? .system
         default: return
         }
         let modeChanged = next.mode != settings.mode
         if next != settings { settings = next }
         if modeChanged || key == .appearanceMode { applyMode() }
+    }
+}
+
+extension View {
+    /// Pins the appearance of the window, sheet or popover this view is the root of to the app's
+    /// mode (preferredColorScheme sets its enclosing presentation's), and with it what that
+    /// presents: alerts and confirmation dialogs as sheets, popovers. With only the app's
+    /// appearance set, the speaker-name popover and polish's consent alert drew as dark glass with
+    /// dark text over a Light window. Match system pins nothing. Reads the theme from the
+    /// environment.
+    func followsAppMode() -> some View {
+        modifier(FollowsAppMode())
+    }
+}
+
+private struct FollowsAppMode: ViewModifier {
+    @Environment(GlowTheme.self) private var theme
+
+    func body(content: Content) -> some View {
+        content.preferredColorScheme(theme.colorScheme)
     }
 }

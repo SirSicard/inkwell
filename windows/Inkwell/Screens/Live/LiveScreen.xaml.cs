@@ -20,8 +20,6 @@ namespace Inkwell.Screens;
 
 public sealed partial class LiveScreen : UserControl
 {
-    /// <summary>VK_OEM_PERIOD: Ctrl+. stops, as ⌘. does on the Mac.</summary>
-    private const VirtualKey PeriodKey = (VirtualKey)190;
 
     private readonly CoreStore store;
     private readonly LiveModel live;
@@ -31,6 +29,7 @@ public sealed partial class LiveScreen : UserControl
     /// <summary>The header's clock: runs only while this screen is loaded and the meeting still records.</summary>
     private readonly DispatcherQueueTimer clock;
     private readonly WindowPresence presence;
+    private readonly CatalogueModel catalogue;
     private string? shownRecord;
     private int? lastParagraph;
     private bool loaded;
@@ -39,8 +38,11 @@ public sealed partial class LiveScreen : UserControl
 
     /// <param name="meetings">Stop, Record now and their failures (the meetings model, Settings' area).</param>
     /// <param name="presence">Whether the window is on screen: the clock stops while it is hidden to the tray.</param>
-    public LiveScreen(CoreStore store, LiveModel live, MeetingModel meetings, WindowPresence presence)
+    /// <param name="catalogue">Whether a speech model is installed (the waiting line says when none is).</param>
+    public LiveScreen(CoreStore store, LiveModel live, MeetingModel meetings, WindowPresence presence, CatalogueModel catalogue, MeetingShortcutModel shortcut)
     {
+        ArgumentNullException.ThrowIfNull(catalogue);
+        this.catalogue = catalogue;
         ArgumentNullException.ThrowIfNull(presence);
         this.presence = presence;
         ArgumentNullException.ThrowIfNull(store);
@@ -50,6 +52,13 @@ public sealed partial class LiveScreen : UserControl
         this.live = live;
         this.meetings = meetings;
         InitializeComponent();
+        void ShortcutChanged()
+        {
+            AutomationProperties.SetAcceleratorKey(StopButton, shortcut.ShortcutLabel);
+            ToolTipService.SetToolTip(StopButton, shortcut.ShortcutLabel.Length == 0 ? "Stop recording" : $"Stop recording ({shortcut.ShortcutLabel})");
+        }
+        shortcut.PropertyChanged += (_, _) => ShortcutChanged();
+        ShortcutChanged();
         NotesColumn.MinWidth = LiveLayout.NotesMinWidth + LiveLayout.ColumnGutter;
         NotesArea.Margin = new Thickness(0, 0, LiveLayout.ColumnGutter, 0);
         LedgerColumn.MinWidth = LiveLayout.LedgerMinWidth + LiveLayout.ColumnGutter;
@@ -70,13 +79,7 @@ public sealed partial class LiveScreen : UserControl
             var s = slot;
             Accelerator(VirtualKey.Number1 + slot, () => live.AnswerStacked(s));
         }
-        Accelerator(PeriodKey, () =>
-        {
-            if (store.Meeting is { Stopping: false })
-            {
-                meetings.Stop();
-            }
-        });
+
 
         store.PropertyChanged += (_, _) => Render();
         live.PropertyChanged += (_, _) => Render();
@@ -86,12 +89,14 @@ public sealed partial class LiveScreen : UserControl
         {
             loaded = true;
             presence.PropertyChanged += OnPresenceChanged;
+            catalogue.PropertyChanged += OnPresenceChanged;
             Render();
         };
         Unloaded += (_, _) =>
         {
             loaded = false;
             presence.PropertyChanged -= OnPresenceChanged;
+            catalogue.PropertyChanged -= OnPresenceChanged;
             clock.Stop();
         };
         Render();
@@ -200,6 +205,8 @@ public sealed partial class LiveScreen : UserControl
         var lastBefore = ledger.Count > 0 ? ledger[^1] : null;
         ListSync.Sync(ledger, lines, SameLine);
         WaitingLine.Visibility = lines.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        // With no speech model nothing will arrive: the meeting is recorded, not transcribed.
+        WaitingLine.Text = LiveModel.WaitingText(catalogue.HasSpeechModel == false);
         EarlierLine.Visibility = LiveHeader.EarlierInRecord(meeting) ? Visibility.Visible : Visibility.Collapsed;
         if (ledger.Count > 0 && !ReferenceEquals(ledger[^1], lastBefore))
         {

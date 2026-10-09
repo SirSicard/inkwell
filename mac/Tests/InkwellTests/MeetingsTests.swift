@@ -57,8 +57,11 @@ final class ConsentDropTests: XCTestCase {
         for word in ["invisible", "undetectable", "hidden", "secret"] {
             XCTAssertFalse((text.title + text.detail).lowercased().contains(word), word)
         }
-        XCTAssertEqual(text.actions, [.record(app: "com.example.call"), .dismiss(app: "com.example.call")])
-        XCTAssertEqual(text.actions.map(\.title), ["Record this call", "Not this one"])
+        XCTAssertEqual(text.actions, [
+            .record(app: "com.example.call"), .dismiss(app: "com.example.call"),
+            .always(app: "com.example.call", name: "Example Call"), .never(app: "com.example.call", name: "Example Call"),
+        ])
+        XCTAssertEqual(text.actions.map(\.title), ["Record this call", "Not this one", "Always for Example Call", "Never for Example Call"])
         XCTAssertFalse(drop.panelIsKey, "asking never takes focus")
 
         // The answer withdrawn (the app let go of the mic): the Drop goes.
@@ -66,6 +69,17 @@ final class ConsentDropTests: XCTestCase {
         drop.update()
         XCTAssertFalse(drop.isShown)
         XCTAssertTrue(pressed.isEmpty, "nothing recorded without a click")
+    }
+
+    /// The consent line is laid out whole, on two lines: a tail-truncating field drew one, and the
+    /// reminder to tell the others was cut off.
+    func testTheConsentLineIsShownWholeOnTwoLines() {
+        let content = DropContentView()
+        content.setFrameSize(DropLayout.sizeWithActions)
+        let store = CoreStore()
+        store.apply([event(#"{"type":"meeting.detected","app":"com.example.call","app_name":"Example Call"}"#)])
+        content.show(ShellInk(store: store).dropText)
+        XCTAssertEqual(content.detailShownLines, 2)
     }
 
     func testTheDropsAnswersBecomeMeetingCommands() {
@@ -113,11 +127,13 @@ final class ConsentDropTests: XCTestCase {
 @MainActor
 final class WatchdogWarningTests: XCTestCase {
     /// Revoking system audio mid-call: the core's watchdog reports the far end's zeros within 10 s
-    /// (ink-pipeline's `a_far_end_of_digital_zeros_is_reported_within_ten_seconds`), and the Drop
-    /// says so at once, with the way to fix it.
-    func testTheFarEndGoingSilentTurnsTheDropIntoTheWarning() {
+    /// (ink-pipeline's `a_far_end_of_digital_zeros_is_reported_within_ten_seconds`), and with the
+    /// probe saying the permission is off, the Drop says so at once, with the way to fix it.
+    func testTheFarEndGoingSilentWithSystemAudioOffTurnsTheDropIntoTheWarning() {
         let store = CoreStore()
-        let ink = ShellInk(store: store)
+        let permissions = PermissionsModel(send: { _ in }, calendar: FakeCalendar())
+        let ink = ShellInk(store: store, permissions: permissions)
+        permissions.apply(checked(system: "denied"))
         store.apply([event(#"{"type":"meeting.started","record":"r1","app_name":"Example Call"}"#)])
         store.apply([event(#"{"type":"meeting.side_state","record":"r1","channel":"far","state":"zeros"}"#)])
         XCTAssertEqual(ink.state, .problem)
@@ -126,7 +142,44 @@ final class WatchdogWarningTests: XCTestCase {
         XCTAssertEqual(ink.dropText.tone, .alert)
         XCTAssertEqual(ink.dropText.actions, [.allowSystemAudio])
         store.apply([event(#"{"type":"meeting.side_state","record":"r1","channel":"far","state":"ok"}"#)])
-        XCTAssertEqual(ink.state, .meeting)
+        XCTAssertEqual(ink.state, .problem, "the probe still says off")
+    }
+
+    /// A call that went quiet: the far end delivers exact zeros (an app holding its output open
+    /// plays them) while the permission is granted. That is silence, said as silence: no claim
+    /// that system audio is off, and no permission button. Found in a recorded-call test, where the
+    /// Them lane had just transcribed system audio.
+    func testAFarEndOfSilenceWithSystemAudioAllowedIsSilenceNotAMissingPermission() {
+        for probe in ["granted", nil] as [String?] {
+            let store = CoreStore()
+            let permissions = PermissionsModel(send: { _ in }, calendar: FakeCalendar())
+            let ink = ShellInk(store: store, permissions: permissions)
+            if let probe { permissions.apply(checked(system: probe)) }
+            store.apply([event(#"{"type":"meeting.started","record":"r1","app_name":"Example Call"}"#)])
+            store.apply([event(#"{"type":"meeting.side_state","record":"r1","channel":"far","state":"zeros"}"#)])
+            let label = probe ?? "not checked yet"
+            XCTAssertEqual(ink.state, .problem, label)
+            XCTAssertEqual(ink.dropText.title, "The other side is silent", label)
+            XCTAssertEqual(ink.dropText.detail, "Only silence is arriving from the call.", label)
+            XCTAssertFalse(ink.dropText.detail.contains("System audio is off"), label)
+            XCTAssertEqual(ink.dropText.actions, [], label)
+            store.apply([event(#"{"type":"meeting.side_state","record":"r1","channel":"far","state":"ok"}"#)])
+            XCTAssertEqual(ink.state, .meeting, label)
+        }
+    }
+
+    /// A far end that stopped delivering, with the permission granted: said as stopped, without
+    /// offering a permission that is already on.
+    func testAStoppedFarEndWithSystemAudioAllowedOffersNoPermission() {
+        let store = CoreStore()
+        let permissions = PermissionsModel(send: { _ in }, calendar: FakeCalendar())
+        let ink = ShellInk(store: store, permissions: permissions)
+        permissions.apply(checked(system: "granted"))
+        store.apply([event(#"{"type":"meeting.started","record":"r1"}"#)])
+        store.apply([event(#"{"type":"meeting.side_state","record":"r1","channel":"far","state":"stopped"}"#)])
+        XCTAssertEqual(ink.dropText.title, "The other side stopped")
+        XCTAssertEqual(ink.dropText.detail, "Nothing is arriving from the call. Only your voice may be recorded.")
+        XCTAssertEqual(ink.dropText.actions, [])
     }
 
     /// The reaction to a probe change: a system-audio check that reads "denied" during a meeting
@@ -262,18 +315,14 @@ final class MeetingSettingsTests: XCTestCase {
         let sent = Sent()
         let meetings = MeetingModel(send: sent.send)
         meetings.load()
-        XCTAssertEqual(sent.commands, [.settingGet(.meetingsDetect), .settingGet(.meetingsHeadsetMic), .settingGet(.retentionDays)])
+        // The old "Offer to record calls" switch is the call policies' default now (CallPolicyModel);
+        // the microphone is Settings > Sound's.
+        XCTAssertEqual(sent.commands, [.settingGet(.retentionDays), .settingGet(.meetingsAutoReminderShown)])
         XCTAssertNil(meetings.retention, "not known until the core answers")
-        meetings.apply(event(#"{"type":"setting.value","key":"meetings.detect","value":"off"}"#))
-        meetings.apply(event(#"{"type":"setting.value","key":"meetings.headset_mic","value":"on"}"#))
         meetings.apply(event(#"{"type":"setting.value","key":"retention.days"}"#))
-        XCTAssertFalse(meetings.detect)
-        XCTAssertTrue(meetings.headsetMic)
         XCTAssertEqual(meetings.retention, .forever, "never set: forever")
         meetings.setRetention(.month)
         XCTAssertEqual(sent.commands.last, .settingSet(.retentionDays, "30"))
-        meetings.setDetect(true)
-        XCTAssertEqual(sent.commands.last, .settingSet(.meetingsDetect, "on"))
         meetings.apply(event(#"{"type":"command.failed","command":"setting.set","id":"setting:retention.days","message":"x"}"#))
         XCTAssertTrue(meetings.settingsFailed)
         XCTAssertEqual(Set(Retention.allCases.map(\.rawValue)), ["forever", "7", "30", "90", "365"], "the core's whitelist")
@@ -397,7 +446,7 @@ final class MeetingFailureTests: XCTestCase {
         XCTAssertEqual(ink.dropText.title, "Example Call opened the microphone")
         XCTAssertEqual(ink.dropText.detail, "Couldn't start recording: the other side's sound: permission denied")
         XCTAssertEqual(ink.dropText.tone, .alert)
-        XCTAssertEqual(ink.dropText.actions, [.record(app: "com.example.call"), .dismiss(app: "com.example.call")])
+        XCTAssertEqual(ink.dropText.actions.prefix(2), [.record(app: "com.example.call"), .dismiss(app: "com.example.call")])
         XCTAssertNil(meetings.failure(on: .recordNow), "not claimed on Today")
         meetings.dismiss(app: "com.example.call")
         XCTAssertEqual(ink.dropText.detail, "Recording keeps both sides on this Mac. Tell the others you are recording.", "a new answer clears it")
@@ -507,7 +556,7 @@ final class MergedDropTests: XCTestCase {
         store.apply([event(#"{"type":"meeting.detected","app":"com.example.call","app_name":"Example Call"}"#)])
         drop.update()
         XCTAssertEqual(drop.shownText?.title, "Example Call opened the microphone")
-        XCTAssertEqual(drop.shownText?.actions.count, 2)
+        XCTAssertEqual(drop.shownText?.actions.count, 4)
         XCTAssertEqual(drop.inkState, .idle)
 
         // A take: its live words, no buttons.

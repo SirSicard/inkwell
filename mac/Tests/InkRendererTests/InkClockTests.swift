@@ -103,4 +103,22 @@ final class InkClockTests: XCTestCase {
         drop.state = .idle
         XCTAssertEqual(clock.linkCount, 0)
     }
+
+    /// A view that went live with no screen to put a link on (the displays asleep or gone) gets one
+    /// when a screen comes back, instead of staying on a clock that never ticks: frozen part way
+    /// through a glide, with whatever awaits it waiting for good.
+    func testAViewThatWentLiveWithNoScreenGetsALinkWhenOneComesBack() throws {
+        guard let screen = NSScreen.screens.first else { throw XCTSkip("no display") }
+        var available: NSScreen?
+        let clock = InkClock(anyScreen: { available })
+        let (drop, _) = try views(on: clock)
+        drop.state = .meeting
+        XCTAssertEqual(clock.clientCount, 1)
+        XCTAssertEqual(clock.linkCount, 0, "no screen, no link")
+        available = screen
+        NotificationCenter.default.post(name: NSApplication.didChangeScreenParametersNotification, object: nil)
+        XCTAssertEqual(clock.linkCount, 1, "a screen again: the view on the clock has its link")
+        drop.state = .idle
+        XCTAssertEqual(clock.linkCount, 0)
+    }
 }

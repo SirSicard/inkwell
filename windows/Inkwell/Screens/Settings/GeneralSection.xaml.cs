@@ -60,6 +60,9 @@ public sealed partial class GeneralSection : UserControl
             UpdatesButton.IsEnabled = updates.CanAct;
             // A copy that does not update itself says so once, by the switch.
             Show(UpdatesLine, updates.State == UpdateState.Off ? null : updates.Line);
+            UpdatesRow.Visibility = UpdatesButton.Visibility == Visibility.Visible || UpdatesLine.Visibility == Visibility.Visible
+                ? Visibility.Visible
+                : Visibility.Collapsed;
         }
         finally
         {

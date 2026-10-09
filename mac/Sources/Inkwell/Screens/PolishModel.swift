@@ -162,6 +162,38 @@ final class PolishModel {
     func allowConsent() { consent.allow() }
     func cancelConsent() { consent.cancel() }
 
+    // MARK: - The first run's own key
+
+    /// Whether the first run's Use can ask: a provider picked, its key stored if it needs one (a
+    /// provider that cannot be called is no use to agree to), and a choice that changes something.
+    func canUseOwnKey(_ cloud: CloudModel) -> Bool {
+        guard cloud.canUse, let provider = cloud.selectedProvider else { return false }
+        return !provider.needsKey || provider.hasKey
+    }
+
+    /// The first run's Use (Settings > AI's rows, in the Polish step): polish's consent step for
+    /// the provider picked, before it is chosen, so local-only mode goes off only with the user's
+    /// agreement to where the words go. Allow chooses it (turning local-only mode off for a
+    /// provider off this Mac); the consent is recorded once the core names it. Cancel sends nothing.
+    func useOwnKey(_ cloud: CloudModel) {
+        guard canUseOwnKey(cloud), let provider = cloud.selectedProvider, let endpoint = cloud.selectedEndpoint
+        else { return }
+        let name = CloudModel.name(provider.id)
+        let isCloud = cloud.selectedIsCloud
+        let destination = isCloud
+            ? Destination(kind: .cloud(endpoint: endpoint), name: name)
+            : Destination(kind: .onDevice, name: name)
+        consent.ask(destination, from: .onboarding) {
+            // Use chooses what the picker holds at Allow: only if that is still what the step
+            // named (Settings > AI shares the picker), so local-only mode never goes off for
+            // anything else.
+            guard cloud.selectedProvider?.id == provider.id, cloud.selectedEndpoint == endpoint,
+                  cloud.selectedIsCloud == isCloud
+            else { return false }
+            return cloud.use()
+        }
+    }
+
     /// Whether the status is a problem to show in the alert colour.
     var isProblem: Bool { consent.isProblem || keepsTimingOut }
 

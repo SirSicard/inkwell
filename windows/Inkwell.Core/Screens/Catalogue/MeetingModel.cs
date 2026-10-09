@@ -1,11 +1,15 @@
 // Meetings as the user drives them, as the Mac's MeetingModel: record now, record the call the
-// Drop offers or say not this one, stop, and the settings that shape them: listening for calls,
-// the headset mic, and how long the library keeps records.
+// Drop offers or say not this one, stop, stop and delete, and the settings that shape them: how
+// long the library keeps records (the call policies, which replaced listening for calls, are
+// CallPolicyModel's; the microphone is Settings > Sound's, SoundModel).
 //
-// Recording starts only when the user asks (Today's "Record now", the menu, and the Drop's
-// "Record this call"). Detection only offers. A meeting's title comes from the calendar when a
-// call is on it now, read without prompting (Windows: NoCalendar until packaging, so none);
-// otherwise the summary's headline names it later.
+// Recording starts when the user asks (Today's "Record now", the menu, and the Drop's "Record
+// this call"), or for an app the user chose Always for: the core starts that one itself, and the
+// Drop shows it with Stop, and Stop and delete for its first minute (one wake ends it). The first
+// call Always records also says, for that minute, to tell the others; the library remembers it
+// was said (meetings.auto_reminder_shown), and later ones do not say it. A
+// meeting's title comes from the calendar when a call is on it now, read without prompting
+// (Windows: NoCalendar until packaging, so none); otherwise the summary's headline names it later.
 using Inkwell.Core.Events;
 
 namespace Inkwell.Core.Screens;
@@ -61,6 +65,10 @@ public enum MeetingOrigin
     Dismiss,
     /// <summary>Stop, in Live.</summary>
     Stop,
+    /// <summary>Stop, on the Drop of a call its app's Always recorded.</summary>
+    DropStop,
+    /// <summary>"Stop and delete", on that Drop.</summary>
+    Discard,
 }
 
 /// <summary>The places that show a meeting command's failure.</summary>
@@ -78,23 +86,30 @@ public enum MeetingPlace
 public sealed record MeetingFailure(MeetingOrigin Origin, string Message);
 
 public sealed class MeetingModel(
-    Action<CoreCommand> send, ICallTitles? titles = null, Func<DateTimeOffset>? now = null, ScreenLog? log = null) : ObservableModel
+    Action<CoreCommand> send, ICallTitles? titles = null, Func<DateTimeOffset>? now = null, ScreenLog? log = null,
+    IWakeScheduler? wake = null) : ObservableModel
 {
     public const string SettingsFailedText = "Couldn't read or save a meeting setting. It may not be what it shows.";
+    public const string DeleteWindowOverText = "The first minute is over. Stop it, then delete it in the Library.";
 
     /// <summary>The ids of this model's setting commands (CoreCommand gives each setting command one).</summary>
     public static IReadOnlySet<string> SettingIds { get; } = new HashSet<string>(StringComparer.Ordinal)
     {
-        ShellSetting.MeetingsDetect.CommandId(),
-        ShellSetting.MeetingsHeadsetMic.CommandId(),
         ShellSetting.RetentionDays.CommandId(),
     };
 
     private readonly ICallTitles titles = titles ?? NoCalendar.Instance;
     private readonly Func<DateTimeOffset> now = now ?? (() => DateTimeOffset.Now);
     private readonly ScreenLog log = log ?? ScreenLog.System;
+    private readonly IWakeScheduler? wake = wake;
     /// <summary>Where the start in flight was asked for (a start's command id is the same from every place).</summary>
     private MeetingOrigin starting = MeetingOrigin.RecordNow;
+    /// <summary>Where the stop in flight was asked for.</summary>
+    private MeetingOrigin stopping = MeetingOrigin.Stop;
+    /// <summary>The one wake that ends Stop and delete's minute.</summary>
+    private IDisposable? deleteDeadline;
+    /// <summary>The meeting live now, as meeting.started named it: only its end clears its Drop failures.</summary>
+    private string? current;
     /// <summary>
     /// The app the core offers now, as the store keeps it (meeting.detected, until its
     /// detection_ended, detection stopping, or a meeting starting): a Drop answer's failure belongs
@@ -104,11 +119,26 @@ public sealed class MeetingModel(
 
     public MeetingFailure? Failure { get; private set; }
 
-    /// <summary>Whether the core listens for calls (the user's setting; on unless turned off).</summary>
-    public bool Detect { get; private set; } = true;
+    /// <summary>
+    /// The meeting Stop and delete can still delete: one its app's Always started, until its
+    /// delete_until_unix_ms. Cleared at that moment by one scheduled wake, never by polling.
+    /// </summary>
+    public string? Deletable { get; private set; }
 
-    /// <summary>With Bluetooth output, record the headset's own mic.</summary>
-    public bool HeadsetMic { get; private set; }
+    /// <summary>The meeting being stopped and deleted, until the core says it is gone (or refuses). Live reads it: its notes are never saved.</summary>
+    public string? Discarding { get; private set; }
+
+    /// <summary>
+    /// Whether the reminder has been shown on an automatic meeting before; null until the store
+    /// answers (or when it can't: the next automatic meeting shows it).
+    /// </summary>
+    private bool? reminderShown;
+
+    /// <summary>
+    /// An automatic meeting started after the reminder to tell the others had been shown: its Drop
+    /// does not say it. Every other meeting's does (fails safe: unknown is shown).
+    /// </summary>
+    public string? Unreminded { get; private set; }
 
     /// <summary>How long the library keeps records; null until the store answers (the picker is disabled then).</summary>
     public Retention? Retention { get; private set; }
@@ -122,15 +152,21 @@ public sealed class MeetingModel(
         (MeetingPlace.RecordNow, MeetingOrigin.RecordNow) or (MeetingPlace.Drop, MeetingOrigin.Offer) =>
             $"Couldn't start recording: {Failure!.Message}",
         (MeetingPlace.Drop, MeetingOrigin.Dismiss) => $"Couldn't dismiss the offer: {Failure!.Message}",
-        (MeetingPlace.LiveStop, MeetingOrigin.Stop) => $"Couldn't stop: {Failure!.Message}",
+        (MeetingPlace.LiveStop, MeetingOrigin.Stop) or (MeetingPlace.Drop, MeetingOrigin.DropStop) => $"Couldn't stop: {Failure!.Message}",
+        (MeetingPlace.Drop, MeetingOrigin.Discard) => Failure!.Message,
         _ => null,
     };
 
+    /// <summary>Whether the Drop of <paramref name="record"/>, started by its app's Always, says to tell the others: only on the first such meeting.</summary>
+    public bool Reminds(string? record) => record is null || record != Unreminded;
+
+    /// <summary>Whether Stop and delete is offered for <paramref name="record"/> now.</summary>
+    public bool CanDiscard(string? record) => record is not null && Deletable == record && Discarding is null;
+
     public void Load()
     {
-        send(new CoreCommand.SettingGet(ShellSetting.MeetingsDetect));
-        send(new CoreCommand.SettingGet(ShellSetting.MeetingsHeadsetMic));
         send(new CoreCommand.SettingGet(ShellSetting.RetentionDays));
+        send(new CoreCommand.SettingGet(ShellSetting.MeetingsAutoReminderShown));
     }
 
     /// <summary>Records now, the whole of what this PC plays as the far end.</summary>
@@ -161,7 +197,7 @@ public sealed class MeetingModel(
         send(new CoreCommand.MeetingDismiss(app));
     }
 
-    /// <summary>A button on the Drop.</summary>
+    /// <summary>A meeting button on the Drop (Always for and Never for are the call policies').</summary>
     public void Perform(DropAction action)
     {
         ArgumentNullException.ThrowIfNull(action);
@@ -173,16 +209,138 @@ public sealed class MeetingModel(
             case DropAction.Dismiss dismiss:
                 Dismiss(dismiss.App);
                 break;
+            case DropAction.StopRecording:
+                Stop(MeetingOrigin.DropStop);
+                break;
+            case DropAction.StopAndDelete:
+                Discard();
+                break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(action));
         }
     }
 
-    public void Stop()
+    public void Stop() => Stop(MeetingOrigin.Stop);
+
+    private void Stop(MeetingOrigin origin)
     {
         Failure = null;
+        stopping = origin;
+        if (origin == MeetingOrigin.DropStop)
+        {
+            // Stopped by hand: Stop and delete goes with it at once, not at meeting.stopped.
+            EndDeleteWindow();
+        }
         Changed();
         send(new CoreCommand.MeetingStop());
+    }
+
+    /// <summary>"Stop and delete": only while the meeting's first minute lasts.</summary>
+    public void Discard()
+    {
+        if (Deletable is not string record || Discarding is not null)
+        {
+            return;
+        }
+        Failure = null;
+        Discarding = record;
+        Changed();
+        send(new CoreCommand.MeetingDiscard());
+    }
+
+    /// <summary>Words for a Stop and delete the core refused: past the minute, only Stop is left.</summary>
+    public static string DiscardFailure(CommandFailed failed)
+    {
+        ArgumentNullException.ThrowIfNull(failed);
+        return failed.Code == FailureCode.DeleteWindowOver ? DeleteWindowOverText : $"Couldn't delete it: {failed.Message}";
+    }
+
+    /// <summary>
+    /// A meeting started: Stop and delete is offered until its deadline when its app's Always
+    /// started it. One scheduled wake ends the offer (architecture rule 9: nothing polls). Only a
+    /// start the policy made: one the user made has Live's Stop, and the library's delete afterwards.
+    /// </summary>
+    private void Started(MeetingStarted started)
+    {
+        EndDeleteWindow();
+        Discarding = null;
+        // After the reminder was shown once, an automatic meeting does not say it.
+        Unreminded = started.Auto == true && reminderShown == true ? started.Record : null;
+        if (started.Auto != true || started.DeleteUntilUnixMs is not long until || wake is null)
+        {
+            return;
+        }
+        var left = DateTimeOffset.FromUnixTimeMilliseconds(until) - now();
+        if (left <= TimeSpan.Zero)
+        {
+            return;
+        }
+        var record = started.Record;
+        Deletable = record;
+        if (Unreminded is null)
+        {
+            // The first with its minute: it says to tell the others then, and the library
+            // remembers it did. One with no minute does not use the reminder up.
+            reminderShown = true;
+            send(new CoreCommand.SettingSet(ShellSetting.MeetingsAutoReminderShown, "on"));
+        }
+        IDisposable? mine = null;
+        mine = wake.After(left, () =>
+        {
+            // Only this meeting's wake: a later start has its own.
+            if (!ReferenceEquals(deleteDeadline, mine) || Deletable != record)
+            {
+                return;
+            }
+            deleteDeadline = null;
+            Deletable = null;
+            mine?.Dispose();
+            Changed();
+        });
+        deleteDeadline = mine;
+    }
+
+    private void EndDeleteWindow()
+    {
+        deleteDeadline?.Dispose();
+        deleteDeadline = null;
+        Deletable = null;
+    }
+
+    /// <summary>
+    /// The meeting <paramref name="record"/> ended, one way or another: its Drop buttons' failures
+    /// go with it (an earlier meeting's final pass ending never takes the live one's).
+    /// </summary>
+    private void Ended(string record)
+    {
+        if (Deletable == record)
+        {
+            EndDeleteWindow();
+        }
+        if (Discarding == record)
+        {
+            Discarding = null;
+        }
+        if (current == record)
+        {
+            current = null;
+            ClearMeetingFailure(stop: true);
+        }
+        Changed();
+    }
+
+    /// <summary>
+    /// A Stop and delete failure said on the Drop, and with <paramref name="stop"/> a Stop's: Stop's
+    /// stays while its meeting's Drop shows; Stop and delete's only until the transcript moves on (it
+    /// said why the button went).
+    /// </summary>
+    private void ClearMeetingFailure(bool stop)
+    {
+        if (Failure?.Origin == MeetingOrigin.Discard || (stop && Failure?.Origin == MeetingOrigin.DropStop))
+        {
+            Failure = null;
+            Changed();
+        }
     }
 
     /// <summary>
@@ -190,20 +348,6 @@ public sealed class MeetingModel(
     /// once the core is ready: this shell registers no engines of its own to wait for.
     /// </summary>
     public void Recover() => send(new CoreCommand.MeetingsRecover());
-
-    public void SetDetect(bool on)
-    {
-        Detect = on;
-        Changed();
-        send(new CoreCommand.SettingSet(ShellSetting.MeetingsDetect, on ? "on" : "off"));
-    }
-
-    public void SetHeadsetMic(bool on)
-    {
-        HeadsetMic = on;
-        Changed();
-        send(new CoreCommand.SettingSet(ShellSetting.MeetingsHeadsetMic, on ? "on" : "off"));
-    }
 
     public void SetRetention(Retention value)
     {
@@ -213,15 +357,15 @@ public sealed class MeetingModel(
     }
 
     /// <summary>
-    /// Whether this model shows the failure: meeting.start, meeting.stop and meeting.dismiss, and
-    /// its settings' setting.get and setting.set (matched by id).
+    /// Whether this model shows the failure: meeting.start, meeting.stop, meeting.dismiss and
+    /// meeting.discard, and its settings' setting.get and setting.set (matched by id).
     /// </summary>
     public static bool Handles(CommandFailed failed)
     {
         ArgumentNullException.ThrowIfNull(failed);
         return failed.Command switch
         {
-            "meeting.start" or "meeting.stop" or "meeting.dismiss" => true,
+            "meeting.start" or "meeting.stop" or "meeting.dismiss" or "meeting.discard" => true,
             "setting.get" or "setting.set" => failed.Id is string id && SettingIds.Contains(id),
             _ => false,
         };
@@ -241,27 +385,55 @@ public sealed class MeetingModel(
     {
         switch (e)
         {
-            case SettingValue value when value.Key == ShellSetting.MeetingsDetect.Key():
-                Detect = value.Value != "off";
-                Changed();
-                break;
-            case SettingValue value when value.Key == ShellSetting.MeetingsHeadsetMic.Key():
-                HeadsetMic = value.Value == "on";
-                Changed();
-                break;
             case SettingValue value when value.Key == ShellSetting.RetentionDays.Key():
                 Retention = Retentions.Parse(value.Value) ?? Screens.Retention.Forever;
                 Changed();
                 break;
-            case MeetingStarted:
+            case SettingValue value when value.Key == ShellSetting.MeetingsAutoReminderShown.Key():
+                // Never back to unshown once shown here (an answer to an older read).
+                if (reminderShown != true)
+                {
+                    reminderShown = value.Value == "on";
+                }
+                break;
+            case MeetingStarted started:
                 offered = null;
                 Failure = null;
+                current = started.Record;
+                Started(started);
+                Changed();
+                break;
+            case MeetingStopped stopped when Deletable == stopped.Record:
+                // Stopped: Stop and delete is no longer offered (a discard in flight goes on).
+                EndDeleteWindow();
+                Changed();
+                break;
+            case MeetingFinal final when final.Record == current:
+                ClearMeetingFailure(stop: false);
+                break;
+            case MeetingFinished finished:
+                Ended(finished.Record);
+                break;
+            case MeetingDiscarded discarded:
+                Ended(discarded.Record);
+                break;
+            case Events.MeetingFailed { Record: string failedRecord }:
+                Ended(failedRecord);
+                break;
+            case Events.MeetingWorkerFailed workerFailed:
+                Ended(workerFailed.Record);
+                break;
+            case CoreStopped:
+                EndDeleteWindow();
+                Discarding = null;
+                current = null;
                 Changed();
                 break;
             case MeetingDetected detected:
                 // A new offer is a new question: an earlier answer's failure is not its.
                 offered = detected.App;
                 EndOffersFailure();
+                ClearMeetingFailure(stop: true);
                 break;
             case MeetingDetectionEnded ended when ended.App == offered:
                 offered = null;
@@ -271,10 +443,29 @@ public sealed class MeetingModel(
                 offered = null;
                 EndOffersFailure();
                 break;
+            case CommandFailed failed when failed.Command == "meeting.discard":
+                // The command names no meeting: a refusal is this shell's only while it waits for
+                // one (a meeting that ended meanwhile took its buttons with it).
+                if (Discarding is null)
+                {
+                    log.Write("command.failed for a meeting.discard command; its meeting had ended, so nothing shows it");
+                    break;
+                }
+                Discarding = null;
+                // Past the minute only Stop is left; another refusal (a store that failed) may pass,
+                // so the button stays for its minute to be pressed again.
+                if (failed.Code == FailureCode.DeleteWindowOver)
+                {
+                    EndDeleteWindow();
+                }
+                Failure = new MeetingFailure(MeetingOrigin.Discard, DiscardFailure(failed));
+                Changed();
+                log.Write("command.failed for a meeting.discard command; shown where it was asked");
+                break;
             case CommandFailed failed when failed.Command is "meeting.start" or "meeting.stop" or "meeting.dismiss":
                 var origin = failed.Command switch
                 {
-                    "meeting.stop" => MeetingOrigin.Stop,
+                    "meeting.stop" => stopping,
                     "meeting.dismiss" => MeetingOrigin.Dismiss,
                     _ => starting,
                 };

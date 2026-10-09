@@ -8,7 +8,7 @@
 //! | 4 transcribe | the [`OfflineEngine`] the caller routed to [`Job::DictationFinal`](ink_core::Job) |
 //! | 5 voice commands | [`VoiceCommandStore::detect`](crate::voicecommand::VoiceCommandStore::detect) |
 //! | 6–8 cleanup, style, dictionary, snippets | [`text::write`], under the resolved [mode](crate::modes) |
-//! | 9 polish | `ink-llm`'s polish task, when the mode asks for it and the user [consented](crate::consent) to where the model sends it |
+//! | 9 polish | `ink-llm`'s polish task, when the mode asks for it and the user [consented](crate::consent) to where the model sends it: the mode's own model ([`ModeModels`]) or the AI setting's |
 //! | 10 persist | a [`RecordKind::Dictation`] record in the [`Store`] |
 //! | 11 output | the platform's [`TextInserter`] |
 //!
@@ -26,7 +26,8 @@
 //!   not saved to the library, and never go through voice commands, cleanup, style or snippets.
 //! - **A missed release** (the stuck-key watchdog): a push-to-talk or edit hold longer than
 //!   [`DEFAULT_STUCK_AFTER`] (180 s) is stopped there and processed, with
-//!   [`Warning::ReleaseMissed`]. A toggle take is exempt: a long one is deliberate.
+//!   [`Warning::ReleaseMissed`], and its record is marked stuck, so the Stats screen counts no
+//!   speed, time saved or best from it. A toggle take is exempt: a long one is deliberate.
 //! - **A second press never wipes the take.** A press of the key already held changes nothing in
 //!   push to talk (it is a lost release or a repeat), and is the stop in toggle mode; the take in
 //!   progress is always kept (Inkwell 0.2 once cleared its buffer on such a press).
@@ -59,7 +60,7 @@ use ink_core::{
     StoreError, StreamingEngine, TextInserter, TranscribeOptions,
 };
 
-use crate::consent::{Consented, LlmConsent};
+use crate::consent::{Consented, Feature, LlmConsent};
 
 use crate::dictionary::Dictionary;
 use crate::events::{DictationEvent, Discard, EditFailure, TakeFailure, VoiceDetection, Warning};
@@ -144,10 +145,17 @@ pub struct DictationSettings {
     /// The user's switch for polish ("Polish my words"). Off, nothing is polished; on, the modes
     /// that polish do. A voice command overrides both until the chain restarts.
     pub polish_wish: bool,
-    /// Where the user agreed polish may send their words ([`LlmConsent`]). Nothing is polished
-    /// without a consent that covers the model a call reaches, whatever the switch, the mode or a
-    /// voice command says. `None` (the default) polishes nothing.
-    pub polish_consent: Option<LlmConsent>,
+    /// Where the user agreed polish may send their words: one [`LlmConsent`] per destination
+    /// ([`Feature::per_destination`](crate::consent::Feature::per_destination)), as loaded with
+    /// these settings. Nothing is polished without one that covers the model a call reaches,
+    /// whatever the switch, the mode or a voice command says. At each call the store is read
+    /// again and only a consent both here and still stored counts, so a revoke reaches a take
+    /// already in flight. Empty (the default) polishes nothing.
+    pub polish_consents: Vec<LlmConsent>,
+    /// The stored modes could not be read (these settings carry a stand-in): nothing is polished,
+    /// whatever the switch or a voice command says, since which model each of the user's modes
+    /// would send to cannot be known.
+    pub modes_unreadable: bool,
     /// Where the user agreed voice edit may send the selection and the instruction. No edit
     /// reaches a model without a consent that covers it. `None` (the default) edits nothing.
     pub edit_consent: Option<LlmConsent>,
@@ -175,13 +183,22 @@ impl Default for DictationSettings {
             tail: TailConfig::default(),
             polish_budget: POLISH_BUDGET,
             polish_wish: true,
-            polish_consent: None,
+            polish_consents: Vec::new(),
+            modes_unreadable: false,
             edit_consent: None,
             edit_budget: EDIT_BUDGET,
             stuck_after: DEFAULT_STUCK_AFTER,
         }
     }
 }
+
+/// **Worker.** Finds the language model a mode names ([`Mode::polish_model`]) when one of its
+/// takes is polished: the model, or `None` when the core holds no model by that id now. Asked at
+/// each take, so a model registered or let go of since is seen at once. The model given checks
+/// again at the call: one let go of meanwhile, or sending elsewhere than the pin recorded
+/// ([`ModelPin::to`](crate::modes::ModelPin::to)), answers [`LlmError::Unavailable`], and the take
+/// says [`Warning::PolishModelMissing`].
+pub type ModeModels = Arc<dyn Fn(&crate::modes::ModelPin) -> Option<Arc<dyn Llm>> + Send + Sync>;
 
 /// What the chain calls.
 #[derive(Clone)]
@@ -325,10 +342,15 @@ pub struct DictationChain {
     polish_override: Option<bool>,
     /// The live-partials engine, when one is set.
     live_engine: Option<Arc<dyn StreamingEngine>>,
+    /// The models modes name, when the owner set them up.
+    mode_models: Option<ModeModels>,
     /// The held take's live words.
     live: Option<Live>,
     /// Takes confirmed so far: the next take's number.
     takes_started: u64,
+    /// The stuck-key watchdog stopped the open take: its record is marked stuck when saved
+    /// ([`Store::mark_stuck`](ink_core::Store::mark_stuck)). Cleared at each press.
+    stopped_stuck: bool,
 }
 
 fn detection(vad: &Vad) -> VoiceDetection {
@@ -361,8 +383,10 @@ impl DictationChain {
             polish_override: None,
             completed_takes: 0,
             live_engine: None,
+            mode_models: None,
             live: None,
             takes_started: 0,
+            stopped_stuck: false,
         }
     }
 
@@ -370,6 +394,12 @@ impl DictationChain {
     /// engine), or none. Takes from the next one on use it.
     pub fn set_live(&mut self, engine: Option<Arc<dyn StreamingEngine>>) {
         self.live_engine = engine;
+    }
+
+    /// Sets how a mode's own language model is found ([`ModeModels`]), or none: then a mode that
+    /// names one is not polished.
+    pub fn set_mode_models(&mut self, models: Option<ModeModels>) {
+        self.mode_models = models;
     }
 
     fn emit(&self, event: DictationEvent) {
@@ -385,8 +415,15 @@ impl DictationChain {
         }
     }
 
-    /// Replaces the settings. A take in progress finishes under the new ones.
+    /// Replaces the settings. A take in progress finishes under the new ones. A voice command's pin
+    /// to a mode the new settings no longer have is dropped, so a mode added later under its id is
+    /// never picked by it.
     pub fn set_settings(&mut self, settings: DictationSettings) {
+        if let Some(pin) = &self.pinned_mode
+            && !settings.modes.modes.iter().any(|m| &m.id == pin)
+        {
+            self.pinned_mode = None;
+        }
         self.settings = settings;
     }
 
@@ -577,6 +614,7 @@ impl DictationChain {
                     self.settings.stuck_after.as_secs()
                 );
                 self.emit(DictationEvent::Warning(Warning::ReleaseMissed));
+                self.stopped_stuck = true;
                 if matches!(self.hold, Hold::Pending { .. }) {
                     self.confirm();
                     if !self.is_recording() {
@@ -633,6 +671,7 @@ impl DictationChain {
             return;
         }
         self.tail.begin(self.recorder.position());
+        self.stopped_stuck = false;
         self.open = Some(Open {
             started_unix_ms: self.services.clock.unix_ms(),
             lost_frames: 0,
@@ -882,6 +921,7 @@ impl DictationChain {
             channel: Channel::Mic,
             context: self.settings.dictionary.hotwords(),
             cancel: CancelToken::new(),
+            live: false,
         };
         Some(
             self.services
@@ -926,7 +966,7 @@ impl DictationChain {
         // every model is refused.
         let consented = Consented {
             inner: llm.as_ref(),
-            consent: self.settings.edit_consent.as_ref(),
+            consents: self.settings.edit_consent.as_slice(),
         };
         let budget = self.settings.edit_budget;
         let deadline = Instant::now().checked_add(budget);
@@ -1069,10 +1109,15 @@ impl DictationChain {
     /// as written, and says so. A blank answer is a failure, never an empty dictation (ink-llm's
     /// task refuses one; this checks again rather than rely on it).
     ///
-    /// **Consent.** The call goes out only when [`polish_consent`](DictationSettings::polish_consent)
-    /// covers the model it reaches, checked by that model at the call ([`Llm::complete_if`]), so a
-    /// model that changed destination since the user agreed never receives the text. Without it
-    /// the text goes out as written with [`Warning::PolishNotAllowed`], naming the consent needed.
+    /// **Consent.** The call goes out only when one of
+    /// [`polish_consents`](DictationSettings::polish_consents) covers the model it reaches,
+    /// checked by that model at the call ([`Llm::complete_if`]), so a model that changed
+    /// destination since the user agreed never receives the text. The consents are read again from
+    /// the store at each call, and only one both loaded and still stored counts: a revoke reaches a
+    /// take already in flight, and a consent stored behind the settings' back widens nothing.
+    /// Without one the text goes out as written with [`Warning::PolishNotAllowed`], naming the
+    /// consent needed. That holds for a mode's own model as for the AI setting's
+    /// ([`polish_model`](Self::polish_model)).
     ///
     /// The call's token is cancelled when the [budget](DictationSettings::polish_budget) runs out.
     /// The budget is a deadline the token carries, so no thread or timer fires it: the model sees
@@ -1085,19 +1130,31 @@ impl DictationChain {
     /// queue holds tens of seconds of it) and at most starts later, while cancelling would cost a
     /// working polish every time someone presses again quickly, which is how push-to-talk is used.
     fn polish(&self, written: String, mode: &Mode) -> String {
+        if self.settings.modes_unreadable {
+            return written;
+        }
         let wanted = self.settings.polish_wish && mode.polish_enabled;
         if !self.polish_override.unwrap_or(wanted) {
             return written;
         }
-        let Some(llm) = &self.services.llm else {
-            self.emit(DictationEvent::Warning(Warning::PolishUnavailable));
+        let Some(llm) = self.polish_model(mode) else {
             return written;
         };
+        // Read again now: a consent revoked since these settings were loaded counts no more,
+        // and one stored since counts only once the settings are loaded again.
+        let stored = crate::consent::stored(self.services.store.as_ref(), Feature::Polish);
+        let consents: Vec<LlmConsent> = self
+            .settings
+            .polish_consents
+            .iter()
+            .filter(|c| stored.contains(c))
+            .cloned()
+            .collect();
         // Without a consent every model is refused at the call (nothing is sent); the model
         // itself says first if there is none at all.
         let consented = Consented {
             inner: llm.as_ref(),
-            consent: self.settings.polish_consent.as_ref(),
+            consents: &consents,
         };
         let prompt = if mode.polish_prompt.trim().is_empty() {
             &self.settings.polish_prompt
@@ -1126,6 +1183,15 @@ impl DictationChain {
                 )));
                 written
             }
+            Err(LlmError::Unavailable) => {
+                // The mode's own model was let go of, or sends elsewhere now, between the lookup
+                // and the call: nothing was sent, and no other model is called in its place.
+                log::warn!(
+                    "dictation: this mode's language model is not set up now; the text goes out as written"
+                );
+                self.emit(DictationEvent::Warning(Warning::PolishModelMissing));
+                written
+            }
             Err(error) => {
                 if error == LlmError::Cancelled && deadline.is_some_and(|d| Instant::now() >= d) {
                     log::warn!(
@@ -1144,9 +1210,31 @@ impl DictationChain {
         }
     }
 
-    /// Stage 10: one dictation record with one mic segment. A record left half-written is
-    /// deleted, so the library never shows an empty dictation: by a drop guard, so a store that
-    /// panics half way is cleaned up too.
+    /// The model `mode` is polished on: its own ([`Mode::polish_model`], through
+    /// [`ModeModels`]), else the AI setting's. `None`, said, when there is none: a mode whose own
+    /// model the core does not hold now gets no other model in its place
+    /// ([`Warning::PolishModelMissing`]), since that could send the words somewhere the user did
+    /// not pick for this mode.
+    fn polish_model(&self, mode: &Mode) -> Option<Arc<dyn Llm>> {
+        let Some(pin) = &mode.polish_model else {
+            if self.services.llm.is_none() {
+                self.emit(DictationEvent::Warning(Warning::PolishUnavailable));
+            }
+            return self.services.llm.clone();
+        };
+        let found = self.mode_models.as_ref().and_then(|find| find(pin));
+        if found.is_none() {
+            log::warn!(
+                "dictation: this mode's language model is not set up now; the text goes out as written"
+            );
+            self.emit(DictationEvent::Warning(Warning::PolishModelMissing));
+        }
+        found
+    }
+
+    /// Stage 10: one dictation record with one mic segment, marked stuck when the watchdog stopped
+    /// the take. A record left half-written is deleted, so the library never shows an empty
+    /// dictation: by a drop guard, so a store that panics half way is cleaned up too.
     fn save(
         &self,
         written: &str,
@@ -1179,7 +1267,14 @@ impl DictationChain {
             }],
         )?;
         store.finish_record(&half.id, self.services.clock.unix_ms())?;
-        Ok(half.keep())
+        let id = half.keep();
+        // Only the Stats screen reads the mark: a store that refuses it costs that, never the take.
+        if self.stopped_stuck
+            && let Err(error) = store.mark_stuck(&id)
+        {
+            log::warn!("dictation: the take the watchdog stopped could not be marked: {error}");
+        }
+        Ok(id)
     }
 
     /// The chain's part of a voice command: style, polish and fixed text

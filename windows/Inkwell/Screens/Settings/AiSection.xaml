@@ -1,164 +1,116 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Settings > AI (the Mac's AISection): first the language model (Windows only: an own-key
-     provider, its key, its model, Use and Test), then the three features that send words to a
+<!-- Settings > AI (the Mac's AISection): first the language model (Windows only: this PC's own
+     model, with its download, Use and Try it; or an own-key provider, its key, its model, Use and
+     Test), then the three features that send words to a
      language model, each a switch with its line under it (seal red for a failure or a pause), and
      what each sends. Turning one on shows its consent step; nothing is sent until the user agrees
      there. -->
 <UserControl
     x:Class="Inkwell.Screens.AiSection"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:Inkwell.Screens">
     <UserControl.Resources>
         <Style x:Key="RowLabelStyle" TargetType="TextBlock" BasedOn="{StaticResource InkBodyStyle}">
-            <Setter Property="Width" Value="150" />
             <Setter Property="Margin" Value="0,6,0,0" />
         </Style>
     </UserControl.Resources>
-    <StackPanel Spacing="10">
+    <StackPanel Spacing="14">
         <TextBlock AutomationProperties.HeadingLevel="Level2" Style="{StaticResource InkHeadingStyle}" Text="AI" />
 
-        <Grid ColumnSpacing="12">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="*" />
-            </Grid.ColumnDefinitions>
+        <local:SettingColumnsPanel>
             <TextBlock Style="{StaticResource RowLabelStyle}" Text="Language model" />
-            <StackPanel Grid.Column="1" Spacing="8">
-                <ComboBox
-                    x:Name="ProviderBox"
-                    MinWidth="260"
-                    AutomationProperties.Name="Language model provider"
-                    SelectionChanged="OnProviderChosen" />
-                <StackPanel x:Name="ProviderDetails" Spacing="8">
-                    <TextBox
-                        x:Name="ServerBox"
-                        MinWidth="320"
-                        HorizontalAlignment="Left"
-                        AutomationProperties.Name="Server address"
-                        Header="Server address"
-                        TextChanged="OnServerChanged" />
-                    <StackPanel Orientation="Horizontal" Spacing="8">
-                        <PasswordBox
-                            x:Name="KeyBox"
-                            MinWidth="320"
-                            AutomationProperties.Name="API key"
-                            Header="API key" />
-                        <Button
-                            x:Name="SaveKeyButton"
-                            VerticalAlignment="Bottom"
-                            Click="OnSaveKey"
-                            Content="Save key" />
-                        <Button
-                            x:Name="DeleteKeyButton"
-                            VerticalAlignment="Bottom"
-                            Click="OnDeleteKey"
-                            Content="Delete key" />
-                    </StackPanel>
-                    <TextBlock x:Name="KeyStatus" Style="{StaticResource InkCaptionStyle}" />
-                    <ComboBox
-                        x:Name="ModelBox"
-                        MinWidth="320"
-                        AutomationProperties.Name="Model"
-                        Header="Model"
-                        IsEditable="True"
-                        SelectionChanged="OnModelChosen" />
-                </StackPanel>
-                <TextBlock x:Name="UseNote" Style="{StaticResource InkCaptionStyle}" />
-                <StackPanel Orientation="Horizontal" Spacing="8">
-                    <Button
-                        x:Name="UseButton"
-                        Click="OnUse"
-                        Style="{StaticResource InkAccentButtonStyle}" />
-                    <Button
-                        x:Name="TestButton"
-                        AutomationProperties.Name="Test the language model"
-                        Click="OnTest"
-                        Content="Test" />
-                </StackPanel>
-                <TextBlock x:Name="TestStatus" Style="{StaticResource InkCaptionStyle}" />
-                <TextBlock x:Name="CloudStatus" Style="{StaticResource InkCaptionStyle}" />
+            <StackPanel Spacing="8">
+                <!-- The provider, its key, its model, Use and Test (LanguageModelRows, shared with the first run). -->
+                <ContentPresenter x:Name="LanguageModelHost" />
+                <!-- What this PC has of its own (LocalLlmModel.Caption): it says "no language model of
+                     its own" only while the core offers none. -->
+                <TextBlock x:Name="LanguageModelCaption" Style="{StaticResource InkCaptionStyle}" />
+                <!-- How to get a free Groq key (GroqKeyGuideView), closed at first. Settings only:
+                     the first run has the guide over Groq's own rows. -->
+                <Expander
+                    x:Name="GroqGuideExpander"
+                    HorizontalAlignment="Stretch"
+                    HorizontalContentAlignment="Stretch">
+                    <Expander.HeaderTemplate>
+                        <DataTemplate>
+                            <TextBlock Text="{Binding}" TextWrapping="Wrap" />
+                        </DataTemplate>
+                    </Expander.HeaderTemplate>
+                </Expander>
             </StackPanel>
-        </Grid>
-        <TextBlock
-            Style="{StaticResource InkCaptionStyle}"
-            Text="This PC has no language model of its own, so polish, voice edit, summaries and Ask use one you bring: pick a provider, paste your API key (kept in Windows Credential Manager, never in Inkwell's files), choose a model and press Use. Test sends the provider your key and one short fixed question, never your words. Nothing else is sent until you turn a feature on below and allow it." />
-
+        </local:SettingColumnsPanel>
         <!-- Local only (llm.local_only): on, no model off this PC is called, whatever is chosen. -->
-        <Grid Margin="0,6,0,0" ColumnSpacing="12">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="*" />
-            </Grid.ColumnDefinitions>
-            <TextBlock Style="{StaticResource RowLabelStyle}" Text="Local only" />
-            <StackPanel Grid.Column="1" Spacing="4">
-                <ToggleSwitch
-                    x:Name="LocalOnlySwitch"
-                    AutomationProperties.Name="Local only: nothing leaves this computer"
-                    OffContent=""
-                    OnContent=""
-                    Toggled="OnLocalOnlyToggled" />
-                <TextBlock x:Name="LocalOnlyCaption" AutomationProperties.AccessibilityView="Raw" Style="{StaticResource InkCaptionStyle}" />
-            </StackPanel>
-        </Grid>
+        <Border Style="{StaticResource InkSettingRowStyle}">
+            <local:SettingColumnsPanel Margin="0,6,0,0">
+                <TextBlock Style="{StaticResource RowLabelStyle}" Text="Local only" />
+                <StackPanel Spacing="4">
+                    <ToggleSwitch
+                        x:Name="LocalOnlySwitch"
+                        AutomationProperties.Name="Local only: nothing leaves this computer"
+                        OffContent=""
+                        OnContent=""
+                        Toggled="OnLocalOnlyToggled" />
+                    <TextBlock x:Name="LocalOnlyCaption" AutomationProperties.AccessibilityView="Raw" Style="{StaticResource InkCaptionStyle}" />
+                </StackPanel>
+            </local:SettingColumnsPanel>
+        </Border>
 
-        <Grid Margin="0,6,0,0" ColumnSpacing="12">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="*" />
-            </Grid.ColumnDefinitions>
-            <TextBlock Style="{StaticResource RowLabelStyle}" Text="Polish my words" />
-            <StackPanel Grid.Column="1" Spacing="4">
-                <ToggleSwitch
-                    x:Name="PolishSwitch"
-                    AutomationProperties.Name="Polish my words"
-                    OffContent=""
-                    OnContent=""
-                    Toggled="OnPolishToggled" />
-                <TextBlock x:Name="PolishStatus" AutomationProperties.AccessibilityView="Raw" Style="{StaticResource InkCaptionStyle}" />
-            </StackPanel>
-        </Grid>
-        <TextBlock
-            Style="{StaticResource InkCaptionStyle}"
-            Text="Polish tidies a dictation's wording before it is typed: it keeps what you meant and never adds anything. It sends what you dictate to a language model, so it stays off until you turn it on and agree to where that is." />
+        <Border Style="{StaticResource InkSettingRowStyle}">
+            <local:SettingColumnsPanel Margin="0,6,0,0">
+                <TextBlock Style="{StaticResource RowLabelStyle}" Text="Polish my words" />
+                <StackPanel Spacing="4">
+                    <ToggleSwitch
+                        x:Name="PolishSwitch"
+                        AutomationProperties.Name="Polish my words"
+                        OffContent=""
+                        OnContent=""
+                        Toggled="OnPolishToggled" />
+                    <TextBlock x:Name="PolishStatus" AutomationProperties.AccessibilityView="Raw" Style="{StaticResource InkCaptionStyle}" />
+                    <TextBlock Margin="0,4,0,0" Style="{StaticResource InkCaptionStyle}" Text="Polish tidies a dictation's wording before it is typed: it keeps what you meant and never adds anything. It sends what you dictate to a language model, so it stays off until you turn it on and agree to where that is." />
+                </StackPanel>
+            </local:SettingColumnsPanel>
+        </Border>
+        <!-- Where polish may send: one OK per destination (a mode may polish on a model of its own,
+             Settings > Modes), each with Revoke beside it. -->
+        <Border Style="{StaticResource InkSettingRowStyle}">
+            <local:SettingColumnsPanel Margin="0,6,0,0">
+                <TextBlock Style="{StaticResource RowLabelStyle}" Text="Polish may send to" />
+                <StackPanel x:Name="PolishConsents" Margin="0,6,0,0" Spacing="8" />
+            </local:SettingColumnsPanel>
+        </Border>
 
-        <Grid Margin="0,6,0,0" ColumnSpacing="12">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="*" />
-            </Grid.ColumnDefinitions>
-            <TextBlock Style="{StaticResource RowLabelStyle}" Text="Voice edit" />
-            <StackPanel Grid.Column="1" Spacing="4">
-                <ToggleSwitch
-                    x:Name="EditSwitch"
-                    AutomationProperties.Name="Voice edit"
-                    OffContent=""
-                    OnContent=""
-                    Toggled="OnEditToggled" />
-                <TextBlock x:Name="EditStatus" AutomationProperties.AccessibilityView="Raw" Style="{StaticResource InkCaptionStyle}" />
-            </StackPanel>
-        </Grid>
-        <TextBlock
-            Style="{StaticResource InkCaptionStyle}"
-            Text="Voice edit sends the text you select and what you say to a language model, and replaces the selection with the answer, so it stays off until you turn it on and agree to where that is. Its key is in Dictation." />
+        <Border Style="{StaticResource InkSettingRowStyle}">
+            <local:SettingColumnsPanel Margin="0,6,0,0">
+                <TextBlock Style="{StaticResource RowLabelStyle}" Text="Voice edit" />
+                <StackPanel Spacing="4">
+                    <ToggleSwitch
+                        x:Name="EditSwitch"
+                        AutomationProperties.Name="Voice edit"
+                        OffContent=""
+                        OnContent=""
+                        Toggled="OnEditToggled" />
+                    <TextBlock x:Name="EditStatus" AutomationProperties.AccessibilityView="Raw" Style="{StaticResource InkCaptionStyle}" />
+                    <ContentPresenter x:Name="EditShortcutHost" />
+                    <TextBlock Margin="0,4,0,0" Style="{StaticResource InkCaptionStyle}" Text="Voice edit sends the text you select and what you say to a language model, and replaces the selection with the answer, so it stays off until you turn it on and agree to where that is. Choose its shortcut here." />
+                </StackPanel>
+            </local:SettingColumnsPanel>
+        </Border>
 
-        <Grid Margin="0,6,0,0" ColumnSpacing="12">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="*" />
-            </Grid.ColumnDefinitions>
-            <TextBlock Style="{StaticResource RowLabelStyle}" Text="Summaries and Ask" />
-            <StackPanel Grid.Column="1" Spacing="4">
-                <ToggleSwitch
-                    x:Name="MeetingsSwitch"
-                    AutomationProperties.Name="Summaries and Ask"
-                    OffContent=""
-                    OnContent=""
-                    Toggled="OnMeetingsToggled" />
-                <TextBlock x:Name="MeetingsStatus" AutomationProperties.AccessibilityView="Raw" Style="{StaticResource InkCaptionStyle}" />
-            </StackPanel>
-        </Grid>
-        <TextBlock
-            Style="{StaticResource InkCaptionStyle}"
-            Text="A meeting's summary, what was promised in it, and Ask send its transcript to a language model, so they stay off until you turn them on and agree to where that is." />
+        <Border Style="{StaticResource InkSettingRowStyle}">
+            <local:SettingColumnsPanel Margin="0,6,0,0">
+                <TextBlock Style="{StaticResource RowLabelStyle}" Text="Summaries and Ask" />
+                <StackPanel Spacing="4">
+                    <ToggleSwitch
+                        x:Name="MeetingsSwitch"
+                        AutomationProperties.Name="Summaries and Ask"
+                        OffContent=""
+                        OnContent=""
+                        Toggled="OnMeetingsToggled" />
+                    <TextBlock x:Name="MeetingsStatus" AutomationProperties.AccessibilityView="Raw" Style="{StaticResource InkCaptionStyle}" />
+                    <TextBlock Margin="0,4,0,0" Style="{StaticResource InkCaptionStyle}" Text="A meeting's summary, what was promised in it, and Ask send its transcript to a language model, so they stay off until you turn them on and agree to where that is." />
+                </StackPanel>
+            </local:SettingColumnsPanel>
+        </Border>
     </StackPanel>
 </UserControl>

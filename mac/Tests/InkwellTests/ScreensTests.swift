@@ -386,6 +386,286 @@ final class PolishModelTests: XCTestCase {
     }
 }
 
+// MARK: - The first run's own key
+
+/// Owner decision: the first run's Polish step offers the user's own key (Settings > AI's rows),
+/// and local-only mode goes off only with polish's consent for that provider. Use asks first,
+/// naming where the words go; only Allow chooses the provider (which turns local-only mode off),
+/// and the consent is recorded once the core names that same destination.
+@MainActor
+final class OwnKeyPolishTests: XCTestCase {
+    private let groq = "https://api.groq.com/openai/v1"
+
+    private func providers(groqKey: Bool = true, chosen: String? = nil, ready: Bool = false, localOnly: Bool = true, ref: String = "x") -> InkEvent {
+        let choice = chosen.map { #","chosen":"\#($0)","model":"llama-3.3-70b-versatile","endpoint":"https://api.groq.com/openai/v1","to":"cloud""# } ?? ""
+        return event(#"{"type":"llm.providers","ref":"\#(ref)","local_only":\#(localOnly),"ready":\#(ready)\#(choice),"providers":[{"id":"openai","default_model":"gpt-4o-mini","endpoint":"https://api.openai.com/v1","custom_url":false,"needs_key":true,"has_key":false},{"id":"groq","default_model":"llama-3.3-70b-versatile","endpoint":"https://api.groq.com/openai/v1","custom_url":false,"needs_key":true,"has_key":\#(groqKey)},{"id":"custom","default_model":"llama3","endpoint":"http://localhost:11434/v1","custom_url":true,"needs_key":false,"has_key":false}]}"#)
+    }
+
+    /// The core's own state after a choice (no ref), polish naming Groq.
+    private func groqState(on: Bool = false, allowed: Bool = false, endpoint: String? = nil) -> InkEvent {
+        polishState(on: on, allowed: allowed, to: "cloud", name: "llama-3.3-70b-versatile (groq)", endpoint: endpoint ?? groq,
+                    allowedTo: allowed ? "cloud" : nil)
+    }
+
+    private func setUp(_ sent: Sent, groqKey: Bool = true) -> (CloudModel, PolishModel) {
+        let cloud = CloudModel(send: sent.send)
+        let polish = PolishModel(send: sent.send)
+        cloud.apply(providers(groqKey: groqKey))
+        // A Mac without Apple Intelligence: nothing else can polish.
+        polish.appleEnginesReported(.unavailable(code: AppleIntelligence.Reason.deviceNotEligible.rawValue))
+        polish.apply(polishState(on: false, allowed: false, to: nil))
+        return (cloud, polish)
+    }
+
+    private var chooses: (CoreCommand) -> Bool { { if case .llmChoose = $0 { true } else { false } } }
+    private var allows: (CoreCommand) -> Bool { { if case .consentAllow = $0 { true } else { false } } }
+
+    /// The step points at Groq's free key: Groq is in the picker when nothing is chosen or picked.
+    func testGroqIsSuggestedOnlyWhenNothingIsChosenOrPicked() {
+        let cloud = CloudModel(send: { _ in })
+        cloud.suggest("groq")
+        XCTAssertNil(cloud.selected, "nothing listed yet")
+        cloud.apply(providers())
+        cloud.suggest("groq")
+        XCTAssertEqual(cloud.selected, "groq")
+        cloud.select("openai")
+        cloud.suggest("groq")
+        XCTAssertEqual(cloud.selected, "openai", "the user's pick stands")
+        let chosen = CloudModel(send: { _ in })
+        chosen.apply(providers(chosen: "groq"))
+        chosen.select(nil)
+        chosen.suggest("openai")
+        XCTAssertNil(chosen.selected, "a provider is chosen already")
+    }
+
+    /// The first run's own key is one choice, Groq's free model: its rows start there (the key
+    /// saved for Groq, Use naming Groq) unless another provider is chosen or picked, which opens
+    /// the other providers instead; back from them, Groq is in the picker again. Nothing is sent
+    /// by either.
+    func testTheFirstRunsOwnKeyStartsOnGroqUnlessAnotherProviderIsChosenOrPicked() throws {
+        let sent = Sent()
+        let (cloud, polish) = setUp(sent, groqKey: false)
+        cloud.suggest("groq")
+        XCTAssertFalse(cloud.firstRunStartsOnOthers, "nothing chosen: Groq's free model")
+        cloud.saveKey("gsk_test_not_a_real_key")
+        guard case .llmKeySave(let provider, _, _) = try XCTUnwrap(sent.commands.last) else { return XCTFail("no key saved") }
+        XCTAssertEqual(provider, "groq", "the key is Groq's")
+        cloud.apply(providers(groqKey: true))
+        polish.useOwnKey(cloud)
+        XCTAssertEqual(polish.pendingConsent?.name, "Groq", "Use asks polish's consent, naming Groq")
+        polish.cancelConsent()
+
+        cloud.select("openai")
+        XCTAssertTrue(cloud.firstRunStartsOnOthers, "another provider picked: the other providers")
+        sent.commands = []
+        cloud.pickGroq()
+        XCTAssertEqual(cloud.selected, "groq")
+        XCTAssertFalse(cloud.firstRunStartsOnOthers)
+        XCTAssertEqual(sent.commands, [], "picking sends nothing")
+
+        let chosen = CloudModel(send: { _ in })
+        chosen.apply(providers(chosen: "openai"))
+        XCTAssertTrue(chosen.firstRunStartsOnOthers, "another provider chosen")
+        let groqChosen = CloudModel(send: { _ in })
+        groqChosen.apply(providers(chosen: "groq"))
+        XCTAssertFalse(groqChosen.firstRunStartsOnOthers)
+    }
+
+    /// Keys are in the keychain of the Mac account, shared by every Inkwell on it, not in the
+    /// library: the line says whose key it is, and Delete names what it deletes and asks first
+    /// (a scratch library offered to delete the user's real key as "Delete key"). The delete is
+    /// of the provider pressed for, whatever the picker holds by the time it is confirmed.
+    func testTheKeyLineSaysWhoseKeyItIsAndDeleteNamesWhatItDeletes() throws {
+        let sent = Sent()
+        let cloud = CloudModel(send: sent.send)
+        cloud.apply(providers(groqKey: true))
+        cloud.select("groq")
+        XCTAssertEqual(cloud.keyStatus, "A Groq key is already saved in your keychain for this Mac account.")
+        XCTAssertEqual(cloud.deleteKeyLabel, "Delete Groq key\u{2026}")
+        XCTAssertEqual(cloud.deleteKeyTitle("groq"), "Delete the Groq key from your keychain?")
+        XCTAssertTrue(CloudModel.deleteKeyMessage.contains("for this Mac account"), CloudModel.deleteKeyMessage)
+        XCTAssertTrue(CloudModel.deleteKeyMessage.contains("every Inkwell"), CloudModel.deleteKeyMessage)
+        cloud.select("openai")
+        XCTAssertEqual(cloud.keyStatus, "No OpenAI key is saved yet.")
+        XCTAssertEqual(cloud.deleteKeyLabel, "Delete OpenAI key\u{2026}")
+        // A provider this build has no name for is named by its id: still "An", by its sound.
+        let unknown = CloudModel(send: { _ in })
+        unknown.apply(event(#"{"type":"llm.providers","ref":"x","local_only":true,"ready":false,"providers":[{"id":"openllm","default_model":"m","endpoint":"https://example.com/v1","custom_url":false,"needs_key":true,"has_key":true}]}"#))
+        unknown.select("openllm")
+        XCTAssertEqual(unknown.keyStatus, "An openllm key is already saved in your keychain for this Mac account.")
+        cloud.select("custom")
+        cloud.draftBaseURL = "http://192.168.1.20:8080/v1"
+        XCTAssertEqual(cloud.keyStatus, "No key is sent to this server: keys go only over https or to a server on this Mac.")
+
+        sent.commands = []
+        cloud.deleteKey("groq")
+        XCTAssertEqual(sent.commands, [.llmKeyDelete(provider: "groq", ref: "llm.key.delete:1")], "Groq's, though the picker holds another")
+        cloud.deleteKey("not-a-provider")
+        XCTAssertEqual(sent.commands.count, 1, "nothing for a provider the core did not list")
+    }
+
+    /// Use asks first and sends nothing: the step names Groq and says the words leave this Mac
+    /// and that local-only mode goes off. Cancel sends nothing either.
+    func testUseAsksFirstNamingTheProviderAndCancelSendsNothing() throws {
+        let sent = Sent()
+        let (cloud, polish) = setUp(sent)
+        cloud.select("groq")
+        XCTAssertTrue(polish.canUseOwnKey(cloud))
+        XCTAssertTrue(cloud.firstRunUseNote.contains("Local only"), cloud.firstRunUseNote)
+        sent.commands = []
+        polish.useOwnKey(cloud)
+        let asked = try XCTUnwrap(polish.pendingConsent)
+        XCTAssertEqual(asked, ConsentModel.Destination(kind: .cloud(endpoint: groq), name: "Groq"))
+        XCTAssertEqual(polish.consentHost, .onboarding)
+        XCTAssertTrue(polish.consent.choosing)
+        XCTAssertTrue(PolishModel.consentMessage(asked).contains("your words leave this Mac and go to Groq"))
+        let note = try XCTUnwrap(ConsentModel.choosingNote(asked))
+        XCTAssertTrue(note.contains("Local only"), note)
+        XCTAssertEqual(PolishModel.consentButton(asked), "Send to Groq")
+        XCTAssertEqual(sent.commands, [], "asking sends nothing")
+
+        // A state the core sends meanwhile (the step names a model not chosen yet) leaves it open.
+        polish.apply(polishState(on: false, allowed: false, to: nil))
+        XCTAssertNotNil(polish.pendingConsent)
+
+        polish.cancelConsent()
+        XCTAssertNil(polish.pendingConsent)
+        XCTAssertFalse(polish.consent.choosing)
+        XCTAssertEqual(sent.commands, [], "cancel sends nothing: local-only mode stays on")
+    }
+
+    /// Allow chooses Groq with the user's say-so that local-only mode goes off, and records the
+    /// consent once the core names Groq's endpoint: polish is then on, sending to Groq.
+    func testAllowChoosesTheProviderThenRecordsTheConsentForIt() throws {
+        let sent = Sent()
+        let (cloud, polish) = setUp(sent)
+        cloud.select("groq")
+        polish.useOwnKey(cloud)
+        sent.commands = []
+        polish.allowConsent()
+        XCTAssertEqual(sent.commands, [.llmChoose(provider: "groq", model: nil, baseURL: nil, localOnlyOff: true, ref: "llm.choose:1")])
+        XCTAssertNil(polish.pendingConsent)
+
+        // The core's answer to the choice: local-only off, then polish's state naming Groq.
+        polish.apply(event(#"{"type":"setting.value","key":"llm.local_only","value":"off"}"#))
+        polish.apply(groqState())
+        XCTAssertEqual(sent.commands.filter(allows), [.consentAllow(feature: .polish, to: .cloud, endpoint: groq, key: nil, ref: "consent.allow:polish:1")])
+        cloud.apply(providers(chosen: "groq", ready: true, localOnly: false, ref: "llm.choose:1"))
+        polish.apply(providers(chosen: "groq", ready: true, localOnly: false, ref: "llm.choose:1"))
+        polish.apply(groqState(on: true, allowed: true))
+        XCTAssertTrue(polish.isOn)
+        XCTAssertEqual(polish.status, "On. Your words go to llama-3.3-70b-versatile (groq) before they are typed.")
+        // Once recorded, nothing is allowed again on its own.
+        polish.apply(groqState())
+        XCTAssertEqual(sent.commands.filter(allows).count, 1)
+    }
+
+    /// The core names somewhere else after the choice: nothing is allowed, polish stays off and
+    /// says so, and a later state naming Groq allows nothing either (the agreement was for that
+    /// choice only).
+    func testADestinationTheUserDidNotAgreeToIsNeverAllowed() throws {
+        let sent = Sent()
+        let (cloud, polish) = setUp(sent)
+        cloud.select("groq")
+        polish.useOwnKey(cloud)
+        polish.allowConsent()
+        polish.apply(groqState(endpoint: "https://elsewhere.example.com/v1"))
+        XCTAssertEqual(sent.commands.filter(allows), [])
+        XCTAssertEqual(polish.failure, .allow)
+        XCTAssertEqual(polish.status, "Couldn't turn polish on, so it stays off. Try again.")
+        polish.apply(groqState())
+        XCTAssertEqual(sent.commands.filter(allows), [])
+    }
+
+    /// A choice the core refused changes nothing: polish stays off and says so, and nothing is
+    /// allowed later.
+    func testARefusedChoiceAllowsNothing() throws {
+        let sent = Sent()
+        let (cloud, polish) = setUp(sent)
+        cloud.select("groq")
+        polish.useOwnKey(cloud)
+        polish.allowConsent()
+        polish.apply(event(#"{"type":"command.failed","command":"llm.choose","id":"llm.choose:1","message":"llm.choose: couldn't save the choice"}"#))
+        XCTAssertEqual(polish.failure, .allow)
+        polish.apply(groqState())
+        XCTAssertEqual(sent.commands.filter(allows), [])
+    }
+
+    /// Allow chooses what the step named, never what the picker holds by then: a picker changed
+    /// meanwhile (Settings > AI shares it) chooses nothing, and nothing is allowed later.
+    func testAllowChoosesOnlyWhatTheStepNamed() throws {
+        let sent = Sent()
+        let (cloud, polish) = setUp(sent)
+        cloud.select("groq")
+        polish.useOwnKey(cloud)
+        cloud.select("openai")
+        polish.allowConsent()
+        XCTAssertEqual(sent.commands.filter(chooses), [], "local-only mode stays on")
+        XCTAssertEqual(polish.failure, .allow)
+        XCTAssertNil(polish.consent.agreed)
+        polish.apply(groqState())
+        XCTAssertEqual(sent.commands.filter(allows), [])
+    }
+
+    /// The switch asking while the own-key step was up (the sheet over Settings) asks the ordinary
+    /// way: its Allow sends the consent for the model there now and chooses nothing.
+    func testTheSwitchsStepNeverChooses() throws {
+        let sent = Sent()
+        let (cloud, polish) = setUp(sent)
+        polish.apply(event(appleLLM))
+        polish.apply(polishState(on: false, allowed: false))
+        cloud.select("groq")
+        polish.useOwnKey(cloud)
+        polish.setOn(true, from: .settings)
+        XCTAssertFalse(polish.consent.choosing)
+        XCTAssertEqual(polish.consent.stepMessage(try XCTUnwrap(polish.pendingConsent)), PolishModel.consentMessage(try XCTUnwrap(polish.pendingConsent)))
+        polish.allowConsent()
+        XCTAssertEqual(sent.commands.filter(chooses), [])
+        XCTAssertEqual(sent.commands.filter(allows).count, 1)
+        XCTAssertNil(polish.consent.agreed)
+    }
+
+    /// A custom server's address is named as the core names it (no trailing slash), so the
+    /// consent matches the choice.
+    func testACustomServerIsNamedAsTheCoreNamesIt() throws {
+        let cloud = CloudModel(send: { _ in })
+        cloud.apply(providers())
+        cloud.select("custom")
+        cloud.draftBaseURL = " https://llm.example.com/v1/ "
+        XCTAssertEqual(cloud.selectedEndpoint, "https://llm.example.com/v1")
+    }
+
+    /// Before a key is stored, Use waits: a provider that needs one could not be called.
+    func testUseWaitsForTheKey() {
+        let sent = Sent()
+        let (cloud, polish) = setUp(sent, groqKey: false)
+        cloud.select("groq")
+        XCTAssertFalse(polish.canUseOwnKey(cloud))
+        polish.useOwnKey(cloud)
+        XCTAssertNil(polish.pendingConsent)
+        XCTAssertEqual(sent.commands.filter(chooses), [])
+        cloud.select(nil)
+        XCTAssertFalse(polish.canUseOwnKey(cloud), "no provider picked")
+    }
+
+    /// A server on this Mac: the step says the words stay here, and the choice keeps local-only
+    /// mode on.
+    func testAServerOnThisMacKeepsLocalOnlyOn() throws {
+        let sent = Sent()
+        let (cloud, polish) = setUp(sent)
+        cloud.select("custom")
+        XCTAssertTrue(polish.canUseOwnKey(cloud), "no key needed")
+        polish.useOwnKey(cloud)
+        let asked = try XCTUnwrap(polish.pendingConsent)
+        XCTAssertTrue(asked.isOnDevice)
+        XCTAssertNil(ConsentModel.choosingNote(asked), "local-only mode stays on: nothing to say")
+        polish.allowConsent()
+        XCTAssertEqual(sent.commands.filter(chooses), [.llmChoose(provider: "custom", model: nil, baseURL: "http://localhost:11434/v1", localOnlyOff: false, ref: "llm.choose:1")])
+        polish.apply(polishState(on: false, allowed: false, to: "on_device", name: "llama3 (custom)"))
+        XCTAssertEqual(sent.commands.filter(allows), [.consentAllow(feature: .polish, to: .onDevice, endpoint: nil, key: nil, ref: "consent.allow:polish:1")])
+    }
+}
+
 // MARK: - Voice edit's consent
 
 @MainActor
@@ -689,28 +969,193 @@ final class ModelDownloadTests: XCTestCase {
         try XCTUnwrap(catalogue.models.first { $0.id == id })
     }
 
+    private let silero = "silero-vad-v6-16k"
+    private let nemotron = "nemotron-3-diarization-q8"
+
+    /// The whole Mac catalogue, as the core lists it, nothing installed.
+    private func listedAll() -> InkEvent {
+        event(#"{"type":"models.listed","models":[{"id":"qwen3-asr-1.7b-q8","licence":"Apache-2.0","size_bytes":2520744288,"installed":false,"jobs":[{"job":"dictation_final","wer":4.59},{"job":"meeting_final","wer":16.08}]},{"id":"parakeet-tdt-0.6b-v3-coreml","licence":"CC-BY-4.0","size_bytes":483105645,"installed":false,"jobs":[]},{"id":"nemotron-3-diarization-q8","licence":"OpenMDW-1.1","size_bytes":107012128,"installed":false,"jobs":[{"job":"diarization","wer":20.2}]},{"id":"silero-vad-v6-16k","licence":"MIT","size_bytes":1289603,"installed":false,"jobs":[{"job":"voice_activity","wer":1.5}]}]}"#)
+    }
+
     /// Nothing downloads until the user presses Download: not at launch, not while the first run is
-    /// walked through. The press then says what goes, smallest first, and sends one at a time.
-    func testNothingIsSentBeforeThePressAndThenOneAtATimeSmallestFirst() throws {
+    /// walked through. The press with nothing ticked fetches the set every job needs only (voice
+    /// detection and Parakeet), smallest first, one at a time; Qwen3-ASR and the diarizer wait for
+    /// a tick of their own.
+    func testNothingIsSentBeforeThePressAndThenTheRecommendedSetOneAtATime() throws {
         let sent = Sent()
         let screens = ScreenModels(send: sent.send, calendar: FakeCalendar(), apps: WorkspaceApps())
         screens.apply([
             event(#"{"type":"core.ready","version":"1.0.0","abi":2}"#),
-            event(#"{"type":"setting.value","key":"onboarding.done"}"#), listed(),
+            event(#"{"type":"setting.value","key":"onboarding.done"}"#), listedAll(),
         ])
         while screens.onboarding.step != .ready { screens.onboarding.next() }
         XCTAssertEqual(installs(sent), [], "nothing sent before the press")
         let catalogue = screens.catalogue
-        XCTAssertEqual(catalogue.firstRunModels.map(\.id), [parakeet, qwen], "smallest first")
-        XCTAssertEqual(catalogue.firstRunModels.map(\.sizeBytes).reduce(0, +), 3_003_849_933, "the total it states")
-        XCTAssertEqual(CatalogueModel.sources(catalogue.firstRunModels), "huggingface.co")
+        XCTAssertEqual(catalogue.entries(.transcripts).map(\.id), [silero, parakeet], "smallest first")
+        XCTAssertEqual(catalogue.size(of: .transcripts), 484_395_248, "the size it states")
 
-        catalogue.downloadFirstRunModels()
-        XCTAssertEqual(installs(sent), [.modelInstall(parakeet, ref: "model.update:1")], "one at a time")
-        XCTAssertEqual(catalogue.download(of: try entry(catalogue, parakeet)), .downloading(nil))
-        XCTAssertEqual(catalogue.download(of: try entry(catalogue, qwen)), .waiting)
-        catalogue.downloadFirstRunModels()
+        catalogue.download(choices: [])
+        XCTAssertEqual(installs(sent), [.modelInstall(silero, ref: "model.update:1")], "one at a time")
+        XCTAssertEqual(catalogue.download(of: try entry(catalogue, silero)), .downloading(nil))
+        XCTAssertEqual(catalogue.download(of: try entry(catalogue, parakeet)), .waiting)
+        XCTAssertEqual(catalogue.download(of: try entry(catalogue, qwen)), .notInstalled, "not ticked")
+        XCTAssertEqual(catalogue.download(of: try entry(catalogue, nemotron)), .notInstalled, "not ticked")
+        catalogue.download(choices: [])
+        catalogue.downloadRecommended()
         XCTAssertEqual(installs(sent).count, 1, "a second press queues nothing twice")
+
+        // A choice ticked later queues behind the set, and stays listed once it is in.
+        catalogue.download(choices: [.accuracy])
+        catalogue.apply(finished(silero))
+        catalogue.apply(finished(parakeet))
+        XCTAssertEqual(installs(sent).map { if case .modelInstall(let id, _) = $0 { id } else { "" } }, [silero, parakeet, qwen])
+        catalogue.apply(finished(qwen))
+        XCTAssertEqual(catalogue.state(of: .accuracy), .installed, "listed, as downloaded")
+    }
+
+    /// The first run offers choices by what they do for the user, not models: the set every job
+    /// needs (always included), fewer mistakes (Qwen3-ASR) and telling the far end's people apart
+    /// (the diarizer), each with its size as the step states it.
+    func testTheFirstRunOffersChoicesByWhatTheyDo() throws {
+        let catalogue = CatalogueModel(send: { _ in })
+        XCTAssertEqual(catalogue.choices, [], "nothing listed yet")
+        catalogue.apply(listedAll())
+        XCTAssertEqual(catalogue.choices, [.transcripts, .accuracy, .speakers])
+        XCTAssertEqual(CatalogueModel.Choice.transcripts.title, "Dictation, live words and meeting transcripts")
+        XCTAssertEqual(CatalogueModel.Choice.accuracy.title, "Fewer mistakes")
+        XCTAssertEqual(CatalogueModel.Choice.speakers.title, "Tell the people on the call apart")
+        XCTAssertTrue(CatalogueModel.Choice.transcripts.isRequired)
+        XCTAssertFalse(CatalogueModel.Choice.accuracy.isRequired)
+        XCTAssertFalse(CatalogueModel.Choice.speakers.isRequired)
+        XCTAssertEqual(CatalogueModel.Choice.transcripts.models, CatalogueModel.recommended)
+        XCTAssertEqual(CatalogueModel.Choice.accuracy.models, [qwen])
+        XCTAssertEqual(CatalogueModel.Choice.speakers.models, [nemotron])
+        XCTAssertEqual(catalogue.sizeLabel(.transcripts), "484 MB")
+        XCTAssertEqual(catalogue.sizeLabel(.accuracy), "+2.5 GB")
+        XCTAssertEqual(catalogue.sizeLabel(.speakers), "+107 MB")
+        // Each choice names its models: name, licence, size and host.
+        XCTAssertEqual(catalogue.entries(.speakers).map(CatalogueModel.facts), [
+            "Nemotron-3-Diarization · OpenMDW-1.1 · 107 MB · from huggingface.co",
+        ])
+        XCTAssertEqual(catalogue.entries(.transcripts).map(CatalogueModel.facts).last,
+                       "Parakeet TDT v3 · CC-BY-4.0 · 483 MB · from huggingface.co")
+        // A catalogue without a choice's model leaves that choice out.
+        let partial = CatalogueModel(send: { _ in })
+        partial.apply(listed())
+        XCTAssertEqual(partial.choices, [.accuracy], "no voice detection listed, no diarizer")
+    }
+
+    /// The one Download carries the total of what is ticked, and changes as boxes do: only models
+    /// still to fetch count (a model on this Mac, downloading or waiting is not counted again).
+    func testTheDownloadButtonCarriesTheTotalOfWhatIsTicked() throws {
+        let catalogue = CatalogueModel(send: { _ in })
+        catalogue.apply(listedAll())
+        XCTAssertEqual(catalogue.bytesToDownload([]), 484_395_248)
+        XCTAssertEqual(CatalogueModel.downloadTitle(catalogue.bytesToDownload([])), "Download 484 MB")
+        XCTAssertEqual(CatalogueModel.downloadTitle(catalogue.bytesToDownload([.speakers])), "Download 591 MB")
+        XCTAssertEqual(CatalogueModel.downloadTitle(catalogue.bytesToDownload([.accuracy])), "Download 3.0 GB")
+        XCTAssertEqual(CatalogueModel.downloadTitle(catalogue.bytesToDownload([.accuracy, .speakers])), "Download 3.1 GB")
+        XCTAssertEqual(catalogue.bytesToDownload([.transcripts]), 484_395_248, "the set counts once, ticked or not")
+
+        catalogue.download(choices: [])
+        XCTAssertEqual(catalogue.bytesToDownload([]), 0, "the set is on its way")
+        XCTAssertEqual(catalogue.bytesToDownload([.speakers]), 107_012_128)
+
+        let installed = CatalogueModel(send: { _ in })
+        installed.apply(event(#"{"type":"models.listed","models":[{"id":"parakeet-tdt-0.6b-v3-coreml","licence":"CC-BY-4.0","size_bytes":483105645,"installed":true,"jobs":[]},{"id":"silero-vad-v6-16k","licence":"MIT","size_bytes":1289603,"installed":true,"jobs":[]},{"id":"qwen3-asr-1.7b-q8","licence":"Apache-2.0","size_bytes":2520744288,"installed":false,"jobs":[]}]}"#))
+        XCTAssertEqual(installed.state(of: .transcripts), .installed)
+        XCTAssertEqual(installed.bytesToDownload([]), 0, "nothing needed is missing")
+        XCTAssertEqual(installed.bytesToDownload([.accuracy]), 2_520_744_288)
+    }
+
+    /// The press fetches the set first (dictation works soonest), then the ticked extras smallest
+    /// first; an unticked extra is never fetched.
+    func testDownloadFetchesTheSetThenTheTickedExtrasSmallestFirst() throws {
+        let sent = Sent()
+        let catalogue = CatalogueModel(send: sent.send)
+        catalogue.apply(listedAll())
+        catalogue.download(choices: [.accuracy, .speakers])
+        XCTAssertEqual(installs(sent), [.modelInstall(silero, ref: "model.update:1")], "one at a time")
+        XCTAssertEqual(catalogue.waiting, [parakeet, nemotron, qwen])
+
+        let one = Sent()
+        let other = CatalogueModel(send: one.send)
+        other.apply(listedAll())
+        other.download(choices: [.speakers])
+        XCTAssertEqual(other.waiting, [parakeet, nemotron], "Qwen3-ASR not ticked")
+    }
+
+    /// Each choice shows where its models stand: available, waiting, downloading with the set's
+    /// progress (a finished model counts whole), failed in the core's words until Retry, and on
+    /// this Mac once every model is in.
+    func testEachChoiceShowsInstalledProgressOrFailure() throws {
+        let catalogue = CatalogueModel(send: { _ in })
+        catalogue.apply(listedAll())
+        XCTAssertEqual(catalogue.state(of: .transcripts), .available)
+        catalogue.download(choices: [.speakers])
+        XCTAssertEqual(catalogue.state(of: .transcripts), .downloading(nil), "voice detection under way")
+        XCTAssertEqual(catalogue.state(of: .speakers), .waiting)
+        XCTAssertEqual(catalogue.state(of: .accuracy), .available)
+        catalogue.apply(finished(silero))
+        catalogue.apply(progress(parakeet, 100_000_000, of: 483_105_645))
+        XCTAssertEqual(catalogue.state(of: .transcripts),
+                       .downloading(.init(done: 1_289_603 + 100_000_000, total: 484_395_248)), "the set's progress")
+        catalogue.apply(finished(parakeet))
+        XCTAssertEqual(catalogue.state(of: .transcripts), .installed, "in, before the list is read again")
+        catalogue.apply(finished(nemotron, ok: false, message: "the connection was reset"))
+        XCTAssertEqual(catalogue.state(of: .speakers), .failed("the connection was reset"))
+        XCTAssertEqual(catalogue.bytesToDownload([.speakers]), 107_012_128, "a failed one can be fetched again")
+        catalogue.retry(.speakers)
+        XCTAssertEqual(catalogue.state(of: .speakers), .downloading(nil))
+    }
+
+    /// A recommended model already on this Mac is not fetched again; with every one of them in, the
+    /// press has nothing to fetch for the set, and the extras are still offered on their own.
+    func testTheRecommendedSetOffersOnlyWhatIsMissing() throws {
+        let sent = Sent()
+        let catalogue = CatalogueModel(send: sent.send)
+        catalogue.apply(event(#"{"type":"models.listed","models":[{"id":"parakeet-tdt-0.6b-v3-coreml","licence":"CC-BY-4.0","size_bytes":483105645,"installed":true,"jobs":[]},{"id":"silero-vad-v6-16k","licence":"MIT","size_bytes":1289603,"installed":false,"jobs":[]},{"id":"qwen3-asr-1.7b-q8","licence":"Apache-2.0","size_bytes":2520744288,"installed":false,"jobs":[]}]}"#))
+        XCTAssertEqual(catalogue.state(of: .transcripts), .available)
+        XCTAssertEqual(catalogue.bytesToDownload([]), 1_289_603, "only voice detection is missing")
+        catalogue.apply(event(#"{"type":"models.listed","models":[{"id":"parakeet-tdt-0.6b-v3-coreml","licence":"CC-BY-4.0","size_bytes":483105645,"installed":true,"jobs":[]},{"id":"silero-vad-v6-16k","licence":"MIT","size_bytes":1289603,"installed":true,"jobs":[]},{"id":"qwen3-asr-1.7b-q8","licence":"Apache-2.0","size_bytes":2520744288,"installed":false,"jobs":[]}]}"#))
+        XCTAssertEqual(catalogue.state(of: .transcripts), .installed)
+        XCTAssertEqual(catalogue.firstRunModels.map(\.id), [qwen])
+        catalogue.downloadRecommended()
+        catalogue.download(choices: [])
+        XCTAssertEqual(installs(sent), [], "nothing recommended is missing")
+    }
+
+    /// Each extra says what it adds over the set, in the user's terms; the set needs no pitch. The
+    /// diarizer's line says what the user has without it: the far end is one voice, "Them".
+    func testEachExtraSaysWhatItAdds() throws {
+        let accuracy = try XCTUnwrap(CatalogueModel.Choice.accuracy.detail)
+        XCTAssertEqual(accuracy, "About a third fewer wrong words in dictation and meetings.")
+        let speakers = try XCTUnwrap(CatalogueModel.Choice.speakers.detail)
+        XCTAssertTrue(speakers.contains("Speaker 1, Speaker 2"), speakers)
+        XCTAssertTrue(speakers.contains("\u{201C}Them\u{201D}"), speakers)
+        XCTAssertNil(CatalogueModel.Choice.transcripts.detail)
+        XCTAssertEqual(CatalogueModel.recommended, [silero, parakeet])
+    }
+
+    /// "Fewer mistakes" claims about a third fewer wrong words than Parakeet: true of the rates
+    /// measured for both (the core's registry row, and Parakeet's as the Apple engines register
+    /// it), on dictation and on meetings. New measurements that break the claim fail here.
+    func testQwensClaimMatchesTheMeasuredRates() throws {
+        let registry = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+                .deletingLastPathComponent().appendingPathComponent("core/crates/ink-engines/src/registry.rs"),
+            encoding: .utf8)
+        let start = try XCTUnwrap(registry.range(of: "fn qwen3_asr_1_7b_q8()"))
+        let row = registry[start.upperBound...]
+        XCTAssertTrue(try XCTUnwrap(CatalogueModel.Choice.accuracy.detail).contains("About a third fewer wrong words"))
+        for (job, name) in [(Job.dictationFinal, "DictationFinal"), (.meetingFinal, "MeetingFinal")] {
+            let match = try XCTUnwrap(row.firstMatch(of: try Regex("job: Job::\(name),\\s*wer: ([0-9.]+)")), name)
+            let qwenRate = try XCTUnwrap(Double(try XCTUnwrap(match.output[1].substring)))
+            let parakeetRate = try XCTUnwrap(ParakeetOfflineEngine.measured.first { $0.job == job }?.wer)
+            let fewer = 1 - qwenRate / parakeetRate
+            XCTAssertTrue((0.28...0.38).contains(fewer), "\(name): \(fewer) fewer is not about a third")
+        }
     }
 
     /// Each install waits for the one before to end; each end asks again what the catalogue holds
@@ -837,6 +1282,23 @@ final class ModelDownloadTests: XCTestCase {
         XCTAssertEqual(catalogue.download(of: try entry(catalogue, qwen)), .notInstalled)
         catalogue.apply(finished(parakeet))
         XCTAssertEqual(installs(sent).count, 1)
+        // A download the stop interrupted is not on this Mac: it reads as still to fetch, and the
+        // next press fetches it again.
+        XCTAssertFalse(catalogue.isOnThisMac(parakeet), "interrupted, not installed")
+        XCTAssertFalse(catalogue.isOnThisMac(qwen), "never started")
+        XCTAssertEqual(catalogue.state(of: .accuracy), .available)
+        XCTAssertEqual(catalogue.bytesToDownload([.accuracy]), 2_520_744_288)
+        catalogue.download(choices: [.accuracy])
+        XCTAssertEqual(installs(sent).last, .modelInstall(qwen, ref: "model.update:2"))
+    }
+
+    /// The step's sizes round as Today's "484 MB" does, and never read "1000 MB".
+    func testSizesRoundToWholeMegabytesOrOneDecimalOfAGigabyte() {
+        XCTAssertEqual(CatalogueModel.roundedSize(1_289_603), "1 MB")
+        XCTAssertEqual(CatalogueModel.roundedSize(484_395_248), "484 MB")
+        XCTAssertEqual(CatalogueModel.roundedSize(999_400_000), "999 MB")
+        XCTAssertEqual(CatalogueModel.roundedSize(999_600_000), "1.0 GB", "not 1000 MB")
+        XCTAssertEqual(CatalogueModel.roundedSize(2_520_744_288), "2.5 GB")
     }
 
     func testEveryDownloadableModelIsNamedWithWhereItComesFrom() {
@@ -892,7 +1354,7 @@ final class ModesModelTests: XCTestCase {
             "com.apple.finder", " us.zoom.xos ", "COM.TINYSPECK.SLACKMACGAP",
         ]
         let apps = try JSONSerialization.data(withJSONObject: identities)
-        let json = #"{"type":"modes.listed","default_id":"d","modes":[{"id":"chat","name":"Chat","style":"casual","polish":false,"remove_fillers":true,"apps":\#(String(decoding: apps, as: UTF8.self))},{"id":"d","name":"Default","style":"formal","polish":true,"remove_fillers":true,"apps":[]}]}"#
+        let json = #"{"type":"modes.listed","default_id":"d","modes":[{"id":"chat","name":"Chat","style":"casual","polish":false,"remove_fillers":true,"polish_prompt":"","apps":\#(String(decoding: apps, as: UTF8.self))},{"id":"d","name":"Default","style":"formal","polish":true,"remove_fillers":true,"polish_prompt":"","apps":[]}],"default_polish_prompt":"Fix it.","polish_models":[]}"#
         for directory in [Apps(), WorkspaceApps()] as [any AppDirectory] {
             let modes = ModesModel(send: { _ in }, apps: directory)
             modes.apply(event(json))
@@ -914,7 +1376,8 @@ final class ModesModelTests: XCTestCase {
             modes.rows[0].apps.map(\.name),
             ["Example Writer", "WhatsApp", "An app not on this Mac", "Slack", "An app not on this Mac", "Zoom", "Slack"])
         XCTAssertEqual(modes.rows[0].traits, ["Casual", "Clean up speech"])
-        XCTAssertEqual(modes.rows[1].traits, ["Formal", "Clean up speech", "Polish"])
+        XCTAssertEqual(modes.rows[1].traits, ["Formal", "Clean up speech"])
+        XCTAssertNil(modes.rows[1].polish.chip, "polish is on for it, but there is no model: no chip")
         XCTAssertTrue(modes.rows[1].isDefault, "the default is listed last")
     }
 
@@ -930,6 +1393,14 @@ final class ModesModelTests: XCTestCase {
 
 @MainActor
 final class OwedModelTests: XCTestCase {
+    /// A deleted record took what it owed with it: listed again.
+    func testADeletedRecordListsWhatIsOwedAgain() {
+        let sent = Sent()
+        let owed = OwedModel(send: sent.send)
+        owed.apply(event(#"{"type":"record.deleted","record":"r1","kind":"meeting","audio_left":false,"scrubbed":true}"#))
+        XCTAssertEqual(sent.commands, [.commitmentsList])
+    }
+
     private func listed(_ items: String) -> InkEvent {
         event(#"{"type":"commitments.listed","items":[\#(items)]}"#)
     }
@@ -1270,11 +1741,100 @@ final class CoreCommandTests: XCTestCase {
         XCTAssertEqual(failed.id, "ask:3")
         XCTAssertEqual(failed.message, "couldn't send it: the core is not running")
         XCTAssertFalse(failed.message.contains("private"))
-        guard case .commandFailed(let noID) = CoreCommand.modesList.notSent("x") else {
+        guard case .commandFailed(let noID) = CoreCommand.meetingsRecover.notSent("x") else {
             return XCTFail("not a command.failed")
         }
         XCTAssertNil(noID.id)
         XCTAssertEqual(CoreCommand.engineRoute(.livePartials).commandID, "engine.route:live_partials")
+    }
+}
+
+// MARK: - Storage
+
+/// Settings > Storage: how much room each part of the library takes, measured again when it changes.
+@MainActor
+final class StorageModelTests: XCTestCase {
+    private var data: URL!
+
+    override func setUp() async throws {
+        data = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ink-storage-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: data.appendingPathComponent("models", isDirectory: true), withIntermediateDirectories: true)
+    }
+
+    override func tearDown() async throws {
+        try? FileManager.default.removeItem(at: data)
+    }
+
+    /// A model as the core installs it: `<models>/<id>/<revision>/<file>`.
+    private func install(_ id: String, bytes: Int) throws {
+        let dir = data.appendingPathComponent("models/\(id)/0123456789ab", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try Data(count: bytes).write(to: dir.appendingPathComponent("\(id).gguf"))
+    }
+
+    private func finished(_ id: String, ok: Bool = true) -> InkEvent {
+        event(#"{"type":"model.update_finished","id":"\#(id)","next":"\#(id)","ok":\#(ok),"no_model_warm":false}"#)
+    }
+
+    /// The desktop pass's "Models 0 bytes" with 2.9 GB installed: Settings measured once, when it
+    /// appeared, and the downloads finished after that.
+    func testAModelThatFinishesInstallingIsCountedWithoutReopeningSettings() async throws {
+        let screens = ScreenModels(
+            send: { _ in }, calendar: FakeCalendar(), apps: WorkspaceApps(), dataDirectory: data)
+        screens.storage.measure()
+        try await waitUntil { screens.storage.sizes != nil }
+        XCTAssertEqual(screens.storage.sizes?.models, 0)
+
+        try install("silero-vad-v6-16k", bytes: 100_000)
+        screens.apply([finished("silero-vad-v6-16k")])
+        try await waitUntil { (screens.storage.sizes?.models ?? 0) >= 100_000 }
+        XCTAssertEqual(screens.storage.sizes?.recordings, 0, "a model is not a recording")
+    }
+
+    /// A record the user deleted took its recording with it: measured again.
+    func testADeletedRecordIsMeasuredAway() async throws {
+        let screens = ScreenModels(
+            send: { _ in }, calendar: FakeCalendar(), apps: WorkspaceApps(), dataDirectory: data)
+        let meeting = data.appendingPathComponent("meetings/m1", isDirectory: true)
+        try FileManager.default.createDirectory(at: meeting, withIntermediateDirectories: true)
+        try Data(count: 100_000).write(to: meeting.appendingPathComponent("mic-000000-16000x1.pcm"))
+        screens.storage.measure()
+        try await waitUntil { (screens.storage.sizes?.recordings ?? 0) >= 100_000 }
+        try FileManager.default.removeItem(at: meeting)
+        screens.apply([event(#"{"type":"record.deleted","record":"m1","kind":"meeting","audio_left":false,"scrubbed":true}"#)])
+        try await waitUntil { screens.storage.sizes?.recordings == 0 }
+    }
+
+    /// Nothing is measured for a Settings screen that never asked: a download alone walks nothing.
+    func testADownloadBeforeSettingsWasShownMeasuresNothing() async throws {
+        let screens = ScreenModels(
+            send: { _ in }, calendar: FakeCalendar(), apps: WorkspaceApps(), dataDirectory: data)
+        try install("silero-vad-v6-16k", bytes: 100_000)
+        screens.apply([finished("silero-vad-v6-16k")])
+        try await Task.sleep(for: .milliseconds(200))
+        XCTAssertNil(screens.storage.sizes)
+    }
+
+    /// A measure asked while one is running is run after it, never dropped: the running one may
+    /// have walked past the new files already.
+    func testAMeasureAskedDuringOneRunsAfterIt() async throws {
+        let storage = StorageModel(dataDirectory: data, modelsDirectory: nil)
+        storage.measure()
+        try install("qwen3-asr-1.7b-q8", bytes: 200_000)
+        storage.measure()
+        try await waitUntil { (storage.sizes?.models ?? 0) >= 200_000 }
+    }
+
+    private func waitUntil(_ timeout: Duration = .seconds(5), _ done: () -> Bool) async throws {
+        let start = ContinuousClock.now
+        while !done() {
+            if ContinuousClock.now - start > timeout {
+                return XCTFail("not within \(timeout)")
+            }
+            try await Task.sleep(for: .milliseconds(20))
+        }
     }
 }
 
@@ -1413,7 +1973,7 @@ final class ScreensCoreContractTests: XCTestCase {
         let onboarding = try answer(.settingGet(.onboardingDone)) { if case .settingValue(let v) = $0 { v } else { nil } }
         XCTAssertEqual(onboarding?.key, "onboarding.done")
         XCTAssertNil(onboarding?.value, "a fresh library has not onboarded")
-        let modes = try answer(.modesList) { if case .modesListed(let m) = $0 { m } else { nil } }
+        let modes = try answer(.modesList(ref: "modes:1")) { if case .modesListed(let m) = $0 { m } else { nil } }
         XCTAssertEqual(modes?.modes.map(\.name), ["Default"])
         let owed = try answer(.commitmentsList) { if case .commitmentsListed(let c) = $0 { c } else { nil } }
         XCTAssertEqual(owed?.items, [])
@@ -1441,6 +2001,13 @@ final class ScreensCoreContractTests: XCTestCase {
         }
         XCTAssertEqual(refused?.id, "note-line-7", "a refused note is matched to its line")
         XCTAssertFalse(refused?.message.contains("private") ?? true, "the error never quotes the note")
+        // Settings > Sound: the devices are listed (no permission needed; never the test, which
+        // would open the mic), and a stop with no test running is refused by its id.
+        let sound = try answer(.audioDevices(ref: SoundModel.devicesID)) { if case .audioDevices(let d) = $0 { d } else { nil } }
+        XCTAssertEqual(sound?.ref, SoundModel.devicesID)
+        XCTAssertEqual(sound?.input, "auto", "Automatic until a mic is chosen")
+        let stop = try answer(.audioTestStop(ref: SoundModel.stopID)) { if case .commandFailed(let f) = $0 { f } else { nil } }
+        XCTAssertEqual(stop?.id, SoundModel.stopID)
         let undecodable = events.withLock { $0 }.filter { if case .undecodable = $0 { true } else { false } }
         XCTAssertEqual(undecodable, [])
     }
@@ -1501,6 +2068,1024 @@ final class LiveLayoutTests: XCTestCase {
             let minimum = hosting.sizeThatFits(in: .zero)
             XCTAssertLessThan(minimum.height, 460, name)
             XCTAssertLessThan(minimum.width, 720, name)
+        }
+    }
+}
+
+/// The whole window at its 720-pt minimum, as MainWindowController makes it: the hosting
+/// controller sets the window's minimum size from SwiftUI's, so a screen that needs more than its
+/// share of 720 beside the sidebar widens the window as it opens. Settings did, to 996 pt, while
+/// Settings measured on its own, outside a window and the split view, stayed under 720 (there a
+/// segmented control or a fixed-size picker compresses; in a window it does not). And SwiftUI's
+/// minimum replaced the window's 720 with less (413 on Today): the root holds 720 now, and 460 pt
+/// of height under the toolbar (the minimum had fallen to 154 pt on Today, toolbar included).
+@MainActor
+final class MainWindowWidthTests: XCTestCase {
+    private final class NoEvents: UpcomingEvents {
+        func nextEvent(after now: Date, within horizon: TimeInterval) -> UpcomingEvent? { nil }
+    }
+
+    /// Not a size the window would choose: the minimum SwiftUI writes replaces it.
+    private let sentinel = NSSize(width: 100, height: 100)
+
+    /// The width `route` lays out at in the app's window asked for 720 by 700, the window's
+    /// minimum content size once SwiftUI has set it over the sentinel (nil if it never did, within
+    /// two seconds), and the height the toolbar covers at the top of the content.
+    private func widths(_ route: Route, screens: ScreenModels) -> (laidOut: CGFloat, minimum: NSSize?, toolbar: CGFloat) {
+        let store = CoreStore()
+        let router = Router()
+        router.open(route)
+        let root = ShellView(router: router).environment(store).environment(ShellInk(store: store))
+            .environment(Updates(infoDictionary: nil)).environment(screens).environment(LibraryModel(send: { _ in }))
+            .environment(UpNextModel(access: FakeCalendar(), events: NoEvents())).environment(router)
+            .environment(WindowPresence()).environment(screens.theme).tint(Theme.buttonFill)
+        let window = MainWindowController.makeWindow(root: root)
+        defer { window.close() }
+        window.contentMinSize = sentinel
+        window.setContentSize(NSSize(width: 720, height: 700))
+        let content = window.contentViewController?.view
+        let deadline = Date().addingTimeInterval(2)
+        repeat {
+            content?.layoutSubtreeIfNeeded()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        } while window.contentMinSize == sentinel && Date() < deadline
+        // Settled, not a first pass's.
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+        content?.layoutSubtreeIfNeeded()
+        // A full-size content view runs under the toolbar; the content layout rect is what is left.
+        let toolbar = (content?.frame.height ?? 0) - window.contentLayoutRect.height
+        return (content?.frame.width ?? 0, window.contentMinSize == sentinel ? nil : window.contentMinSize, toolbar)
+    }
+
+    func testEveryScreenLaysOutInA720PointWindowWhoseMinimumIs720By460UnderTheToolbar() throws {
+        let screens = ScreenModels(send: { _ in }, calendar: FakeCalendar(), apps: WorkspaceApps())
+        // The widest key rows: a recorded dictation key, and the edit key with the longest name.
+        screens.dictation.apply(event(#"{"type":"setting.value","key":"dictation.enabled","value":"on"}"#))
+        screens.dictation.apply(event(#"{"type":"setting.value","key":"dictation.key","value":"ctrl+shift+space"}"#))
+        screens.dictation.apply(event(#"{"type":"setting.value","key":"dictation.edit_key","value":"right_command"}"#))
+        screens.dictation.apply(event(#"{"type":"dictation.ready","key":"ctrl+shift+space","edit_key":"right_command"}"#))
+        // A download under way, one waiting, and one failed with the core's words.
+        screens.catalogue.apply(event(#"{"type":"models.listed","models":[{"id":"qwen3-asr-1.7b-q8","licence":"Apache-2.0","size_bytes":2520744288,"installed":false,"jobs":[]},{"id":"parakeet-tdt-0.6b-v3-coreml","licence":"CC-BY-4.0","size_bytes":483105645,"installed":false,"jobs":[]},{"id":"silero-vad-v6-16k","licence":"MIT","size_bytes":1289603,"installed":false,"jobs":[]}]}"#))
+        screens.catalogue.download(["silero-vad-v6-16k", "parakeet-tdt-0.6b-v3-coreml", "qwen3-asr-1.7b-q8"])
+        screens.catalogue.apply(event(#"{"type":"model.update_finished","id":"silero-vad-v6-16k","next":"silero-vad-v6-16k","ok":false,"no_model_warm":false,"message":"the new files could not be installed: downloading silero_vad_16k_op15.onnx: the connection was reset by the server before the file was complete"}"#))
+        screens.catalogue.apply(event(#"{"type":"model.update_progress","id":"parakeet-tdt-0.6b-v3-coreml","next":"parakeet-tdt-0.6b-v3-coreml","done_bytes":120000000,"total_bytes":483105645}"#))
+        XCTAssertTrue(Route.allCases.contains(.settings))
+        for route in Route.allCases {
+            let (laidOut, minimum, toolbar) = widths(route, screens: screens)
+            XCTAssertEqual(laidOut, 720, accuracy: 0.5, "\(route)")
+            let set = try XCTUnwrap(minimum, "\(route): SwiftUI never set the window's minimum")
+            XCTAssertEqual(set.width, 720, accuracy: 0.5, "\(route)")
+            // The toolbar is there to count (about 52 pt), and the minimum holds 460 under it.
+            XCTAssertGreaterThan(toolbar, 20, "\(route)")
+            XCTAssertEqual(set.height - toolbar, MainWindowController.minimumContentSize.height, accuracy: 0.5, "\(route)")
+        }
+    }
+
+    /// A saved frame shorter than the minimum (one from before the minimum held, say) opens at the
+    /// minimum: the window is fitted as it is made, before SwiftUI has written its minimum, which
+    /// counts the toolbar, over the window's own.
+    func testAShortSavedFrameOpensAtTheMinimum() throws {
+        let name = "InkwellTests.shortFrame.\(UUID().uuidString)"
+        let key = "NSWindow Frame \(name)"
+        defer { UserDefaults.standard.removeObject(forKey: key) }
+        UserDefaults.standard.set("100 100 900 300 0 0 1728 1080 ", forKey: key)
+        // A root with a toolbar, as the app's has (Today's own layout is not what is tested).
+        let root = Color.clear.toolbar { ToolbarItem(placement: .primaryAction) { Button("Go") {} } }
+        let window = MainWindowController.makeWindow(root: root)
+        defer { window.close() }
+        MainWindowController.place(window, autosaveName: name)
+        XCTAssertEqual(window.frame.width, 900, accuracy: 0.5, "the saved frame was restored")
+        let placed = window.frame.size
+        // SwiftUI's minimum, once written, and the room under the toolbar.
+        let deadline = Date().addingTimeInterval(2)
+        while window.contentMinSize.height <= MainWindowController.minimumContentSize.height, Date() < deadline {
+            window.contentViewController?.view.layoutSubtreeIfNeeded()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        }
+        let toolbar = try XCTUnwrap(window.contentView).frame.height - window.contentLayoutRect.height
+        XCTAssertGreaterThan(toolbar, 20, "the root's toolbar is the window's")
+        let minimum = window.frameRect(forContentRect: NSRect(origin: .zero, size: window.contentMinSize)).size
+        XCTAssertGreaterThanOrEqual(placed.height, minimum.height - 0.5, "opened under SwiftUI's minimum")
+        XCTAssertGreaterThanOrEqual(window.contentLayoutRect.height, MainWindowController.minimumContentSize.height - 0.5)
+    }
+
+    /// The Mode picker's segments, in the app's window, fit the room its row asks for beside its
+    /// name, so as the window widens the picker turns from a menu to segments once
+    /// (SettingColumnsLayout.segmentedModeRoom); the ink-motion picker's fit the default room.
+    func testTheSegmentedPickersFitBesideTheirRowsNames() {
+        func segmentsWidth<Value: Hashable & Identifiable>(_ cases: [Value], title: @escaping (Value) -> String) -> CGFloat {
+            let measured = Measured()
+            let picker = Picker("Picker", selection: .constant(cases[0])) {
+                ForEach(cases) { Text(title($0)).tag($0) }
+            }
+            .pickerStyle(.segmented).labelsHidden().fixedSize()
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { measured.width = $0 }
+            let window = MainWindowController.makeWindow(root: picker.frame(maxWidth: .infinity, alignment: .leading))
+            defer { window.close() }
+            window.setContentSize(NSSize(width: 720, height: 460))
+            settle(window)
+            return measured.width
+        }
+        let mode = segmentsWidth(GlowTheme.Mode.allCases) { $0.title }
+        let motion = segmentsWidth(GlowTheme.Motion.allCases) { $0.title }
+        // Three segments and two, measured, not a collapsed control.
+        XCTAssertGreaterThan(mode, 290)
+        XCTAssertGreaterThan(motion, 180)
+        XCTAssertLessThanOrEqual(mode, SettingColumnsLayout.segmentedModeRoom)
+        XCTAssertLessThanOrEqual(motion, SettingColumnsLayout.controlsMinimum)
+    }
+
+    /// The page's sections only ever widen as the window does: the margins never take back more
+    /// than the column gains.
+    func testTheSectionsWidthNeverShrinksAsTheColumnWidens() {
+        var previous = -CGFloat.infinity
+        for step in 0...2000 {
+            let column = CGFloat(step) / 2
+            let sections = column - 2 * SettingsMarginsLayout.margin(column)
+            XCTAssertGreaterThanOrEqual(sections, previous - 0.0001, "at \(column)")
+            previous = sections
+        }
+        XCTAssertEqual(SettingsMarginsLayout.margin(300), SettingsMarginsLayout.narrow)
+        XCTAssertEqual(SettingsMarginsLayout.margin(600), SettingsMarginsLayout.wide)
+    }
+
+    /// The snippet and voice command forms in the app's window: on one line from their line width,
+    /// the fixed-width fields at their width, the text field sharing the rest (wider in a wider
+    /// form), and Add whole and inside the form; under it, one field under another.
+    func testTheAddFormsShareTheirLineAndStackUnderIt() throws {
+        // Add's own width, in the app's window.
+        let addMeasured = Measured()
+        let addWindow = MainWindowController.makeWindow(root: Button("Add") {}.fixedSize()
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { addMeasured.width = $0 }
+            .frame(maxWidth: .infinity, alignment: .leading))
+        addWindow.setContentSize(NSSize(width: 720, height: 460))
+        settle(addWindow)
+        addWindow.close()
+        let addWidth = addMeasured.width
+        XCTAssertGreaterThan(addWidth, 30)
+        let snippets = SnippetsModel(send: { _ in })
+        let commands = VoiceCommandsModel(send: { _ in })
+        let forms: [(name: String, form: AnyView, lineWidth: CGFloat, flexible: String, fixed: [String: CGFloat])] = [
+            ("snippet", AnyView(SnippetAddForm(snippets: snippets)), SnippetAddForm.lineWidth, "Text it becomes",
+             ["Trigger": 150, "Category": 110]),
+            ("voice command", AnyView(VoiceCommandAddForm(commands: commands)), VoiceCommandAddForm.lineWidth,
+             "Text to type", ["Phrases, comma-separated": 200]),
+        ]
+        for (name, form, lineWidth, flexible, fixed) in forms {
+            var flexibleWidths: [CGFloat: CGFloat] = [:]
+            for width in [480, 520, 700] as [CGFloat] {
+                let window = MainWindowController.makeWindow(
+                    root: form.frame(width: width, alignment: .leading).frame(maxWidth: .infinity, alignment: .leading))
+                defer { window.close() }
+                window.setContentSize(NSSize(width: 720, height: 460))
+                settle(window)
+                let root = try XCTUnwrap(window.contentViewController?.view)
+                let fields = Dictionary(
+                    descendants(of: root, as: NSTextField.self).compactMap { field in
+                        field.placeholderString.map { ($0, field.convert(field.bounds, to: root)) }
+                    }, uniquingKeysWith: { first, _ in first })
+                let label = "\(name) at \(width)"
+                XCTAssertEqual(Set(fields.keys), Set(fixed.keys).union([flexible]), label)
+                let formMinX = try XCTUnwrap(fields.values.map(\.minX).min())
+                let rows = Set(fields.values.map { $0.midY.rounded() })
+                if width >= lineWidth {
+                    // SwiftUI draws Add itself, last on the line: what the form leaves after the
+                    // last field holds it whole.
+                    let lastField = try XCTUnwrap(fields.values.map(\.maxX).max())
+                    let room = formMinX + width - lastField - LineOrStackLayout.lineSpacing
+                    XCTAssertGreaterThanOrEqual(room, addWidth - 0.5, "\(label): Add is cut")
+                    XCTAssertLessThanOrEqual((rows.max() ?? 0) - (rows.min() ?? 0), 2, "\(label): on one line")
+                    for (placeholder, expected) in fixed {
+                        XCTAssertEqual(fields[placeholder]?.width ?? 0, expected, accuracy: 1, "\(label): \(placeholder)")
+                    }
+                    flexibleWidths[width] = fields[flexible]?.width
+                } else {
+                    XCTAssertEqual(rows.count, fields.count, "\(label): one under another")
+                    for (placeholder, frame) in fields {
+                        XCTAssertLessThanOrEqual(frame.maxX, formMinX + width + 0.5, "\(label): \(placeholder)")
+                    }
+                }
+            }
+            let widest = try XCTUnwrap(flexibleWidths[700], name)
+            let narrowest = try XCTUnwrap(flexibleWidths.filter { $0.key < 700 }.min { $0.key < $1.key }?.value, name)
+            XCTAssertGreaterThan(widest, narrowest + 100, "\(name): the text field grows with the form")
+        }
+    }
+
+    @MainActor private final class Measured {
+        var width: CGFloat = 0
+    }
+
+    private func settle(_ window: NSWindow) {
+        for _ in 0..<4 {
+            window.contentViewController?.view.layoutSubtreeIfNeeded()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        }
+    }
+
+    private func descendants<T: NSView>(of view: NSView, as type: T.Type) -> [T] {
+        view.subviews.flatMap { ([$0 as? T].compactMap { $0 }) + descendants(of: $0, as: type) }
+    }
+}
+
+/// Settings' sections, each on its own card (Today's, sectionCard), in the app's window: at its
+/// 720-pt minimum, at its default 1040, and wide enough that the cards stop at their widest. Each
+/// section lies inside its card's padding, so a row too narrow for its name beside its controls
+/// stacks them inside the card (SettingColumns, LineOrStack) rather than run past its edge; every
+/// control the page draws in AppKit lies inside one card's padding; and the cards are one column,
+/// in the list's order, as far apart as Today's.
+@MainActor
+final class SettingsCardsLayoutTests: XCTestCase {
+    private final class NoEvents: UpcomingEvents {
+        func nextEvent(after now: Date, within horizon: TimeInterval) -> UpcomingEvent? { nil }
+    }
+
+    /// The cards and the sections inside them, in the window's coordinates (top left), as the
+    /// overlay over the root last resolved them.
+    private final class Seen {
+        var cards: [SettingsSection: CGRect] = [:]
+        var sections: [SettingsSection: CGRect] = [:]
+    }
+
+    /// Over the root: resolves the cards' anchors into `seen` each time it is drawn. A method, not
+    /// a closure called in place, which the CI's Swift 6.3 has crashed on.
+    private struct Probe: View {
+        let parts: [SettingsCardBounds.Part]
+        let seen: Seen
+
+        var body: some View {
+            GeometryReader { proxy in
+                let _ = record(proxy)
+                Color.clear
+            }
+            .allowsHitTesting(false)
+        }
+
+        private func record(_ proxy: GeometryProxy) {
+            let origin = proxy.frame(in: .global).origin
+            for part in parts {
+                let rect = proxy[part.bounds].offsetBy(dx: origin.x, dy: origin.y)
+                if part.isCard { seen.cards[part.section] = rect } else { seen.sections[part.section] = rect }
+            }
+        }
+    }
+
+    private struct Laid {
+        let cards: [SettingsSection: CGRect]
+        let sections: [SettingsSection: CGRect]
+        /// The AppKit controls on the Settings page, in the window's coordinates (top left).
+        let controls: [(name: String, frame: CGRect)]
+        /// The page's scroll view, in the window's coordinates (top left).
+        let page: CGRect
+        /// The page's column: its scroll view less an always-shown scroller.
+        let column: CGFloat
+        /// The window's content width, laid out: the width asked for unless the page widened it.
+        let window: CGFloat
+    }
+
+    /// The widest rows: a recorded dictation key, the edit key with the longest name, a provider
+    /// with its server, key and model fields, a snippet and a voice command, models downloading,
+    /// waiting and failed with the core's words, a paused streak with rest days whose resume
+    /// failed, modes with many apps and their own models' troubles (Confirm…, Allow…), and
+    /// polish's consents with Revoke.
+    private func screens() -> ScreenModels {
+        var sent: [CoreCommand] = []
+        let screens = ScreenModels(send: { sent.append($0) }, calendar: FakeCalendar(), apps: WorkspaceApps())
+        screens.stats.apply(event(#"{"type":"setting.value","key":"stats.rest_days","value":"6,7"}"#))
+        screens.stats.settingsAppeared()
+        let get = sent.last?.commandID ?? ""
+        screens.stats.apply(event(statsCounted(ref: get, dictations: 3, dictationExtra: #","streak_paused_since":"2026-10-02""#)))
+        screens.stats.resumeStreak()
+        let resume = sent.last?.commandID ?? ""
+        screens.stats.apply(event(#"{"type":"command.failed","command":"streak.resume","id":"\#(resume)","message":"x"}"#))
+        // The widest rows are there, or this check measures less than it says.
+        XCTAssertNotNil(screens.stats.counted?.dictation.streakPausedSince)
+        XCTAssertEqual(screens.stats.streakChangeFailed, .resuming)
+        // Polish on, with an OK on this Mac and one for a cloud provider, each with Revoke.
+        screens.polish.apply(event(#"{"type":"consent.state","feature":"polish","on":true,"allowed":true,"to":"on_device","name":"SystemLanguageModel.default","consents":[{"to":"on_device"},{"to":"cloud","name":"OpenRouter","endpoint":"https://openrouter.ai/api/v1"}]}"#))
+        screens.modes.apply(event(WideModes.listing))
+        screens.dictation.apply(event(#"{"type":"setting.value","key":"dictation.enabled","value":"on"}"#))
+        screens.dictation.apply(event(#"{"type":"setting.value","key":"dictation.key","value":"ctrl+shift+space"}"#))
+        screens.dictation.apply(event(#"{"type":"setting.value","key":"dictation.edit_key","value":"right_command"}"#))
+        screens.dictation.apply(event(#"{"type":"dictation.ready","key":"ctrl+shift+space","edit_key":"right_command"}"#))
+        screens.cloud.apply(event(#"{"type":"llm.providers","ref":"x","local_only":true,"ready":false,"providers":[{"id":"custom","default_model":"a-model-with-a-long-name","endpoint":"","custom_url":true,"needs_key":true,"has_key":true}]}"#))
+        screens.cloud.select("custom")
+        screens.catalogue.apply(event(#"{"type":"models.listed","models":[{"id":"qwen3-asr-1.7b-q8","licence":"Apache-2.0","size_bytes":2520744288,"installed":false,"jobs":[]},{"id":"parakeet-tdt-0.6b-v3-coreml","licence":"CC-BY-4.0","size_bytes":483105645,"installed":false,"jobs":[]},{"id":"silero-vad-v6-16k","licence":"MIT","size_bytes":1289603,"installed":false,"jobs":[]}]}"#))
+        screens.catalogue.download(["silero-vad-v6-16k", "parakeet-tdt-0.6b-v3-coreml", "qwen3-asr-1.7b-q8"])
+        screens.catalogue.apply(event(#"{"type":"model.update_finished","id":"silero-vad-v6-16k","next":"silero-vad-v6-16k","ok":false,"no_model_warm":false,"message":"the new files could not be installed: downloading silero_vad_16k_op15.onnx: the connection was reset by the server before the file was complete"}"#))
+        screens.catalogue.apply(event(#"{"type":"model.update_progress","id":"parakeet-tdt-0.6b-v3-coreml","next":"parakeet-tdt-0.6b-v3-coreml","done_bytes":120000000,"total_bytes":483105645}"#))
+        // Meetings' call policies at their widest: a default of Always with its warning, and apps
+        // with long names, chosen and not.
+        screens.calls.apply(event(#"{"type":"meetings.calls","default":"always","apps":[{"app":"com.microsoft.teams2","app_name":"Microsoft Teams (work or school)","policy":"never","chosen":true,"seen_unix_ms":1759658400000},{"app":"us.zoom.xos","app_name":"Zoom","policy":"always","chosen":false,"seen_unix_ms":1759400000000},{"app":"com.example.a-call-app-with-a-very-long-name","app_name":"A Call App With A Very Long Name Indeed","policy":"ask","chosen":true}]}"#))
+        // Sound: long device names, a chosen mic that isn't connected (the longest caption), and
+        // a test running.
+        screens.sound.apply(event(#"{"type":"audio.devices","input":"gone","wanted":{"id":"gone","name":"Elgato Wave:3 Studio Condenser Microphone","transport":"usb"},"inputs":[{"id":"mbp","name":"MacBook Pro Microphone","transport":"built_in","is_default":true},{"id":"pods","name":"Alex's AirPods Pro (2nd generation)","transport":"bluetooth","is_default":false}],"automatic":{"id":"mbp","name":"MacBook Pro Microphone","transport":"built_in","reason":"built_in_for_bluetooth_output"},"using":{"id":"mbp","name":"MacBook Pro Microphone","transport":"built_in","reason":"chosen_missing"}}"#))
+        screens.sound.toggleTest()
+        screens.sound.apply(event(#"{"type":"audio.test_started","ref":"sound.test","mic_name":"MacBook Pro Microphone","mic_transport":"built_in","mic_reason":"chosen_missing","seconds":15}"#))
+        screens.sound.apply(event(#"{"type":"audio.test_level","ref":"sound.test","level":0.6}"#))
+        return screens
+    }
+
+    /// `render`: a folder to draw the window into, as `<name>-window.png`, and the whole page, every
+    /// card, as `<name>-page.png` (INK_SETTINGS_RENDER).
+    private func layOut(width: CGFloat, screens: ScreenModels, render: (folder: URL, name: String)? = nil) throws -> Laid {
+        let store = CoreStore()
+        let router = Router()
+        router.open(.settings)
+        let seen = Seen()
+        let root = ShellView(router: router)
+            .overlayPreferenceValue(SettingsCardBounds.self) { Probe(parts: $0, seen: seen) }
+            .environment(store).environment(ShellInk(store: store))
+            .environment(Updates(infoDictionary: nil)).environment(screens).environment(LibraryModel(send: { _ in }))
+            .environment(UpNextModel(access: FakeCalendar(), events: NoEvents())).environment(router)
+            .environment(WindowPresence()).environment(screens.theme).tint(Theme.buttonFill)
+        let window = MainWindowController.makeWindow(root: root)
+        defer { window.close() }
+        window.setContentSize(NSSize(width: width, height: 700))
+        // Settled: two passes in a row resolve the same rects (a card can still grow once the
+        // screen's models have answered), within two seconds.
+        var last: [CGRect] = []
+        for pass in 0..<40 {
+            window.contentViewController?.view.layoutSubtreeIfNeeded()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+            let now = SettingsSection.allCases.flatMap { [seen.cards[$0], seen.sections[$0]].compactMap { $0 } }
+            if pass >= 3, now.count == 2 * SettingsSection.allCases.count, now == last { break }
+            last = now
+        }
+        let content = try XCTUnwrap(window.contentView)
+        func topLeft(_ view: NSView) -> CGRect {
+            let rect = view.convert(view.bounds, to: content)
+            return content.isFlipped ? rect : CGRect(x: rect.minX, y: content.bounds.height - rect.maxY, width: rect.width, height: rect.height)
+        }
+        // The page: the scroll view with the tallest document (the sidebar's and the section
+        // list's are short).
+        let page = try XCTUnwrap(descendants(of: content, as: NSScrollView.self)
+            .max { ($0.documentView?.frame.height ?? 0) < ($1.documentView?.frame.height ?? 0) })
+        let controls = descendants(of: try XCTUnwrap(page.documentView), as: NSControl.self)
+            .filter { !$0.isHiddenOrHasHiddenAncestor && $0.bounds.width > 0 && $0.bounds.height > 0 }
+            .map { (name: "\(type(of: $0)) \(($0 as? NSTextField)?.placeholderString ?? $0.accessibilityLabel() ?? "")", frame: topLeft($0)) }
+        if let render {
+            try draw(content, to: render.folder.appendingPathComponent("\(render.name)-window.png"))
+            try draw(try XCTUnwrap(page.documentView), to: render.folder.appendingPathComponent("\(render.name)-page.png"))
+        }
+        return Laid(cards: seen.cards, sections: seen.sections, controls: controls, page: topLeft(page),
+                    column: page.contentView.bounds.width, window: content.frame.width)
+    }
+
+    private func draw(_ view: NSView, to url: URL) throws {
+        let rep = try XCTUnwrap(view.bitmapImageRepForCachingDisplay(in: view.bounds))
+        view.cacheDisplay(in: view.bounds, to: rep)
+        try XCTUnwrap(rep.representation(using: .png, properties: [:])).write(to: url)
+    }
+
+    /// Not a check: Settings drawn offscreen in Light and Dark at 720 and 1040 for the eye, when
+    /// INK_SETTINGS_RENDER names a folder. AppKit's cache draws neither the orb (Metal) nor the
+    /// cards' blur: what it shows is the layout, the cards' fill and borders over the mode's ground.
+    func testRenderSettings() throws {
+        guard let folder = ProcessInfo.processInfo.environment["INK_SETTINGS_RENDER"] else {
+            throw XCTSkip("INK_SETTINGS_RENDER is not set")
+        }
+        let out = URL(fileURLWithPath: folder, isDirectory: true)
+        try FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        let screens = screens()
+        defer { NSApp.appearance = nil }
+        for mode in [GlowTheme.Mode.light, .dark] {
+            screens.theme.setMode(mode)
+            for width in [720, 1040] as [CGFloat] {
+                _ = try layOut(width: width, screens: screens, render: (out, "settings-\(mode.rawValue)-\(Int(width))"))
+            }
+        }
+    }
+
+    func testEverySectionIsLaidOutInsideItsCardAt720AndWider() throws {
+        let screens = screens()
+        for width in [MainWindowController.minimumContentSize.width, 1040, 1700] as [CGFloat] {
+            let laid = try layOut(width: width, screens: screens)
+            let label = "at \(Int(width))"
+            XCTAssertEqual(laid.window, width, accuracy: 0.5, "\(label): the page widened the window")
+            // A card wider than its column widens the page's scroll view, past the window.
+            XCTAssertLessThanOrEqual(laid.page.width, laid.window + 0.5, "\(label): the page is wider than the window")
+            XCTAssertEqual(Set(laid.cards.keys), Set(SettingsSection.allCases), "\(label): a card for every section")
+            XCTAssertEqual(Set(laid.sections.keys), Set(SettingsSection.allCases), label)
+            let cards = SettingsSection.allCases.compactMap { laid.cards[$0] }
+            guard cards.count == SettingsSection.allCases.count else { continue }
+            // One column: each card the page's column less its margins (up to the cards' widest),
+            // in the list's order, Today's spacing apart.
+            let margin = SettingsMarginsLayout.margin(laid.column)
+            let column = min(laid.column - 2 * margin, SettingsScreen.maxCardWidth)
+            for (section, card) in zip(SettingsSection.allCases, cards) {
+                XCTAssertEqual(card.minX, laid.page.minX + margin, accuracy: 0.5, "\(label): \(section)")
+                // 1 pt: macOS 26 measures the column a point narrower than 27 does (its scroller), while
+                // the cards themselves come out the same; what matters is checked below, that nothing
+                // runs past its card.
+                XCTAssertEqual(card.width, column, accuracy: 1, "\(label): \(section) is wider than its column")
+            }
+            for (above, below) in zip(cards, cards.dropFirst()) {
+                XCTAssertEqual(below.minY - above.maxY, TodayColumnsLayout.spacing, accuracy: 0.5, label)
+            }
+            if width >= 1700 {
+                XCTAssertEqual(column, SettingsScreen.maxCardWidth, accuracy: 0.5, "\(label): at their widest")
+            }
+            // Each section inside its card's padding, never wider than the room it leaves.
+            for section in SettingsSection.allCases {
+                guard let card = laid.cards[section], let inside = laid.sections[section] else { continue }
+                XCTAssertEqual(inside.minX, card.minX + SectionCard.horizontal, accuracy: 0.5, "\(label): \(section)")
+                XCTAssertEqual(inside.minY, card.minY + SectionCard.vertical, accuracy: 0.5, "\(label): \(section)")
+                XCTAssertLessThanOrEqual(inside.maxX, card.maxX - SectionCard.horizontal + 0.5, "\(label): \(section) runs past its card")
+                XCTAssertLessThanOrEqual(inside.maxY, card.maxY - SectionCard.vertical + 0.5, "\(label): \(section)")
+            }
+            // Every control on the page in one card's padding (a focus ring's point aside).
+            XCTAssertGreaterThan(laid.controls.count, 10, "\(label): the page's controls were found")
+            for control in laid.controls {
+                let home = laid.cards.first { $0.value.insetBy(dx: 0, dy: -1).contains(CGPoint(x: control.frame.midX, y: control.frame.midY)) }
+                guard let (section, card) = home else {
+                    XCTFail("\(label): \(control.name) at \(control.frame) is on no card")
+                    continue
+                }
+                let room = card.insetBy(dx: SectionCard.horizontal - 1, dy: SectionCard.vertical - 1)
+                XCTAssertTrue(room.contains(control.frame), "\(label): \(control.name) at \(control.frame) is outside \(section)'s padding \(room)")
+            }
+            // From the window's default width, the snippet form keeps its one line in its card. The
+            // voice command form may stack there (macOS 26's fields measure wider than 27's): both
+            // are found, and their line is checked from 1700.
+            if width >= 1040 {
+                let forms = width >= 1700
+                    ? [["Trigger", "Text it becomes", "Category"], ["Phrases, comma-separated", "Text to type"]]
+                    : [["Trigger", "Text it becomes", "Category"]]
+                for fields in forms {
+                    let rows = fields.compactMap { name in laid.controls.first { $0.name.hasSuffix(" " + name) }?.frame.midY }
+                    XCTAssertEqual(rows.count, fields.count, "\(label): \(fields)")
+                    XCTAssertLessThanOrEqual((rows.max() ?? 0) - (rows.min() ?? 0), 2, "\(label): \(fields) on one line")
+                }
+            }
+            // The language model's key keeps a field wide enough to paste into: its buttons go under it
+            // in a narrow card (beside them it was 72 pt at 720).
+            let keyFields = laid.controls.filter { $0.name.contains("SecureTextField") }
+            XCTAssertEqual(keyFields.count, 1, label)
+            for field in keyFields {
+                XCTAssertGreaterThanOrEqual(field.frame.width, 150, label)
+            }
+        }
+    }
+
+    private func descendants<T: NSView>(of view: NSView, as type: T.Type) -> [T] {
+        view.subviews.flatMap { ([$0 as? T].compactMap { $0 }) + descendants(of: $0, as: type) }
+    }
+}
+
+/// Today in a short window, with the always-shown (legacy) scrollers a Mac with a mouse attached
+/// gets. Its two columns were fixed widths taken from the ScrollView's measured width, which
+/// counts the scroller the content does not get: the columns overflowed by the scroller's width,
+/// the ScrollView widened to hold them, and its new width widened the columns again, 17 pt a pass
+/// without end once the content needed scrolling (600 pt tall and less with nothing on Today, the
+/// default 700 with Needs you showing). The main run loop never came back. A stuck main thread
+/// cannot time itself out, so the window is laid out in a child process, this test re-run on its
+/// own, and the child is killed if it overruns.
+@MainActor
+final class TodayShortWindowTests: XCTestCase {
+    private final class NoEvents: UpcomingEvents {
+        func nextEvent(after now: Date, within horizon: TimeInterval) -> UpcomingEvent? { nil }
+    }
+
+    /// Set in the child: the content size to lay Today out at ("720x520"; "+banner" puts two
+    /// notices in Needs you), and the file to report to.
+    private static let probeSize = "INKWELL_TODAY_PROBE_SIZE"
+    private static let probeReport = "INKWELL_TODAY_PROBE_REPORT"
+    /// Far longer than a healthy child takes: a second or two, about four under the thread sanitizer.
+    private static let timeout: TimeInterval = 30
+
+    func testTodayLaysOutInAShortWindowAndNarrowsWithIt() throws {
+        let environment = ProcessInfo.processInfo.environment
+        if let size = environment[Self.probeSize], let report = environment[Self.probeReport] {
+            let banner = size.hasSuffix("+banner")
+            let sides = size.prefix { $0 != "+" }.split(separator: "x").compactMap { Double($0) }.map { CGFloat($0) }
+            try probe(NSSize(width: try XCTUnwrap(sides.first), height: try XCTUnwrap(sides.last)), banner: banner, report: report)
+            return
+        }
+        // 720 by 520 and 600 hung; by 700 it did not, but kept the width Today first had at 1040.
+        // With Needs you showing, the window's default size hung too.
+        for size in ["720x520", "720x600", "720x700", "1040x700+banner"] {
+            let report = FileManager.default.temporaryDirectory
+                .appendingPathComponent("inkwell-today-probe-\(UUID().uuidString)")
+            let errors = report.appendingPathExtension("stderr")
+            FileManager.default.createFile(atPath: errors.path, contents: nil)
+            defer {
+                try? FileManager.default.removeItem(at: report)
+                try? FileManager.default.removeItem(at: errors)
+            }
+            let child = Process()
+            child.executableURL = try XCTUnwrap(Bundle.main.executableURL, "the test runner")
+            child.arguments = ["-XCTest", "InkwellTests.TodayShortWindowTests/\(#function.prefix { $0 != "(" })",
+                               Bundle(for: Self.self).bundlePath]
+            // Not Xcode's session keys: with them the child would join the IDE's run.
+            child.environment = environment.filter { !$0.key.hasPrefix("XCTest") }.merging(
+                [Self.probeSize: size, Self.probeReport: report.path]) { $1 }
+            // Under the thread sanitizer, its runtime takes itself out of this process's
+            // DYLD_INSERT_LIBRARIES, and the child aborts without it: given back.
+            if let sanitizer = Self.threadSanitizerLibrary {
+                child.environment?["DYLD_INSERT_LIBRARIES"] = sanitizer
+            }
+            child.standardOutput = FileHandle.nullDevice
+            child.standardError = try FileHandle(forWritingTo: errors)
+            let exited = DispatchSemaphore(value: 0)
+            child.terminationHandler = { _ in exited.signal() }
+            try child.run()
+            if exited.wait(timeout: .now() + Self.timeout) == .timedOut {
+                kill(child.processIdentifier, SIGKILL)
+                child.waitUntilExit()
+                XCTFail("\(size): Today never finished laying out (killed after \(Int(Self.timeout)) s)")
+                continue
+            }
+            let line = (try? String(contentsOf: report, encoding: .utf8)) ?? ""
+            let numbers = line.split(separator: " ").compactMap { Double($0) }
+            guard child.terminationStatus == 0, numbers.count == 2 else {
+                let said = ((try? String(contentsOf: errors, encoding: .utf8)) ?? "").suffix(600)
+                XCTFail("\(size): the child exited \(child.terminationStatus) and reported \"\(line)\": \(said)")
+                continue
+            }
+            // Today's ScrollView spans the window under the sidebar's glass: never wider than it.
+            XCTAssertLessThanOrEqual(numbers[0], numbers[1] + 0.5, "\(size): Today is wider than the window")
+        }
+    }
+
+    /// The thread sanitizer's runtime, when this process runs under it.
+    private static var threadSanitizerLibrary: String? {
+        // -2 is RTLD_DEFAULT, which Swift does not import: every image loaded.
+        guard let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "__tsan_init") else { return nil }
+        var info = Dl_info()
+        guard dladdr(symbol, &info) != 0, let name = info.dli_fname else { return nil }
+        return String(cString: name)
+    }
+
+    /// The cards side by side, 1.3 : 1, from 624 pt of content, and under one another below it,
+    /// each column filled; read from the width proposed, so the same in or out of a ScrollView.
+    func testTodaysCardsShareTwoColumnsFrom624PointsAndStackBelow() {
+        @MainActor final class Frames { var all: [Int: CGRect] = [:] }
+        for width in [623, 624, 900] as [CGFloat] {
+            let frames = Frames()
+            let cards = TodayColumnsLayout {
+                ForEach(0..<3) { index in
+                    Color.clear.frame(maxWidth: .infinity).frame(height: 100)
+                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("cards")) } action: {
+                            frames.all[index] = $0
+                        }
+                }
+            }
+            .frame(width: width, alignment: .topLeading)
+            .coordinateSpace(.named("cards"))
+            let host = NSHostingView(rootView: cards)
+            host.frame = NSRect(x: 0, y: 0, width: width, height: 400)
+            let deadline = Date().addingTimeInterval(1)
+            repeat {
+                host.layoutSubtreeIfNeeded()
+                RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+            } while frames.all.count < 3 && Date() < deadline
+            guard let first = frames.all[0], let second = frames.all[1], let third = frames.all[2] else {
+                XCTFail("\(width): not every card was laid out")
+                continue
+            }
+            if width >= TodayColumnsLayout.twoColumns {
+                XCTAssertEqual(first.width / second.width, 1.3, accuracy: 0.01, "\(width)")
+                XCTAssertEqual(first.width + 18 + second.width, width, accuracy: 0.5, "\(width)")
+                XCTAssertEqual(second.minX, first.maxX + 18, accuracy: 0.5, "\(width)")
+                XCTAssertEqual(second.minY, first.minY, accuracy: 0.5, "\(width)")
+                XCTAssertEqual(third.minX, second.minX, accuracy: 0.5, "\(width)")
+                XCTAssertEqual(third.minY, second.maxY + 18, accuracy: 0.5, "\(width)")
+            } else {
+                for card in [first, second, third] {
+                    XCTAssertEqual(card.minX, 0, accuracy: 0.5, "\(width)")
+                    XCTAssertEqual(card.width, width, accuracy: 0.5, "\(width)")
+                }
+                XCTAssertEqual(second.minY, first.maxY + 18, accuracy: 0.5, "\(width)")
+                XCTAssertEqual(third.minY, second.maxY + 18, accuracy: 0.5, "\(width)")
+            }
+        }
+    }
+
+    /// In the child: the app's window on Today, laid out at its default 1040 x 700 and then made
+    /// `size`, as a user would; the widest scroll view in it and the window's width go to `report`.
+    private func probe(_ size: NSSize, banner: Bool, report: String) throws {
+        // Its own end too, should the parent die first: a global queue's timer fires while the main
+        // thread is stuck.
+        DispatchQueue.global().asyncAfter(deadline: .now() + 2 * Self.timeout) { _exit(2) }
+        // Legacy scrollers whatever this Mac uses. NSScroller asks the class for the style each
+        // new scroll view takes; only this child process is changed.
+        let styleGetter = try XCTUnwrap(
+            class_getClassMethod(NSScroller.self, #selector(getter: NSScroller.preferredScrollerStyle)))
+        let legacy: @convention(block) (AnyObject) -> Int = { _ in NSScroller.Style.legacy.rawValue }
+        method_setImplementation(styleGetter, imp_implementationWithBlock(legacy))
+        XCTAssertEqual(NSScroller.preferredScrollerStyle, .legacy)
+
+        let screens = ScreenModels(send: { _ in }, calendar: FakeCalendar(), apps: WorkspaceApps())
+        let store = CoreStore()
+        if banner {
+            store.apply([
+                event(#"{"type":"meeting.warning","record":"r1","kind":"captured_only_zeros","phase":"final"}"#),
+                event(#"{"type":"dictation.hotkey_lost"}"#),
+            ])
+        }
+        let router = Router()
+        router.open(.today)
+        let root = ShellView(router: router).environment(store).environment(ShellInk(store: store))
+            .environment(Updates(infoDictionary: nil)).environment(screens).environment(LibraryModel(send: { _ in }))
+            .environment(UpNextModel(access: FakeCalendar(), events: NoEvents())).environment(router)
+            .environment(WindowPresence()).environment(screens.theme).tint(Theme.buttonFill)
+        let window = MainWindowController.makeWindow(root: root)
+        defer { window.close() }
+        settle(window)
+        window.setContentSize(size)
+        settle(window)
+        let content = try XCTUnwrap(window.contentViewController?.view)
+        // Today's ScrollView among them, with the style forced: else the report would prove nothing.
+        let scrollViews = descendants(of: content, as: NSScrollView.self)
+        guard !scrollViews.isEmpty, scrollViews.allSatisfy({ $0.scrollerStyle == .legacy }) else {
+            try "no legacy scroll views".write(toFile: report, atomically: true, encoding: .utf8)
+            return
+        }
+        let widest = scrollViews.map(\.frame.width).max() ?? 0
+        try "\(widest) \(content.frame.width)".write(toFile: report, atomically: true, encoding: .utf8)
+    }
+
+    private func settle(_ window: NSWindow) {
+        for _ in 0..<8 {
+            window.contentViewController?.view.layoutSubtreeIfNeeded()
+            RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        }
+    }
+
+    private func descendants<T: NSView>(of view: NSView, as type: T.Type) -> [T] {
+        view.subviews.flatMap { ([$0 as? T].compactMap { $0 }) + descendants(of: $0, as: type) }
+    }
+}
+
+/// Settings > Appearance's dot presets: at 720 their names broke inside a word ("Lago / on") in
+/// two columns too narrow for them. A column is never narrower than PresetButton.minimumWidth,
+/// which holds every name on one line beside the dots.
+@MainActor
+final class PresetTileTests: XCTestCase {
+    func testEveryPresetsNameFitsOnOneLineInTheNarrowestTile() {
+        // The tile's margins (12 each side), the dots (42) and the gap after them (12).
+        let room = PresetButton.minimumWidth - 12 - 42 - 12 - 12
+        XCTAssertGreaterThan(Glow.presets.count, 1)
+        for preset in Glow.presets {
+            let name = Text(preset.name).font(.system(size: PresetButton.nameSize)).fixedSize()
+            let width = NSHostingController(rootView: name).sizeThatFits(in: .zero).width
+            XCTAssertLessThanOrEqual(width, room, preset.name)
+        }
+        // Two columns in the grid's widest frame (420), as before.
+        XCTAssertLessThanOrEqual(2 * PresetButton.minimumWidth + 8, 420)
+    }
+
+    /// The tile itself, not only the arithmetic: each preset's tile needs no more than the narrowest
+    /// tile to show its whole name. A Spacer after the name took the stack's 12 pt more, and
+    /// "Indigo & Coral" was cut in Settings' cards at the default window size.
+    func testEveryPresetsTileFitsTheNarrowestTile() {
+        for preset in Glow.presets {
+            let tile = PresetButton(preset: preset, selected: true) {}.fixedSize()
+            let width = NSHostingController(rootView: tile).sizeThatFits(in: .zero).width
+            XCTAssertLessThanOrEqual(width, PresetButton.minimumWidth + 0.5, preset.name)
+        }
+    }
+}
+
+/// Settings > Dictation's key rows, too narrow for their controls and hints at the window's smaller
+/// sizes (found by offscreen renders): the picker, cap and Record a shortcut… share a line only
+/// while the button's longest label fits on it, and narrower they stack as a group.
+@MainActor
+final class KeyControlsLayoutTests: XCTestCase {
+    /// The room `title`'s controls need at `width`, beside keys as wide as a picker and its cap.
+    private func needed(_ title: String, width: CGFloat) -> CGSize {
+        let controls = KeyControls { Color.clear.frame(width: 225, height: 22) } record: { Button(title) {} }
+        return NSHostingController(rootView: controls).sizeThatFits(in: CGSize(width: width, height: 10_000))
+    }
+
+    private func buttonWidth(_ title: String) -> CGFloat {
+        NSHostingController(rootView: Button(title) {}.fixedSize()).sizeThatFits(in: .zero).width
+    }
+
+    func testTheControlsShareALineOnlyWithRoomForTheLongestLabel() {
+        let idle = "Record a shortcut\u{2026}"
+        let recording = RecordShortcutButton.recordingTitle
+        let line = 225 + 12 + buttonWidth(recording)
+        XCTAssertGreaterThan(buttonWidth(recording), buttonWidth(idle) + 20, "the scenario below needs a longer label")
+        // A point over the line, clear of rounding at the threshold.
+        let oneLine = needed(idle, width: line + 1)
+        XCTAssertEqual(oneLine.width, line, accuracy: 0.5)
+        XCTAssertEqual(needed(recording, width: line + 1), oneLine, "recording keeps the line")
+        // Room for the idle label but not the recording one: stacked either way, so pressing the
+        // button never moves it to the next line.
+        let between = 225 + 12 + buttonWidth(idle) + 10
+        let stacked = needed(idle, width: between)
+        XCTAssertGreaterThan(stacked.height, oneLine.height + 10, "the button goes under the keys")
+        XCTAssertEqual(needed(recording, width: between).height, stacked.height, accuracy: 0.5)
+        // Narrower than the line, the group stacks inside the room it has.
+        XCTAssertLessThanOrEqual(needed(idle, width: 240).width, 240.5)
+    }
+}
+
+/// The first-run sheet's steps fit the sheet: nothing is clipped and nothing scrolls (a clipped
+/// Qwen3-ASR line, and Download buttons under the scroll bar, were found by hand).
+@MainActor
+final class OnboardingLayoutTests: XCTestCase {
+    private let listedAll = #"{"type":"models.listed","models":[{"id":"qwen3-asr-1.7b-q8","licence":"Apache-2.0","size_bytes":2520744288,"installed":false,"jobs":[]},{"id":"parakeet-tdt-0.6b-v3-coreml","licence":"CC-BY-4.0","size_bytes":483105645,"installed":false,"jobs":[]},{"id":"nemotron-3-diarization-q8","licence":"OpenMDW-1.1","size_bytes":107012128,"installed":false,"jobs":[]},{"id":"silero-vad-v6-16k","licence":"MIT","size_bytes":1289603,"installed":false,"jobs":[]}]}"#
+
+    /// How much room `view` needs at the step's width.
+    private func needed<V: View>(_ view: V, screens: ScreenModels) -> CGSize {
+        let room = OnboardingView.stepRoom
+        let hosting = NSHostingController(rootView: view.environment(screens).environment(screens.theme))
+        return hosting.sizeThatFits(in: CGSize(width: room.width, height: 10_000))
+    }
+
+    /// Each scenario is checked to be what it says (a row with its bar, rows with Retry), then the
+    /// step is measured as a whole and row by row: no row is wider than the step.
+    private func assertFits(_ catalogue: CatalogueModel, screens: ScreenModels, _ label: String,
+                            file: StaticString = #filePath, line: UInt = #line) {
+        let room = OnboardingView.stepRoom
+        let step = needed(FirstRunModelsStep(catalogue: catalogue), screens: screens)
+        XCTAssertLessThanOrEqual(step.height, room.height, "\(label): the step's height", file: file, line: line)
+        for choice in catalogue.choices {
+            let row = needed(ChoiceRow(catalogue: catalogue, choice: choice, ticked: .constant([])), screens: screens)
+            XCTAssertLessThanOrEqual(row.width, room.width + 0.5, "\(label): \(choice) is wider than the step", file: file, line: line)
+        }
+    }
+
+    private func listed() -> ScreenModels {
+        let screens = ScreenModels(send: { _ in }, calendar: FakeCalendar(), apps: WorkspaceApps())
+        screens.catalogue.apply(event(listedAll))
+        return screens
+    }
+
+    private let longFailure = "the new files could not be installed: downloading parakeet_tdt_0.6b_v3.mlmodelc: the connection was reset by the server before the file was complete"
+
+    /// A guard, not a reproduction (the RC's clip beside Use Groq did not show offscreen): the
+    /// Polish step's own-key rows with Groq picked and its key saved (the longest Use note) fit
+    /// the step's width and height, and at a narrower width still.
+    func testThePolishStepsGroqRowsWrapInsideTheStep() {
+        let screens = ScreenModels(send: { _ in }, calendar: FakeCalendar(), apps: WorkspaceApps())
+        screens.cloud.apply(event(#"{"type":"llm.providers","ref":"x","local_only":true,"ready":false,"providers":[{"id":"groq","default_model":"llama-3.3-70b-versatile","endpoint":"https://api.groq.com/openai/v1","custom_url":false,"needs_key":true,"has_key":true}]}"#))
+        screens.cloud.select("groq")
+        XCTAssertTrue(screens.cloud.firstRunUseNote.hasPrefix("Use asks first"), screens.cloud.firstRunUseNote)
+        let rows = GroqKeyRows(cloud: screens.cloud, polish: screens.polish)
+        for width in [OnboardingView.stepRoom.width, 360] {
+            let hosting = NSHostingController(rootView: rows.environment(screens).environment(screens.theme))
+            let size = hosting.sizeThatFits(in: CGSize(width: width, height: 10_000))
+            XCTAssertLessThanOrEqual(size.width, width + 0.5, "at \(width)")
+            XCTAssertLessThanOrEqual(size.height, OnboardingView.stepRoom.height, "at \(width)")
+        }
+    }
+
+    /// The whole Polish step with "Use Groq's free model" open, so with Groq's guide, fits the
+    /// step without scrolling: Groq picked with no key (its key line, "Save your Groq key first"),
+    /// with its key saved (the longest Use note), and chosen while local-only mode is on (the
+    /// longest status under it). Polish's own line is its longest kind, Apple Intelligence still
+    /// being checked; every one of them is a single line at this width. The guide is there: the
+    /// open step is taller than the closed one by the guide's height and more.
+    /// The Ready step with its "Not hearing you?" hint, and a permission still off, fits the
+    /// step (the orb's stand-in is its height).
+    func testTheReadyStepWithItsHintFitsTheSheet() {
+        let screens = ScreenModels(send: { _ in }, calendar: FakeCalendar(), apps: WorkspaceApps())
+        screens.onboarding.notHearing = true
+        let store = CoreStore()
+        let step = FirstRunReadyStep(orb: Color.clear.frame(height: readyOrbHeight))
+            .environment(ShellInk(store: store))
+        let room = OnboardingView.stepRoom
+        let size = needed(step, screens: screens)
+        XCTAssertLessThanOrEqual(size.height, room.height, "the step's height")
+        XCTAssertLessThanOrEqual(size.width, room.width + 0.5, "the step's width")
+    }
+
+    func testThePolishStepFitsTheSheetWithGroqsGuideOpen() {
+        let guide = NSHostingController(rootView: GroqKeyGuide(place: .firstRun))
+            .sizeThatFits(in: CGSize(width: OnboardingView.stepRoom.width, height: 10_000))
+        XCTAssertGreaterThan(guide.height, 5 * 14, "the cost line and four steps")
+        let chosen = #","chosen":"groq","model":"llama-3.3-70b-versatile","endpoint":"https://api.groq.com/openai/v1","to":"cloud""#
+        for (hasKey, choice, label) in [(false, "", "no key"), (true, "", "key saved"), (true, chosen, "chosen, local only")] {
+            let screens = ScreenModels(send: { _ in }, calendar: FakeCalendar(), apps: WorkspaceApps())
+            screens.cloud.apply(event(#"{"type":"llm.providers","ref":"x","local_only":true,"ready":false\#(choice),"providers":[{"id":"groq","default_model":"llama-3.3-70b-versatile","endpoint":"https://api.groq.com/openai/v1","custom_url":false,"needs_key":true,"has_key":\#(hasKey)}]}"#))
+            screens.cloud.select("groq")
+            XCTAssertFalse(screens.cloud.firstRunStartsOnOthers, "\(label): Groq's rows, not the other providers'")
+            if !choice.isEmpty {
+                XCTAssertTrue(screens.cloud.status.hasSuffix("local-only mode is on, so nothing is sent."), screens.cloud.status)
+            }
+            XCTAssertEqual(screens.polish.status, PolishModel.unavailable(nil), label)
+            let open = needed(FirstRunPolishStep(ownKey: .constant(true)), screens: screens)
+            let closed = needed(FirstRunPolishStep(ownKey: .constant(false)), screens: screens)
+            XCTAssertLessThanOrEqual(open.height, OnboardingView.stepRoom.height, label)
+            XCTAssertLessThanOrEqual(open.width, OnboardingView.stepRoom.width + 0.5, label)
+            XCTAssertGreaterThan(open.height - closed.height, guide.height, "\(label): the guide is shown")
+        }
+    }
+
+    func testTheModelsStepFitsTheSheetBeforeThePress() {
+        let screens = listed()
+        assertFits(screens.catalogue, screens: screens, "before the press")
+    }
+
+    /// Every model already on this Mac: the step was one line in an empty sheet. It lists the
+    /// choices as installed, as tall as before the press less the Download, and fits the sheet.
+    func testTheModelsStepWithEverythingOnThisMacListsItAndFillsTheStep() {
+        let available = listed()
+        let before = needed(FirstRunModelsStep(catalogue: available.catalogue), screens: available)
+        XCTAssertFalse(available.catalogue.allOnThisMac)
+        let screens = ScreenModels(send: { _ in }, calendar: FakeCalendar(), apps: WorkspaceApps())
+        screens.catalogue.apply(event(listedAll.replacingOccurrences(of: #""installed":false"#, with: #""installed":true"#)))
+        let catalogue = screens.catalogue
+        XCTAssertTrue(catalogue.firstRunModels.isEmpty, "everything is on this Mac")
+        XCTAssertTrue(catalogue.allOnThisMac)
+        XCTAssertTrue(FirstRunModelsStep.lead(allHere: true).hasPrefix("All set"))
+        // Each choice reads On this Mac (ChoiceRow), over its models with their sizes.
+        XCTAssertEqual(catalogue.choices, CatalogueModel.Choice.allCases)
+        for choice in catalogue.choices {
+            XCTAssertEqual(catalogue.state(of: choice), .installed, "\(choice)")
+            let entries = catalogue.entries(choice)
+            XCTAssertFalse(entries.isEmpty, "\(choice)")
+            for entry in entries {
+                XCTAssertTrue(CatalogueModel.facts(entry).contains(CatalogueModel.roundedSize(entry.sizeBytes)), entry.id)
+            }
+        }
+        XCTAssertEqual(catalogue.bytesToDownload(Set(CatalogueModel.Choice.allCases)), 0, "nothing to download")
+        let done = needed(FirstRunModelsStep(catalogue: catalogue), screens: screens)
+        XCTAssertGreaterThan(done.height, before.height * 0.8, "the step lists what is on this Mac")
+        assertFits(catalogue, screens: screens, "everything on this Mac")
+    }
+
+    /// Downloaded while the step is open: All set once the last model is in, not before.
+    func testTheModelsStepIsAllSetOnceTheLastDownloadEnds() {
+        let catalogue = listed().catalogue
+        catalogue.download(choices: [.accuracy, .speakers])
+        let order = ["silero-vad-v6-16k", "parakeet-tdt-0.6b-v3-coreml", "nemotron-3-diarization-q8", "qwen3-asr-1.7b-q8"]
+        for id in order {
+            XCTAssertFalse(catalogue.allOnThisMac, "before \(id) ends")
+            catalogue.apply(event(#"{"type":"model.update_finished","id":"\#(id)","next":"\#(id)","ok":true,"no_model_warm":false}"#))
+        }
+        XCTAssertFalse(catalogue.downloading)
+        XCTAssertTrue(catalogue.allOnThisMac)
+        XCTAssertFalse(catalogue.firstRunModels.isEmpty, "the step still lists what came down")
+    }
+
+    /// A listed model no choice names, not on this Mac, leaves the step all set: the step offers
+    /// only its choices, so nothing it could download is missing.
+    func testAModelOutsideTheChoicesNeverHoldsTheStepBack() {
+        let screens = ScreenModels(send: { _ in }, calendar: FakeCalendar(), apps: WorkspaceApps())
+        let installed = listedAll.replacingOccurrences(of: #""installed":false"#, with: #""installed":true"#)
+        let extra = #"{"id":"another-model","licence":"MIT","size_bytes":1000000,"installed":false,"jobs":[]}"#
+        screens.catalogue.apply(event(installed.replacingOccurrences(of: #""models":["#, with: #""models":[\#(extra),"#)))
+        let catalogue = screens.catalogue
+        XCTAssertFalse(catalogue.firstRunModels.isEmpty, "the outside model is listed and missing")
+        XCTAssertEqual(catalogue.choices, CatalogueModel.Choice.allCases)
+        XCTAssertTrue(catalogue.allOnThisMac)
+        XCTAssertEqual(catalogue.bytesToDownload(Set(CatalogueModel.Choice.allCases)), 0)
+    }
+
+    func testTheModelsStepFitsTheSheetWithADownloadsBar() {
+        let screens = listed()
+        let catalogue = screens.catalogue
+        catalogue.download(choices: [.speakers, .accuracy])
+        catalogue.apply(event(#"{"type":"model.update_finished","id":"silero-vad-v6-16k","next":"silero-vad-v6-16k","ok":true,"no_model_warm":false}"#))
+        catalogue.apply(event(#"{"type":"model.update_progress","id":"parakeet-tdt-0.6b-v3-coreml","next":"parakeet-tdt-0.6b-v3-coreml","done_bytes":120000000,"total_bytes":483105645}"#))
+        guard case .downloading(let progress?) = catalogue.state(of: .transcripts), progress.done > 0 else {
+            return XCTFail("the set's row should show its bar")
+        }
+        XCTAssertEqual(catalogue.state(of: .speakers), .waiting)
+        assertFits(catalogue, screens: screens, "with a bar")
+    }
+
+    func testTheModelsStepFitsTheSheetWithFailuresAndRetry() {
+        let screens = listed()
+        let catalogue = screens.catalogue
+        catalogue.download(choices: [.speakers])
+        catalogue.apply(event(#"{"type":"model.update_finished","id":"silero-vad-v6-16k","next":"silero-vad-v6-16k","ok":true,"no_model_warm":false}"#))
+        for id in ["parakeet-tdt-0.6b-v3-coreml", "nemotron-3-diarization-q8"] {
+            catalogue.apply(event(#"{"type":"model.update_finished","id":"\#(id)","next":"\#(id)","ok":false,"no_model_warm":false,"message":"\#(longFailure)"}"#))
+        }
+        XCTAssertEqual(catalogue.state(of: .transcripts), .failed(longFailure), "the set's row shows Retry")
+        XCTAssertEqual(catalogue.state(of: .speakers), .failed(longFailure), "and the diarizer's")
+        assertFits(catalogue, screens: screens, "with two failures")
+    }
+}
+
+/// How to get a free Groq key: the first run's and Settings > AI's steps (the Windows app's words),
+/// the buttons and pages they name, and Settings' guide at its narrowest.
+@MainActor
+final class GroqKeyGuideTests: XCTestCase {
+    func testTheStepsSayWhatToDoInOrderAndEndWhereTheGuideIs() {
+        XCTAssertEqual(GroqKeyGuide.title, "How to get a free Groq key")
+        XCTAssertEqual(GroqKeyGuide.cost, "Groq's Free plan costs $0 and has rate limits, listed on its Rate Limits page.")
+        XCTAssertTrue(GroqKeyGuide.cost.contains(GroqKeyGuide.rateLimitsLink))
+        let shared = [
+            "Open Groq's API Keys page:",
+            "Log in, or make a Groq account.",
+            "Press Create API Key and give the key a name, such as Inkwell.",
+        ]
+        XCTAssertEqual(GroqKeyGuide.steps(.firstRun), shared + ["Copy the key, paste it below and press Save, then Use Groq."])
+        XCTAssertEqual(GroqKeyGuide.steps(.settings), shared + ["Copy the key, choose Groq above, paste it and press Save key, then Use Groq."])
+        // The buttons the last steps name are the ones beside them: Save, Save key, Use Groq.
+        XCTAssertTrue(GroqKeyGuide.steps(.firstRun)[3].contains("press \(GroqKeyRows.saveTitle),"))
+        XCTAssertTrue(GroqKeyGuide.steps(.settings)[3].contains("press \(LanguageModelRows.saveKeyTitle),"))
+        let cloud = ScreenModels(send: { _ in }, calendar: FakeCalendar(), apps: WorkspaceApps()).cloud
+        cloud.apply(event(#"{"type":"llm.providers","ref":"x","local_only":true,"ready":false,"providers":[{"id":"groq","default_model":"llama-3.3-70b-versatile","endpoint":"https://api.groq.com/openai/v1","custom_url":false,"needs_key":true,"has_key":false}]}"#))
+        cloud.select("groq")
+        XCTAssertEqual(cloud.useLabel, "Use Groq")
+        XCTAssertTrue(GroqKeyGuide.steps(.firstRun)[3].hasSuffix("then \(cloud.useLabel)."))
+        XCTAssertTrue(GroqKeyGuide.steps(.settings)[3].hasSuffix("then \(cloud.useLabel)."))
+    }
+
+    func testTheLinksOpenGroqsOwnPagesAndAreNamedForVoiceOver() {
+        XCTAssertEqual(GroqKeyGuide.keysURL.absoluteString, "https://console.groq.com/keys")
+        XCTAssertEqual("https://" + GroqKeyGuide.keysLink, GroqKeyGuide.keysURL.absoluteString)
+        XCTAssertEqual(GroqKeyGuide.rateLimitsURL.absoluteString, "https://console.groq.com/docs/rate-limits")
+        // The cost line's link is its Rate Limits page, and only that.
+        let links = GroqKeyGuide.costText.runs.compactMap { run in
+            run.link.map { (String(GroqKeyGuide.costText[run.range].characters), $0) }
+        }
+        XCTAssertEqual(links.map(\.0), [GroqKeyGuide.rateLimitsLink])
+        XCTAssertEqual(links.map(\.1), [GroqKeyGuide.rateLimitsURL])
+        XCTAssertEqual(GroqKeyGuide.keysLinkName, "Open Groq's API Keys page in your browser")
+        XCTAssertEqual(GroqKeyGuide.stepName(2, of: 4, "Log in, or make a Groq account."), "Step 2 of 4: Log in, or make a Groq account.")
+    }
+
+    /// Settings' narrowest content beside the sidebar (the 720-pt window less the sidebar and the
+    /// margins, as StatsLayoutTests measures it): the guide wraps inside it and never asks for more.
+    func testSettingsGuideFitsTheNarrowestSettingsWidth() {
+        let width: CGFloat = 720 - 280 - 96
+        let hosting = NSHostingController(rootView: GroqKeyGuide(place: .settings))
+        let size = hosting.sizeThatFits(in: CGSize(width: width, height: 10_000))
+        XCTAssertLessThanOrEqual(size.width, width + 0.5)
+        XCTAssertGreaterThan(size.height, 5 * 14, "the cost line and four steps")
+        XCTAssertLessThan(hosting.sizeThatFits(in: .zero).width, width, "its minimum")
+    }
+}
+
+/// The Polish step's "Use Groq's free model" opened only from its arrow: a click on its title did
+/// nothing (DisclosureGroup on the Mac). Clicks sent to a real window, on the title and the arrow.
+@MainActor
+final class LabelledDisclosureTests: XCTestCase {
+    @MainActor private final class Opened {
+        var value = false
+    }
+
+    private struct Host: View {
+        let opened: Opened
+        @State private var isExpanded = false
+
+        var body: some View {
+            LabelledDisclosure(title: "Use Groq's free model", isExpanded: $isExpanded) {
+                Text("The rows")
+            }
+            .padding(LabelledDisclosureTests.margin)
+            .frame(width: 400, height: 200, alignment: .topLeading)
+            .onChange(of: isExpanded) { opened.value = isExpanded }
+        }
+    }
+
+    fileprivate static let margin: CGFloat = 20
+
+    /// Clicks `point` and waits up to two seconds for the disclosure to read `expected`; a click
+    /// that toggled twice would read it and then turn back, so the state is read again after.
+    private func click(_ point: NSPoint, in window: NSWindow, expect expected: Bool, opened: Opened) -> Bool {
+        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+            guard let event = NSEvent.mouseEvent(
+                with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: 1, pressure: 1)
+            else { return false }
+            window.sendEvent(event)
+        }
+        let deadline = Date().addingTimeInterval(2)
+        while opened.value != expected, Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+        }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        return opened.value == expected
+    }
+
+    func testTheTitlesRowOpensAndClosesItAndTheArrowStillDoes() throws {
+        // Where the title and the arrow are: the closed row's width ends with the title's.
+        let title = NSHostingController(rootView: Text("Use Groq's free model").fixedSize())
+            .sizeThatFits(in: CGSize(width: 1000, height: 1000))
+        let row = NSHostingController(rootView: LabelledDisclosure(title: "Use Groq's free model", isExpanded: .constant(false)) {
+            Text("The rows")
+        }.fixedSize()).sizeThatFits(in: CGSize(width: 1000, height: 1000))
+        XCTAssertGreaterThan(row.width, title.width + 8, "an arrow before the title")
+
+        let opened = Opened()
+        let window = NSWindow(
+            contentRect: NSRect(x: 200, y: 200, width: 400, height: 200), styleMask: [.titled], backing: .buffered, defer: false)
+        window.isReleasedWhenClosed = false
+        defer { window.close() }
+        window.contentView = NSHostingView(rootView: Host(opened: opened))
+        window.makeKeyAndOrderFront(nil)
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        let height = try XCTUnwrap(window.contentView).bounds.height
+        let y = height - Self.margin - row.height / 2
+        let onTitle = NSPoint(x: Self.margin + row.width - title.width / 2, y: y)
+        // The rest of the row, past the title's end: the row is the label, not only its words.
+        let pastTitle = NSPoint(x: Self.margin + row.width + 100, y: y)
+        // The arrow answers only at the row's leading edge, a few points wide.
+        let onArrow = NSPoint(x: Self.margin + 3, y: y)
+
+        for (point, name) in [(onTitle, "the title"), (pastTitle, "the row past the title"), (onArrow, "the arrow")] {
+            XCTAssertTrue(click(point, in: window, expect: true, opened: opened), "\(name) opens it")
+            XCTAssertTrue(click(point, in: window, expect: false, opened: opened), "\(name) closes it")
         }
     }
 }
@@ -1569,7 +3154,7 @@ final class CoreControllerCommandTests: XCTestCase {
         XCTAssertEqual(logged.messages, [], "nothing was dropped")
 
         // After the stop, a command has nowhere to go: said, never silently dropped.
-        core.send(.modesList)
+        core.send(.modesList(ref: "modes:1"))
         XCTAssertEqual(logged.messages.count, 1)
         XCTAssertTrue(logged.messages[0].contains("modes.list"), logged.messages[0])
     }

@@ -42,6 +42,37 @@ public sealed record ConsentDestination(LlmDestination Kind, string? Endpoint, s
     };
 }
 
+/// <summary>A destination the user agreed a feature may send to, as consent.state lists it.</summary>
+/// <param name="Kind">On this PC, or a cloud provider.</param>
+/// <param name="Endpoint">For cloud, where it sends: what consent.revoke names.</param>
+/// <param name="Name">For cloud, the provider's name the user agreed to.</param>
+public sealed record ConsentGrant(LlmDestination Kind, string? Endpoint, string? Name)
+{
+    /// <summary>The words for it in Settings > AI: "Models on this PC", or the provider's name.</summary>
+    public string Label => Kind == LlmDestination.OnDevice
+        ? "Models on this PC"
+        : string.IsNullOrEmpty(Name) ? Host(Endpoint ?? "") : Name;
+
+    /// <summary>What going there means for the user's words.</summary>
+    public string Detail => Kind == LlmDestination.OnDevice
+        ? "Your words stay on this PC."
+        : $"Your words leave this PC for {Host(Endpoint ?? "")}.";
+
+    /// <summary>Whether it covers <paramref name="destination"/>: one on this PC covers every model on it; a cloud one, its endpoint.</summary>
+    public bool Covers(ConsentDestination destination)
+    {
+        ArgumentNullException.ThrowIfNull(destination);
+        return Kind == destination.Kind && (Kind == LlmDestination.OnDevice || Trimmed(Endpoint) == Trimmed(destination.Endpoint));
+    }
+
+    /// <summary>An endpoint as the core compares them: without its trailing slashes, which the core drops.</summary>
+    private static string Trimmed(string? endpoint) => (endpoint ?? "").TrimEnd('/');
+
+    /// <summary>An endpoint's host ("api.groq.com"), or the endpoint as it is.</summary>
+    public static string Host(string endpoint) =>
+        Uri.TryCreate(endpoint, UriKind.Absolute, out var uri) && uri.Host.Length > 0 ? uri.Host : endpoint;
+}
+
 /// <summary>The core's state for a feature, as the consent model keeps it.</summary>
 /// <param name="On">The feature's switch.</param>
 /// <param name="Allowed">Whether the consent covers the model the feature would use now.</param>
@@ -49,6 +80,15 @@ public sealed record ConsentDestination(LlmDestination Kind, string? Endpoint, s
 /// <param name="Error">What the core could not read ("couldn't read ...").</param>
 public sealed record ConsentSnapshot(bool On, bool Allowed, ConsentDestination? Destination, string? Error)
 {
+    /// <summary>
+    /// Every destination the user agreed the feature may send to (polish holds one per destination;
+    /// Settings > AI lists them, each with Revoke).
+    /// </summary>
+    public IReadOnlyList<ConsentGrant> Consents { get; init; } = [];
+
+    /// <summary>Whether one of the consents covers <paramref name="destination"/>.</summary>
+    public bool Covers(ConsentDestination destination) => Consents.Any(c => c.Covers(destination));
+
     public static ConsentSnapshot From(ConsentState state)
     {
         ArgumentNullException.ThrowIfNull(state);
@@ -58,7 +98,12 @@ public sealed record ConsentSnapshot(bool On, bool Allowed, ConsentDestination? 
             LlmDestination.Cloud when state.Endpoint is not null => ConsentDestination.Cloud(state.Endpoint, state.Name ?? ""),
             _ => null,
         };
-        return new ConsentSnapshot(state.On, state.Allowed, destination, state.Error);
+        // A cloud consent without its endpoint could not be revoked or matched: left out.
+        var consents = (state.Consents ?? [])
+            .Where(c => c.To == LlmDestination.OnDevice || c.Endpoint is not null)
+            .Select(c => new ConsentGrant(c.To, c.To == LlmDestination.OnDevice ? null : c.Endpoint, c.Name))
+            .ToList();
+        return new ConsentSnapshot(state.On, state.Allowed, destination, state.Error) { Consents = consents };
     }
 }
 
@@ -80,6 +125,8 @@ public enum ConsentFailure
     /// refused): the feature stays as it was.
     /// </summary>
     Allow,
+    /// <summary>A consent could not be revoked: it may still hold.</summary>
+    Revoke,
 }
 
 public sealed class ConsentModel : ObservableModel
@@ -95,6 +142,7 @@ public sealed class ConsentModel : ObservableModel
     /// <summary>The newest consent.get, and the newest consent.allow, for their failures.</summary>
     private string? newestGet;
     private string? newestAllow;
+    private string? newestRevoke;
 
     /// <param name="switchSettingId">The id of the command that turns the feature's switch off (its command.failed carries it).</param>
     public ConsentModel(LlmFeature feature, string switchSettingId, Action<CoreCommand> send)
@@ -121,8 +169,27 @@ public sealed class ConsentModel : ObservableModel
     /// <summary>Which screen asked, so only that one shows the step (the first-run sheet can sit over Settings).</summary>
     public ConsentHost? Host { get; private set; }
 
+    /// <summary>
+    /// How many steps were put on screen. The first-run sheet shows the step inside it, under the
+    /// own key's rows, so it brings each new one into view (a second Use asks again with the same
+    /// words, and counts), and never scrolls for anything else.
+    /// </summary>
+    public int Asked { get; private set; }
+
     /// <summary>For voice edit, the key the step turns it on with.</summary>
     public string? PendingKey { get; private set; }
+
+    /// <summary>The step on screen names a model that is not chosen yet: Allow chooses it first.</summary>
+    public bool Choosing { get; private set; }
+
+    /// <summary>
+    /// The destination the user allowed before its model was chosen, waiting for the core to name
+    /// it; the consent is sent then.
+    /// </summary>
+    public ConsentDestination? Agreed { get; private set; }
+
+    /// <summary>What Allow does first when the step names a model not chosen yet; whether it sent the choice.</summary>
+    private Func<bool>? choose;
 
     /// <summary>Where the feature would send now, if the core named a model.</summary>
     public ConsentDestination? Destination => State?.Destination;
@@ -158,6 +225,8 @@ public sealed class ConsentModel : ObservableModel
                     return $"Couldn't save the change, so {what} {stays} as {was}.";
                 case ConsentFailure.Allow:
                     return $"Couldn't turn {what} on, so {(meetings ? "they" : "it")} {stays} off. Try again.";
+                case ConsentFailure.Revoke:
+                    return $"Couldn't revoke that, so {what} may still send there. Try again.";
                 default:
                     break;
             }
@@ -192,6 +261,20 @@ public sealed class ConsentModel : ObservableModel
         LlmFeature.Edit => "Turn on voice edit?",
         _ => "Turn on summaries and Ask?",
     };
+
+    /// <summary>What Narrator hears as an inline step appears: its heading, then what it says (where the words go).</summary>
+    public static string Announcement(LlmFeature feature, ConsentDestination destination) =>
+        $"{Title(feature)} {Message(feature, destination)}";
+
+    /// <summary>
+    /// Focus and Enter land on Cancel for a model off this PC, so Enter never agrees to send words
+    /// away and agreeing is a deliberate press; on the agreeing button for one on this PC.
+    /// </summary>
+    public static bool FocusesCancel(ConsentDestination destination)
+    {
+        ArgumentNullException.ThrowIfNull(destination);
+        return !destination.IsOnDevice;
+    }
 
     /// <summary>What the consent step says: what the feature sends, and where the words go for this model.</summary>
     public static string Message(LlmFeature feature, ConsentDestination destination)
@@ -271,14 +354,45 @@ public sealed class ConsentModel : ObservableModel
         {
             return;
         }
+        ClearStep();
         Failure = null;
+        // An agreement waiting for its choice is not this step's: it is dropped, so it can never
+        // allow anything after this.
+        Agreed = null;
         Pending = destination;
         Host = host;
         PendingKey = key;
+        Asked++;
         Changed();
     }
 
-    /// <summary>The consent step's Allow: the user agreed to where the feature sends. The core records it only if that is still where the model goes.</summary>
+    /// <summary>
+    /// Shows the consent step for <paramref name="destination"/>, the model <paramref name="choose"/>
+    /// will choose (the first run's Use Groq): nothing is sent until Allow, which runs
+    /// <paramref name="choose"/> and sends the consent once the core names that destination.
+    /// <paramref name="choose"/> says whether it sent the choice (false: what it would choose is no
+    /// longer what the step named).
+    /// </summary>
+    public void Ask(ConsentDestination destination, ConsentHost host, Func<bool> choose)
+    {
+        ArgumentNullException.ThrowIfNull(destination);
+        ArgumentNullException.ThrowIfNull(choose);
+        Failure = null;
+        Agreed = null;
+        Pending = destination;
+        Host = host;
+        PendingKey = null;
+        Choosing = true;
+        this.choose = choose;
+        Asked++;
+        Changed();
+    }
+
+    /// <summary>
+    /// The consent step's Allow: the user agreed to where the feature sends. The core records it
+    /// only if that is still where the model goes. A step naming a model not chosen yet chooses it
+    /// first, and the consent waits for the core to name it.
+    /// </summary>
     public void Allow()
     {
         if (Pending is not ConsentDestination destination)
@@ -286,11 +400,58 @@ public sealed class ConsentModel : ObservableModel
             return;
         }
         var key = PendingKey;
+        var chooseFirst = Choosing ? choose : null;
         ClearStep();
         Failure = null;
+        if (chooseFirst is not null)
+        {
+            // Waiting only for a choice that went: one that did not would leave an agreement that
+            // a later state could act on, with no step on screen.
+            if (chooseFirst())
+            {
+                Agreed = destination;
+            }
+            else
+            {
+                Failure = ConsentFailure.Allow;
+            }
+            Changed();
+            return;
+        }
+        SendAllow(destination, key);
+        Changed();
+    }
+
+    private void SendAllow(ConsentDestination destination, string? key)
+    {
         var reference = NextRef("allow");
         newestAllow = reference;
         send(new CoreCommand.ConsentAllow(Feature, destination.Kind, destination.IsOnDevice ? null : destination.Endpoint, key, reference));
+    }
+
+    /// <summary>
+    /// The user agreed, in a mode's own step (Settings > Modes), that polish may send to
+    /// <paramref name="destination"/>, a model a mode can pick: the core adds that consent (and
+    /// turns polish's switch on), or fails if that model sends elsewhere now. Returns the command's
+    /// ref, which comes back in its consent.state or as the id of a command.failed: the asker
+    /// matches them and says what failed, so a failure here is not shown under the switch too.
+    /// </summary>
+    public string AllowForMode(ConsentDestination destination)
+    {
+        ArgumentNullException.ThrowIfNull(destination);
+        var reference = NextRef("allow");
+        send(new CoreCommand.ConsentAllow(Feature, destination.Kind, destination.IsOnDevice ? null : destination.Endpoint, null, reference));
+        return reference;
+    }
+
+    /// <summary>Settings > AI's Revoke: takes the consent for one destination away; the others stay.</summary>
+    public void Revoke(ConsentGrant grant)
+    {
+        ArgumentNullException.ThrowIfNull(grant);
+        Failure = null;
+        var reference = NextRef("revoke");
+        newestRevoke = reference;
+        send(new CoreCommand.ConsentRevoke(Feature, grant.Kind, grant.Kind == LlmDestination.OnDevice ? null : grant.Endpoint, reference));
         Changed();
     }
 
@@ -306,6 +467,8 @@ public sealed class ConsentModel : ObservableModel
         Pending = null;
         Host = null;
         PendingKey = null;
+        Choosing = false;
+        choose = null;
     }
 
     /// <summary>
@@ -315,6 +478,8 @@ public sealed class ConsentModel : ObservableModel
     public void SwitchedOff()
     {
         ClearStep();
+        // Off withdraws the consent: an agreement still waiting for its choice goes with it.
+        Agreed = null;
         Failure = null;
         if (!hasBeforeOff)
         {
@@ -337,6 +502,7 @@ public sealed class ConsentModel : ObservableModel
         {
             "consent.get" => failed.Id?.StartsWith($"consent.get:{feature}:", StringComparison.Ordinal) ?? false,
             "consent.allow" => failed.Id?.StartsWith($"consent.allow:{feature}:", StringComparison.Ordinal) ?? false,
+            "consent.revoke" => failed.Id?.StartsWith($"consent.revoke:{feature}:", StringComparison.Ordinal) ?? false,
             "setting.set" => failed.Id == SwitchSettingId,
             _ => false,
         };
@@ -361,6 +527,7 @@ public sealed class ConsentModel : ObservableModel
                 return false;
             case CoreStopped:
                 ClearStep();
+                Agreed = null;
                 return true;
             case ConsentState value when value.Feature == Feature:
                 // The answer to an older request, arriving after a newer one was sent: the newer
@@ -373,15 +540,33 @@ public sealed class ConsentModel : ObservableModel
                 State = ConsentSnapshot.From(value);
                 beforeOff = null;
                 hasBeforeOff = false;
-                if (Failure is ConsentFailure.Read or ConsentFailure.Write)
+                if (Failure is ConsentFailure.Read or ConsentFailure.Write or ConsentFailure.Revoke)
                 {
                     Failure = null;
                 }
                 // The step names a destination that is no longer the model's: close it rather than
                 // change its words under the user's finger. Turning the feature on asks about the new one.
-                if (Pending is not null && Pending != Destination)
+                // A step that chooses its model names one the core does not know yet: it stays.
+                if (Pending is not null && !Choosing && Pending != Destination)
                 {
                     ClearStep();
+                }
+                // The model the user allowed is chosen: the consent goes, for the destination the
+                // core names, only if it is the one agreed to (the core then records it only if it
+                // still is). The core's own state after the choice (no ref) naming another settles it
+                // as refused; an answer to an older read is not about the choice.
+                if (Agreed is ConsentDestination agreed)
+                {
+                    if (Destination is ConsentDestination now && now.Kind == agreed.Kind && now.Endpoint == agreed.Endpoint)
+                    {
+                        Agreed = null;
+                        SendAllow(now, null);
+                    }
+                    else if (value.Ref is null)
+                    {
+                        Agreed = null;
+                        Failure = ConsentFailure.Allow;
+                    }
                 }
                 return true;
             case CommandFailed failed when failed.Id == SwitchSettingId && failed.Command == "setting.set":
@@ -398,6 +583,14 @@ public sealed class ConsentModel : ObservableModel
                 return true;
             case CommandFailed failed when failed.Id is not null && failed.Id == newestAllow:
                 Failure = ConsentFailure.Allow;
+                return true;
+            case CommandFailed failed when failed.Id is not null && failed.Id == newestRevoke:
+                Failure = ConsentFailure.Revoke;
+                return true;
+            case CommandFailed { Command: "llm.choose" } when Agreed is not null:
+                // The choice the agreement waits for was refused (CloudModel says why): it is
+                // dropped, or choosing that model later, where nothing asks, would allow it.
+                Agreed = null;
                 return true;
             case DictationWarningEvent { Kind: DictationWarning.PolishNotAllowed } when Feature == LlmFeature.Polish:
             case DictationEditFailed { Reason: EditFailure.NotAllowed } when Feature == LlmFeature.Edit:

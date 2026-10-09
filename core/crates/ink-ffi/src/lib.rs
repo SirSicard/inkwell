@@ -8,7 +8,7 @@
 //! | [`events`] | events as JSON, per `schema/events.schema.json` |
 //! | [`schema`] | the schema's model, its validator and the Swift generator |
 //! | [`external`] | engines the shell registers (`InkEngineVTable`): offline, live streams, language models; their completion calls and stream events |
-//! | [`llms`] | the language models the shell registered, and the polish model built on them |
+//! | [`llms`] | the language models the shell registered, and the polish model built on them; a mode's own model ([`llms::ModelRef`]) |
 //! | [`gate`] | exclusive holds on models during updates, and the engine every chain calls |
 //! | [`mailbox`] | the bounded queue from the pump to a chain's worker |
 //! | [`meeting`] | a meeting run: capture, the pump, the meeting worker |
@@ -16,6 +16,7 @@
 //! | [`queries`] | the screens' commands (permissions, owed, notes, settings, modes, models), on their own thread |
 //! | [`dictation`] | the dictation worker |
 //! | [`voice`] | dictation, live: the keys, the mic, the worker and the engine's warm-up |
+//! | [`modes`] | dictation modes listed, saved and deleted, answered on `queries`' thread |
 //! | [`library`] | the library as the screens read it (records, search, a record, counts), answered on `queries`' thread |
 //! | [`import02`] | Inkwell 0.2's data found, counted and imported, answered on `queries`' thread |
 //! | [`logging`] | the only logger and `tracing` subscriber, with both privacy filters |
@@ -38,30 +39,39 @@
 #![warn(missing_docs)]
 
 pub mod asking;
+pub mod calls;
 pub mod capture;
 pub mod cloud;
 pub mod consent;
 pub mod control;
 pub mod detection;
+pub mod devices;
 pub mod dictation;
 pub mod engines;
 pub mod events;
 #[allow(unsafe_code)]
 pub mod external;
 pub mod gate;
+pub mod hotkey;
 pub mod hub;
 pub mod import02;
 pub mod library;
 pub mod llms;
+pub mod local;
 pub mod logging;
 pub mod mailbox;
 pub mod meeting;
+pub mod meeting_keys;
+pub mod models;
+pub mod modes;
 pub mod phrases;
 pub mod queries;
 pub mod recovery;
 pub mod retention;
 pub mod runtime;
 pub mod schema;
+pub mod sound;
+pub mod stats;
 mod vad;
 pub mod voice;
 

@@ -10,10 +10,12 @@
 // setting.set, and the core rebinds at once and answers dictation.ready or dictation.off. Nothing
 // here polls.
 //
-// Windows: the keys are the right-hand modifiers held on their own (right_control, the default,
-// right_alt, right_shift, right_win); fn is refused (the keyboard handles it in firmware). A lost
-// key is the low-level keyboard hook that Windows removed and the core could not put back, not a
-// permission, so it says so and turning dictation on again (or coming back to the app) retries.
+// Windows: the quick picks are the right-hand modifiers held on their own (right_control, the
+// default, right_alt, right_shift, right_win); any other key the core accepts can be recorded
+// (ShortcutRecorderModel), and shows in the pickers as KeyNotation writes it. A lost key is the
+// low-level keyboard hook that Windows removed and the core could not put back, not a permission,
+// so it says so and turning dictation on again (or coming back to the app) retries. While a
+// shortcut is recorded dictation is paused (SuspendForRecording), so the key can't start a take.
 using Inkwell.Core.Events;
 
 namespace Inkwell.Core.Screens;
@@ -90,15 +92,51 @@ public sealed class DictationModel : ObservableModel
     /// <summary>A token's key, for showing it.</summary>
     public static DictationKey? Key(string? token) => Keys.FirstOrDefault(k => k.Token == token);
 
-    /// <summary>How a token reads on a key cap: a picked key's cap, else a chord spelled out ("ctrl+shift+space" reads "Ctrl+Shift+Space").</summary>
+    /// <summary>How a token reads on a key cap, in Windows notation ("ctrl+shift+space" reads "Ctrl+Shift+Space"; KeyNotation).</summary>
     public static string Cap(string token)
     {
         ArgumentNullException.ThrowIfNull(token);
-        if (Key(token) is DictationKey key)
+        return Key(token)?.Cap ?? KeyNotation.Describe(token).Cap;
+    }
+
+    /// <summary>A shortcut is being recorded: dictation is paused until it ends.</summary>
+    public bool SuspendedForRecording { get; private set; }
+
+    /// <summary>
+    /// A shortcut is being recorded: the keys are let go of, or the current key would start a take
+    /// and the core's hook would swallow it before the recorder saw it. Nothing turns them on again
+    /// until the recording ends (Enable waits), whatever the switch says meanwhile.
+    /// </summary>
+    public void SuspendForRecording()
+    {
+        if (SuspendedForRecording)
         {
-            return key.Cap;
+            return;
         }
-        return string.Join("+", token.Split('+').Select(part => part.Length == 0 ? part : char.ToUpperInvariant(part[0]) + part[1..]));
+        SuspendedForRecording = true;
+        if (WantsOn == true)
+        {
+            Disable();
+        }
+        Changed();
+    }
+
+    /// <summary>
+    /// The recording ended (saved, refused or cancelled): dictation comes back, on the key just
+    /// saved if one was (setting.set was sent first, and the core runs both in order).
+    /// </summary>
+    public void ResumeAfterRecording()
+    {
+        if (!SuspendedForRecording)
+        {
+            return;
+        }
+        SuspendedForRecording = false;
+        if (WantsOn == true)
+        {
+            Enable();
+        }
+        Changed();
     }
 
     public DictationState State { get; private set; } = new DictationState.Starting();
@@ -130,9 +168,13 @@ public sealed class DictationModel : ObservableModel
     /// </summary>
     public DictationCommandFailure? CommandFailure { get; private set; }
 
-    /// <summary>Turns dictation on (or, when on, rebinds its keys).</summary>
+    /// <summary>Turns dictation on (or, when on, rebinds its keys). Waits while a shortcut is recorded.</summary>
     public void Enable()
     {
+        if (SuspendedForRecording)
+        {
+            return;
+        }
         nextRef++;
         var minutes = (int)Math.Round(utcOffset().TotalMinutes);
         send(new CoreCommand.DictationEnable(minutes, $"{RefPrefix}{nextRef}"));
@@ -192,7 +234,7 @@ public sealed class DictationModel : ObservableModel
     /// <summary>Back in the app: try again what turning dictation on may fix.</summary>
     public void AppBecameActive()
     {
-        if (WantsOn == false)
+        if (WantsOn == false || SuspendedForRecording)
         {
             return;
         }
@@ -210,6 +252,12 @@ public sealed class DictationModel : ObservableModel
     {
         KeyFailure = null;
         send(new CoreCommand.SettingSet(ShellSetting.DictationKey, token));
+        // Off because the key before was refused: the core binds nothing until asked, so a new
+        // key turns dictation on again (after the save, which the core runs first).
+        if (State is DictationState.Off { Reason: DictationOffReason.KeyRefused } && WantsOn == true)
+        {
+            Enable();
+        }
         Changed();
     }
 
@@ -255,6 +303,10 @@ public sealed class DictationModel : ObservableModel
     {
         get
         {
+            if (SuspendedForRecording)
+            {
+                return false;
+            }
             if (CommandFailure is not null)
             {
                 return true;
@@ -286,6 +338,10 @@ public sealed class DictationModel : ObservableModel
             {
                 return "Dictation couldn't be turned off.";
             }
+            if (SuspendedForRecording)
+            {
+                return "Dictation is paused while you record a shortcut.";
+            }
             if (KeyLost)
             {
                 return KeyLostText;
@@ -299,7 +355,7 @@ public sealed class DictationModel : ObservableModel
                     return off.Reason switch
                     {
                         DictationOffReason.NeedsAccessibility => "Dictation needs “Type for you” to hold its key.",
-                        DictationOffReason.KeyRefused => $"That key can't be used here{detail}",
+                        DictationOffReason.KeyRefused => $"That key can't be used here{(off.Message is null ? "" : $": {off.Message}")}. Pick another, or record a shortcut.",
                         DictationOffReason.Unsupported => "Dictation isn't available in this build.",
                         DictationOffReason.WorkerStopped => "Dictation stopped after repeated failures.",
                         DictationOffReason.Disabled => "Dictation is off.",
@@ -323,6 +379,11 @@ public sealed class DictationModel : ObservableModel
     {
         get
         {
+            // Paused for a recording: the line says so, and it is not a problem.
+            if (SuspendedForRecording)
+            {
+                return false;
+            }
             if (State is DictationState.Off off)
             {
                 return off.Reason != DictationOffReason.Disabled;
@@ -354,6 +415,9 @@ public sealed class DictationModel : ObservableModel
             case CoreStopped:
                 State = new DictationState.Starting();
                 WantsOn = null;
+                // The restarted core turns dictation on from its switch; a recording it cut short
+                // leaves nothing to resume.
+                SuspendedForRecording = false;
                 return true;
             case DictationReady ready:
                 State = new DictationState.Live(ready.Key, ready.EditKey);

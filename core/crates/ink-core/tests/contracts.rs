@@ -249,8 +249,11 @@ fn records_segments_search_speakers_and_settings() {
     store.set_speaker_name(&older, &spk, "Guest").unwrap();
     assert_eq!(
         store.speaker_names(&older).unwrap(),
-        vec![(spk, "Guest".to_string())]
+        vec![(spk.clone(), "Guest".to_string())]
     );
+    store.clear_speaker_name(&older, &spk).unwrap();
+    assert!(store.speaker_names(&older).unwrap().is_empty());
+    store.set_speaker_name(&older, &spk, "Guest").unwrap();
 
     let summary = Summary {
         items: Vec::new(),
@@ -717,6 +720,7 @@ fn options(channel: Channel) -> TranscribeOptions {
         channel,
         context: None,
         cancel: CancelToken::new(),
+        live: false,
     }
 }
 
@@ -965,6 +969,124 @@ fn unknown_input_devices_are_refused() {
         p.capture.default_output().unwrap().map(|d| d.transport),
         Some(Transport::BuiltIn)
     );
+}
+
+fn input(id: &str, name: &str, transport: Transport, is_default: bool) -> DeviceInfo {
+    DeviceInfo {
+        id: DeviceId(id.into()),
+        name: name.into(),
+        transport,
+        is_default,
+    }
+}
+
+/// Automatic is what `open_mic(None)` opens: the default input, else the first; none at all is
+/// `None`, and opening then fails rather than delivering silence.
+#[test]
+fn the_automatic_input_is_what_an_unnamed_mic_opens() {
+    let mock = Arc::new(MockPlatform::new().with_devices(
+        vec![
+            input("usb", "USB Microphone", Transport::Usb, false),
+            input("built-in", "Built-in Microphone", Transport::BuiltIn, false),
+        ],
+        None,
+    ));
+    let p = mock.platform();
+    let auto = p.capture.automatic_input().unwrap().unwrap();
+    assert_eq!(
+        (auto.device.id.0.as_str(), auto.reason),
+        ("usb", AutoReason::FirstInput)
+    );
+    p.capture.open_mic(None).unwrap();
+    assert!(mock.set_default_input("built-in"));
+    let auto = p.capture.automatic_input().unwrap().unwrap();
+    assert_eq!(
+        (auto.device.id.0.as_str(), auto.reason),
+        ("built-in", AutoReason::DefaultInput)
+    );
+    p.capture.open_mic(None).unwrap();
+    assert_eq!(
+        mock.mic_opens(),
+        [DeviceId("usb".into()), DeviceId("built-in".into())]
+    );
+    let none = Arc::new(MockPlatform::new().with_devices(Vec::new(), None));
+    assert_eq!(none.platform().capture.automatic_input().unwrap(), None);
+    assert!(matches!(
+        none.platform().capture.open_mic(None),
+        Err(PlatformError::Device(_))
+    ));
+}
+
+/// The watcher hears each scripted change on the caller's thread, and nothing once unwatched; an
+/// unplugged mic's open source ends (no more audio) and its stop says why.
+#[test]
+fn device_changes_reach_the_watcher_and_an_unplugged_mic_ends() {
+    let mock = Arc::new(MockPlatform::new());
+    let p = mock.platform();
+    assert!(
+        !mock.notify_devices(DeviceChange::Devices),
+        "nobody watches"
+    );
+    let heard = Arc::new(Mutex::new(Vec::new()));
+    let sink = heard.clone();
+    p.capture
+        .watch_devices(Arc::new(move |c| sink.lock().unwrap().push(c)))
+        .unwrap();
+    assert!(mock.watching_devices());
+
+    let mut mic = p.capture.open_mic(None).unwrap();
+    mic.start(Box::new(Recorder(Arc::default()))).unwrap();
+    assert!(mock.feed(Channel::Mic, &[0.1; 480], 0));
+    mock.plug(input("usb", "USB Microphone", Transport::Usb, false));
+    mock.set_default_output(input("buds", "Example Buds", Transport::Bluetooth, true));
+    assert_eq!(
+        p.capture.default_output().unwrap().map(|d| d.transport),
+        Some(Transport::Bluetooth)
+    );
+    assert!(mock.unplug("mock-mic"));
+    assert!(mic.ended(), "its device went");
+    assert!(!mock.feed(Channel::Mic, &[0.1; 480], 0), "nothing more");
+    assert!(matches!(mic.stop(), Err(PlatformError::Device(_))));
+    assert_eq!(
+        *heard.lock().unwrap(),
+        [
+            DeviceChange::Devices,
+            DeviceChange::DefaultOutput,
+            DeviceChange::Devices
+        ]
+    );
+    assert_eq!(
+        p.capture.input_devices().unwrap(),
+        [input("usb", "USB Microphone", Transport::Usb, false)]
+    );
+    assert!(!mock.unplug("mock-mic"), "already gone");
+
+    p.capture.unwatch_devices();
+    mock.plug(input(
+        "mock-mic",
+        "Built-in Microphone",
+        Transport::BuiltIn,
+        true,
+    ));
+    assert_eq!(heard.lock().unwrap().len(), 3, "unwatched");
+    assert_eq!(
+        p.capture.input_devices().unwrap()[0].id,
+        DeviceId("mock-mic".into()),
+        "a default plugged in goes first"
+    );
+}
+
+/// The output list is the platform's picker; without one (macOS) it is unsupported, not empty.
+#[test]
+fn outputs_are_listed_only_where_there_is_a_picker() {
+    let mock = Arc::new(MockPlatform::new());
+    assert_eq!(mock.platform().capture.output_devices().unwrap().len(), 1);
+    let mac = Arc::new(MockPlatform::new().with_outputs(None));
+    assert!(matches!(
+        mac.platform().capture.output_devices(),
+        Err(PlatformError::Unsupported(_))
+    ));
+    assert_eq!(mac.platform().capture.default_output().unwrap(), None);
 }
 
 #[test]

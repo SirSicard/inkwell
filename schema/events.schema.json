@@ -104,6 +104,9 @@
       "$ref": "#/$defs/MeetingFarEndFallback"
     },
     {
+      "$ref": "#/$defs/MeetingMicSwitched"
+    },
+    {
       "$ref": "#/$defs/MeetingDetected"
     },
     {
@@ -111,6 +114,12 @@
     },
     {
       "$ref": "#/$defs/MeetingDetection"
+    },
+    {
+      "$ref": "#/$defs/MeetingsCalls"
+    },
+    {
+      "$ref": "#/$defs/MeetingDiscarded"
     },
     {
       "$ref": "#/$defs/MeetingAnswered"
@@ -203,10 +212,37 @@
       "$ref": "#/$defs/NoteDeleted"
     },
     {
+      "$ref": "#/$defs/SpeakerNamed"
+    },
+    {
+      "$ref": "#/$defs/RecordDeleted"
+    },
+    {
       "$ref": "#/$defs/ModelsListed"
     },
     {
       "$ref": "#/$defs/SettingValue"
+    },
+    {
+      "$ref": "#/$defs/AudioDevices"
+    },
+    {
+      "$ref": "#/$defs/AudioDevicesChanged"
+    },
+    {
+      "$ref": "#/$defs/AudioInputFallback"
+    },
+    {
+      "$ref": "#/$defs/AudioTestStarted"
+    },
+    {
+      "$ref": "#/$defs/AudioTestLevel"
+    },
+    {
+      "$ref": "#/$defs/AudioTested"
+    },
+    {
+      "$ref": "#/$defs/HotkeyChecked"
     },
     {
       "$ref": "#/$defs/ConsentState"
@@ -249,6 +285,15 @@
     },
     {
       "$ref": "#/$defs/LibrarySwept"
+    },
+    {
+      "$ref": "#/$defs/StatsCounted"
+    },
+    {
+      "$ref": "#/$defs/MilestonesReached"
+    },
+    {
+      "$ref": "#/$defs/MeetingsShortcutState"
     }
   ],
   "$defs": {
@@ -309,9 +354,25 @@
     },
     "FailureCode": {
       "type": "string",
-      "description": "A command.failed a shell acts on: list_unreadable (a snippets.save or voice_commands.save refused because the stored list cannot be read; send it again with replace_unreadable to start over).",
+      "description": "A command.failed a shell acts on. list_unreadable: a snippets.save, voice_commands.save, meetings.calls.set, modes.save or modes.delete refused because the stored list cannot be read (send a save again with replace_unreadable to start over). meeting_recording: an audio.test refused because a meeting records: the mic test waits until it ends. delete_window_over: a meeting.discard after the meeting's first minute: only Stop is left, and the record can be deleted from the library once it is finished. For modes.save and modes.delete: name_blank (a mode needs a name), name_taken (another mode's name sounds the same: case and spacing aside), name_is_style (formal, casual and relaxed are the styles' names in voice commands), too_long (a name over 64 characters, polish instructions over 2,000, more than 64 apps in a mode or an app identity over 256 characters, or more than 50 modes; a mode the 0.2 import brought with more than 64 apps saves a change to its apps only once they are 64 or fewer, so the editor says \"Shorten to 64 apps or fewer.\"), default_mode (the default mode can't be deleted or given apps), app_taken (an app the mode is given is another mode's: send the save again with take_apps to move it), mode_not_found (no mode has that id) model_unknown (no language model the core holds has that id: modes.listed lists them), model_name_invalid (a polish_model_name that is over 128 characters or holds a control character, or one given for a model that is not a provider's, or without a model), destination_changed (a polish_model_confirm whose model sends somewhere else now than its polish_model_confirm_to, the destination the user agreed to: list the modes again and ask again; nothing was saved) and app_invalid (an app identity with a control character, of one character, or with no letter: as a substring of the frontmost app's identity it would match nearly every app). For the models: not_enough_space (a model.update refused before anything is fetched: the volume models go on has less free than the download still needs plus a 1 GiB margin; needed_bytes and free_bytes say how much, and nothing on disk changed), model_in_use (a model.remove refused while a job, a call or an update holds the model: nothing was deleted; try again once it ends) and not_downloading (a model.cancel naming a model no download is running or queued for).",
       "enum": [
-        "list_unreadable"
+        "list_unreadable",
+        "meeting_recording",
+        "delete_window_over",
+        "name_blank",
+        "name_taken",
+        "name_is_style",
+        "too_long",
+        "default_mode",
+        "app_taken",
+        "mode_not_found",
+        "model_unknown",
+        "model_name_invalid",
+        "destination_changed",
+        "app_invalid",
+        "not_enough_space",
+        "model_in_use",
+        "not_downloading"
       ]
     },
     "Refusal": {
@@ -382,7 +443,7 @@
     },
     "DictationWarning": {
       "type": "string",
-      "description": "Something went wrong during a dictation, and it went on without it. deleted_text_not_scrubbed and deleted_text_scrubbed: as for meetings. release_missed: a push-to-talk key was held for 180 s with no release (most likely lost); the take was stopped there and processed. polish_not_allowed: polish is on, but the user has not agreed to send dictations where its model goes now (never agreed, or the model changed destination since): nothing was sent, the text went in as said, and message names the model; consent.get says more.",
+      "description": "Something went wrong during a dictation, and it went on without it. deleted_text_not_scrubbed and deleted_text_scrubbed: as for meetings. release_missed: a push-to-talk key was held for 180 s with no release (most likely lost); the take was stopped there and processed. polish_not_allowed: polish is on, but the user has not agreed to send dictations where its model goes now (never agreed, or the model changed destination since): nothing was sent, the text went in as said, and message names the model; consent.get says more. polish_model_missing: polish is on for this mode, and the mode names a language model of its own that the core does not hold now (let go of, or another provider chosen in Settings > AI): nothing was sent anywhere and the text went in as said; polish never falls back to another model.",
       "enum": [
         "vad_failed",
         "audio_lost",
@@ -392,6 +453,7 @@
         "polish_failed",
         "polish_timed_out",
         "polish_not_allowed",
+        "polish_model_missing",
         "no_mode_for_style",
         "save_failed",
         "deleted_text_not_scrubbed",
@@ -616,6 +678,16 @@
         "code": {
           "$ref": "#/$defs/FailureCode",
           "description": "Which failure, for the few a shell acts on; absent for the rest. Match on this, never on the message."
+        },
+        "needed_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "For not_enough_space: the bytes that must be free, the download's remaining bytes plus the 1 GiB margin."
+        },
+        "free_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "For not_enough_space: the bytes free to this user on the volume models go on."
         }
       },
       "required": [
@@ -839,7 +911,7 @@
     },
     "ModelUpdateFinished": {
       "type": "object",
-      "description": "A model update ended, and its hold is released.",
+      "description": "A model update ended, and its hold is released. A model.cancel of an update still queued answers with this at once, without a model.update_started before it.",
       "properties": {
         "type": {
           "const": "model.update_finished"
@@ -863,6 +935,10 @@
         "message": {
           "type": "string",
           "description": "Why it failed, when it did."
+        },
+        "cancelled": {
+          "type": "boolean",
+          "description": "Whether model.cancel stopped it. A cancelled download keeps its part files, so the next model.update resumes it. Always sent."
         }
       },
       "required": [
@@ -1341,7 +1417,7 @@
     },
     "MeetingStarted": {
       "type": "object",
-      "description": "A meeting's record exists and its capture is being transcribed live. Names what the shell shows of it: its title, its app and its mic, when known.",
+      "description": "A meeting's record exists and its capture is being transcribed live. Names what the shell shows of it: its title, its app and its mic, when known. Sent for every meeting, however it started (Record, the consent Drop's offer, or an app's Always policy): the shell shows the recording indicator from this event, so a call recorded by its policy shows exactly as one the user started.",
       "properties": {
         "type": {
           "const": "meeting.started"
@@ -1377,6 +1453,14 @@
         "far_end": {
           "$ref": "#/$defs/FarEnd",
           "description": "What it records as the other side."
+        },
+        "auto": {
+          "type": "boolean",
+          "description": "True when the app's call policy (Always) started it, without a tap: the shell says so where the recording shows, keeps the reminder to tell the others, and offers Stop and Stop and delete. Absent for a start the user made. A policy start always records the app's own sound alone (far_end app)."
+        },
+        "delete_until_unix_ms": {
+          "type": "integer",
+          "description": "Until this moment, Unix ms (a minute after the start), meeting.discard (Stop and delete) may delete this meeting as if it had never been made; after it only Stop is offered (meeting.discard is refused with delete_window_over). Absent for a meeting that cannot be deleted so (a replay)."
         }
       },
       "required": [
@@ -1418,9 +1502,50 @@
       ],
       "additionalProperties": false
     },
+    "MeetingMicSwitched": {
+      "type": "object",
+      "description": "A recording meeting's mic went (unplugged, switched off) and the meeting records with another now: the choice as it is now, else Automatic. A meeting never moves to a mic that was plugged in or made the default mid-call; only its own mic going moves it. The mic_* fields are meeting.started's, for the mic now.",
+      "properties": {
+        "type": {
+          "const": "meeting.mic_switched"
+        },
+        "record": {
+          "type": "string",
+          "description": "The meeting's record id."
+        },
+        "from_name": {
+          "type": "string",
+          "description": "The mic that went, as the OS named it, when known."
+        },
+        "from_transport": {
+          "$ref": "#/$defs/MicTransport",
+          "description": "How that mic connected, when known."
+        },
+        "mic_name": {
+          "type": "string",
+          "description": "The mic it records now."
+        },
+        "mic_transport": {
+          "$ref": "#/$defs/MicTransport",
+          "description": "How that mic connects."
+        },
+        "mic_reason": {
+          "$ref": "#/$defs/MicReason",
+          "description": "Why that mic."
+        }
+      },
+      "required": [
+        "type",
+        "record",
+        "mic_name",
+        "mic_transport",
+        "mic_reason"
+      ],
+      "additionalProperties": false
+    },
     "MeetingDetected": {
       "type": "object",
-      "description": "An app has held the microphone long enough to be a call, and no meeting is being recorded: the shell offers to record it (the consent Drop), and records only if the user says so (meeting.start with this app).",
+      "description": "An app has held the microphone long enough to be a call, and no meeting is being recorded: the shell offers to record it (the consent Drop), and records only if the user says so (meeting.start with this app). Its policy is Ask (meetings.calls), or Always when its recording could not start by itself (message says why: a start that failed, or a far end that would not be the app's sound alone), when the user stopped a recording by hand during this call, or when the app was made Always during this call. The Drop can also set the app's policy (meetings.calls.set): Always (then meeting.start) or Never.",
       "properties": {
         "type": {
           "const": "meeting.detected"
@@ -1432,6 +1557,10 @@
         "app_name": {
           "type": "string",
           "description": "Its name, as the shell shows it."
+        },
+        "message": {
+          "type": "string",
+          "description": "Why it is offered rather than recorded, when its policy is Always: its recording could not start by itself (the platform's error), or its own sound cannot be recorded alone, so the recording would hold everything this computer plays (the Mac's fallback, Windows' device loopback): an Always app is recorded by itself only when its sound alone is. Never content."
         }
       },
       "required": [
@@ -1443,7 +1572,7 @@
     },
     "MeetingDetectionEnded": {
       "type": "object",
-      "description": "The offer to record an app is over before it was taken: the app released the microphone, or the user said not this one (meeting.dismiss).",
+      "description": "The offer to record an app is over before it was taken: the app released the microphone, or the user said not this one (meeting.dismiss), or its policy became Never (meetings.calls.set).",
       "properties": {
         "type": {
           "const": "meeting.detection_ended"
@@ -1454,7 +1583,7 @@
         },
         "dismissed": {
           "type": "boolean",
-          "description": "Whether the user dismissed it (rather than the app releasing the microphone)."
+          "description": "Whether the user dismissed it, by Not this one or Never (rather than the app releasing the microphone)."
         }
       },
       "required": [
@@ -1466,7 +1595,7 @@
     },
     "MeetingDetection": {
       "type": "object",
-      "description": "Whether the core is listening for calls now: sent once at start whatever the state (off included, with a message when the setting could not be read), then when detection starts, stops (the meetings.detect setting), fails to start, or stops on its own (the platform stopped answering). The shell shows this state, not the setting.",
+      "description": "Whether the core is listening for calls now: sent once at start whatever the state (off included, with a message when the default call policy could not be read), then when detection starts, stops (the call policies: it listens while any app could be offered or recorded, so a default of Never with no app chosen for is off), fails to start, or stops on its own (the platform stopped answering). The shell shows this state, not the setting.",
       "properties": {
         "type": {
           "const": "meeting.detection"
@@ -1483,6 +1612,110 @@
       "required": [
         "type",
         "listening"
+      ],
+      "additionalProperties": false
+    },
+    "CallPolicy": {
+      "type": "string",
+      "description": "What happens when an app holds the microphone for a call: always (recorded at once, visibly, as by Record), ask (the consent Drop offers it) or never (neither).",
+      "enum": [
+        "always",
+        "ask",
+        "never"
+      ]
+    },
+    "CallApp": {
+      "type": "object",
+      "description": "An app in the call policies' list: one detection has seen hold the microphone for a call, or one the user chose for. Never shown by its identity: a shell names it and shows its icon from the identity, as for a mode's apps.",
+      "properties": {
+        "app": {
+          "type": "string",
+          "description": "Its identity, as detection reports it: a bundle id on the Mac, the executable (or the package's app id) on Windows, where it is kept in lowercase."
+        },
+        "app_name": {
+          "type": "string",
+          "description": "Its name as detection last saw it; absent for an app chosen for that has not been seen."
+        },
+        "policy": {
+          "$ref": "#/$defs/CallPolicy",
+          "description": "What happens for it now: the user's choice, else the default (Always is Ask while the stored list could not be read)."
+        },
+        "chosen": {
+          "type": "boolean",
+          "description": "Whether the user chose its policy; false while it follows the default."
+        },
+        "seen_unix_ms": {
+          "type": "integer",
+          "description": "When detection last saw it hold the microphone for a call, Unix ms."
+        }
+      },
+      "required": [
+        "app",
+        "policy",
+        "chosen"
+      ],
+      "additionalProperties": false
+    },
+    "MeetingsCalls": {
+      "type": "object",
+      "description": "The call policies: the default for apps not chosen for, and every app seen or chosen for (at most 64), most recently seen first. In answer to meetings.calls.list, meetings.calls.set and meetings.calls.remove (with ref), and unasked when the default changed or detection saw a new app.",
+      "properties": {
+        "type": {
+          "const": "meetings.calls"
+        },
+        "default": {
+          "$ref": "#/$defs/CallPolicy",
+          "description": "The policy for apps not chosen for (meetings.calls.default; ask unless set)."
+        },
+        "apps": {
+          "type": "array",
+          "description": "The apps.",
+          "items": {
+            "$ref": "#/$defs/CallApp",
+            "description": "An app."
+          }
+        },
+        "message": {
+          "type": "string",
+          "description": "Why the stored choices could not be read, while they are set aside: every app follows the default then, with Always lowered to Ask, and meetings.calls.set is refused (list_unreadable) unless it says replace_unreadable, which starts the list over. In the answer to that start over under a default of Always: that the default is Ask now (written), so the user sets Always again knowingly."
+        },
+        "ref": {
+          "type": "string",
+          "description": "The command's \"id\", when it had one, so the shell can match the answer to what it sent."
+        }
+      },
+      "required": [
+        "type",
+        "default",
+        "apps"
+      ],
+      "additionalProperties": false
+    },
+    "MeetingDiscarded": {
+      "type": "object",
+      "description": "A meeting stopped with meeting.discard (Stop and delete), or one a crash interrupted on its way to being deleted, is gone as if it had never been made: no final pass ran and nothing was sent to a language model; its transcript, notes and search entries were deleted with their words overwritten in the library's files, then its audio. Follows meeting.stopped; no meeting.finished comes. The screens drop it.",
+      "properties": {
+        "type": {
+          "const": "meeting.discarded"
+        },
+        "record": {
+          "type": "string",
+          "description": "The record that is gone."
+        },
+        "audio_left": {
+          "type": "boolean",
+          "description": "Its recorded audio is still on disk: it could not be removed, or its folder is outside the library and was left alone. The record itself is gone."
+        },
+        "scrubbed": {
+          "type": "boolean",
+          "description": "No copy of its words is left in the library's files (as for record.deleted)."
+        }
+      },
+      "required": [
+        "type",
+        "record",
+        "audio_left",
+        "scrubbed"
       ],
       "additionalProperties": false
     },
@@ -1580,7 +1813,7 @@
     },
     "MicTransport": {
       "type": "string",
-      "description": "How a microphone connects: built in, Bluetooth (call-quality audio, and zeros while its user is silent), USB, a virtual or aggregate device, or anything else.",
+      "description": "How a device connects: built in, Bluetooth (call-quality audio, and zeros while its user is silent), USB, a virtual or aggregate device, or anything else.",
       "enum": [
         "built_in",
         "bluetooth",
@@ -1591,8 +1824,10 @@
     },
     "MicReason": {
       "type": "string",
-      "description": "Why a meeting records this microphone: the system default input; the built-in mic because the output is Bluetooth (a headset mic is call-quality audio; on Windows a USB mic may be the one kept); the headset's own mic because the user's setting says so; the default because this Mac has no built-in mic (on Windows: every mic is Bluetooth); the first input because no default is set; it was named; the LE Audio headset's own mic, which keeps full quality (Windows); or a reason this build of the core does not name (unknown).",
+      "description": "Why Inkwell records this microphone: the one the user chose in Settings > Sound (chosen, found by its id or by its name and transport); Automatic standing in for a chosen mic that is not connected (chosen_missing); or Automatic's reason: the system default input; the built-in mic because the output is Bluetooth (a headset mic is call-quality audio; on Windows a USB mic may be the one kept); the headset's own mic because a platform's retired headset-mic switch is on; the default because this Mac has no built-in mic (on Windows: every mic is Bluetooth); the first input because no default is set; it was named; the LE Audio headset's own mic, which keeps full quality (Windows); or a reason this build of the core does not name (unknown).",
       "enum": [
+        "chosen",
+        "chosen_missing",
         "default_input",
         "built_in_for_bluetooth_output",
         "headset_mic_setting",
@@ -2543,7 +2778,7 @@
     },
     "ModeInfo": {
       "type": "object",
-      "description": "A mode: how dictation writes in the apps it names.",
+      "description": "A mode: how dictation writes in the apps it names. Carries the user's words (its name, polish instructions and apps): never log it.",
       "properties": {
         "id": {
           "type": "string",
@@ -2561,6 +2796,14 @@
           "type": "boolean",
           "description": "Whether its dictations are polished (when a language model can)."
         },
+        "polish_prompt": {
+          "type": "string",
+          "description": "Its polish instructions, as the user wrote them; blank for the default (modes.listed's default_polish_prompt). The user's words: never log them."
+        },
+        "polish_model": {
+          "type": "string",
+          "description": "The language model it is polished on, by its id in polish_models; absent for the AI setting's (setting_polish_model). Whether a take can use it now is polish_model_state."
+        },
         "remove_fillers": {
           "type": "boolean",
           "description": "Whether fillers and stutters are removed."
@@ -2572,6 +2815,14 @@
             "type": "string",
             "description": "An app identity, or part of one: on macOS a bundle id such as com.example.mail."
           }
+        },
+        "polish_model_name": {
+          "type": "string",
+          "description": "A model at the provider polish_model names (provider: ids only), sent as the request's model on the same endpoint; absent for the model chosen with the provider in Settings > AI. Free text the user typed: never log it."
+        },
+        "polish_model_state": {
+          "$ref": "#/$defs/PolishModelState",
+          "description": "With polish_model: whether its takes can use it now."
         }
       },
       "required": [
@@ -2580,7 +2831,49 @@
         "style",
         "polish",
         "remove_fillers",
-        "apps"
+        "apps",
+        "polish_prompt"
+      ],
+      "additionalProperties": false
+    },
+    "LanguageModelChoice": {
+      "type": "object",
+      "description": "A language model a mode can be polished on: one the shell registered, the core's own on this machine, or the own-key provider chosen in Settings > AI.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Its id, as a mode names it (polish_model): engine:<id> for a model the shell registered (engine:apple-foundation-models), engine:local for the core's own model on this machine (whichever size is downloaded), provider:<id> for the chosen own-key provider. Show the name, never the id."
+        },
+        "name": {
+          "type": "string",
+          "description": "Its name, as consent.state names a model (a shell may name its own engine better)."
+        },
+        "to": {
+          "$ref": "#/$defs/LlmDestination",
+          "description": "Where it sends a dictation."
+        },
+        "endpoint": {
+          "type": "string",
+          "description": "For a cloud model, the endpoint it sends to, as consent.state names one. To confirm a mode's model (polish_model_state moved or unrecorded), show where it sends and send that back as polish_model_confirm_to: {\"to\":\"on_device\"} or {\"to\":\"cloud\",\"endpoint\":\"<this>\"}."
+        },
+        "allowed": {
+          "type": "boolean",
+          "description": "Whether polish may use it now: one of the user's polish consents covers it (consent.state's consents) and local-only mode lets it (blocked_local_only false). False, a mode on it goes in as said (polish_not_allowed, or polish_failed while local-only mode refuses it) until that changes."
+        },
+        "model": {
+          "type": "string",
+          "description": "The model it asks for: for the own-key provider, the one chosen in Settings > AI, which a mode's polish_model_name replaces (the editor's placeholder)."
+        },
+        "blocked_local_only": {
+          "type": "boolean",
+          "description": "Local-only mode is on and this model is not on this machine: nothing goes to it, whatever the consent (turn local-only off in Settings > AI first)."
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "to",
+        "allowed"
       ],
       "additionalProperties": false
     },
@@ -2757,9 +3050,78 @@
       ],
       "additionalProperties": false
     },
+    "SpeakerNamed": {
+      "type": "object",
+      "description": "A far-end speaker of a record was named, renamed or cleared, in answer to speaker.name. The name stays with the shell that sent it: record.open carries it.",
+      "properties": {
+        "type": {
+          "const": "speaker.named"
+        },
+        "record": {
+          "type": "string",
+          "description": "The record."
+        },
+        "speaker": {
+          "type": "string",
+          "description": "The diarizer's label."
+        },
+        "named": {
+          "type": "boolean",
+          "description": "Whether the speaker has a name now: false when it was cleared, and reads as numbered again."
+        },
+        "ref": {
+          "type": "string",
+          "description": "The command's \"id\", when it had one, so the shell can match the answer to what it sent."
+        }
+      },
+      "required": [
+        "type",
+        "record",
+        "speaker",
+        "named"
+      ],
+      "additionalProperties": false
+    },
+    "RecordDeleted": {
+      "type": "object",
+      "description": "A record was deleted whole, in answer to record.delete: its transcript, notes, summary, commitments, speaker names and search entries, its words overwritten in the library's files as the retention setting deletes them, then its audio. The screens drop it.",
+      "properties": {
+        "type": {
+          "const": "record.deleted"
+        },
+        "record": {
+          "type": "string",
+          "description": "The record that is gone."
+        },
+        "kind": {
+          "$ref": "#/$defs/RecordKind",
+          "description": "What it was."
+        },
+        "audio_left": {
+          "type": "boolean",
+          "description": "Its recorded audio is still on disk: it could not be removed, or its folder is outside the library and was left alone. The record itself is gone."
+        },
+        "scrubbed": {
+          "type": "boolean",
+          "description": "No copy of its words is left in the library's files. False, as for deleted_text_not_scrubbed, while another process reading the database keeps them in its log: the deletion is saved, and the library keeps trying; a dictation's or meeting's deleted_text_scrubbed says when it has. This answer counts as that change's report: each change reaches the shell once."
+        },
+        "ref": {
+          "type": "string",
+          "description": "The command's \"id\", when it had one, so the shell can match the answer to what it sent."
+        }
+      },
+      "required": [
+        "type",
+        "record",
+        "kind",
+        "audio_left",
+        "scrubbed"
+      ],
+      "additionalProperties": false
+    },
     "ModelsListed": {
       "type": "object",
-      "description": "The catalogue's models for this OS, in answer to models.list. What serves each job now is engine.route's answer.",
+      "description": "The catalogue's models for this OS, in answer to models.list and model.remove. What serves each job now is engine.route's answer.",
       "properties": {
         "type": {
           "const": "models.listed"
@@ -2771,6 +3133,15 @@
             "$ref": "#/$defs/CatalogueEntry",
             "description": "A model."
           }
+        },
+        "free_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The bytes free to this user on the volume models are installed on; absent when the OS could not say."
+        },
+        "ref": {
+          "type": "string",
+          "description": "The command's \"id\", when it had one."
         }
       },
       "required": [
@@ -2801,6 +3172,414 @@
       ],
       "additionalProperties": false
     },
+    "AudioDevices": {
+      "type": "object",
+      "description": "The answer to audio.devices: the devices, the user's choice, and what Inkwell records with now.",
+      "properties": {
+        "type": {
+          "const": "audio.devices"
+        },
+        "inputs": {
+          "type": "array",
+          "description": "The connected microphones, the default first.",
+          "items": {
+            "$ref": "#/$defs/AudioDevice",
+            "description": "A microphone."
+          }
+        },
+        "input": {
+          "type": "string",
+          "description": "The mic choice (audio.input): auto, or the chosen device's id."
+        },
+        "wanted": {
+          "$ref": "#/$defs/AudioWanted",
+          "description": "The chosen mic as remembered, when input is a device: Settings shows its name even while it is not connected."
+        },
+        "automatic": {
+          "$ref": "#/$defs/AudioInput",
+          "description": "What Automatic records now (\"Automatic (<name>)\"); absent when there is no microphone."
+        },
+        "using": {
+          "$ref": "#/$defs/AudioInput",
+          "description": "The mic Inkwell opens now for a take, a meeting or a test, and why: the chosen one, or Automatic (chosen_missing when it stands in for a chosen mic that is not connected). Absent when there is no microphone. A meeting already recording keeps its own mic (meeting.started, meeting.mic_switched)."
+        },
+        "outputs": {
+          "type": "array",
+          "description": "The connected outputs, the default first, where there is an output picker (Windows); absent on macOS, whose far end is tapped from its app wherever it plays.",
+          "items": {
+            "$ref": "#/$defs/AudioDevice",
+            "description": "An output."
+          }
+        },
+        "output": {
+          "type": "string",
+          "description": "The output choice (audio.output), with outputs: default, or the chosen device's id."
+        },
+        "output_wanted": {
+          "$ref": "#/$defs/AudioWanted",
+          "description": "The chosen output as remembered, when output is a device."
+        },
+        "output_using": {
+          "$ref": "#/$defs/AudioOutput",
+          "description": "The output a meeting's far end is to record, and why; absent when there is no output. Record now, and a call whose app could not be heard alone, record it; an app heard from its own output keeps that output."
+        },
+        "ref": {
+          "type": "string",
+          "description": "The id of the command this answers, when it carried one."
+        }
+      },
+      "required": [
+        "type",
+        "inputs",
+        "input"
+      ],
+      "additionalProperties": false
+    },
+    "AudioDevicesChanged": {
+      "type": "object",
+      "description": "Devices came or went, a default changed, or the choice did: the same as audio.devices, once a burst of changes has gone quiet (300 ms after the last, at most 1 s after the first). Sent after a setting.set of audio.input or audio.output, and on a device change where the platform tells the core of them.",
+      "properties": {
+        "type": {
+          "const": "audio.devices_changed"
+        },
+        "inputs": {
+          "type": "array",
+          "description": "The connected microphones, the default first.",
+          "items": {
+            "$ref": "#/$defs/AudioDevice",
+            "description": "A microphone."
+          }
+        },
+        "input": {
+          "type": "string",
+          "description": "The mic choice (audio.input): auto, or the chosen device's id."
+        },
+        "wanted": {
+          "$ref": "#/$defs/AudioWanted",
+          "description": "The chosen mic as remembered, when input is a device: Settings shows its name even while it is not connected."
+        },
+        "automatic": {
+          "$ref": "#/$defs/AudioInput",
+          "description": "What Automatic records now (\"Automatic (<name>)\"); absent when there is no microphone."
+        },
+        "using": {
+          "$ref": "#/$defs/AudioInput",
+          "description": "The mic Inkwell opens now for a take, a meeting or a test, and why: the chosen one, or Automatic (chosen_missing when it stands in for a chosen mic that is not connected). Absent when there is no microphone. A meeting already recording keeps its own mic (meeting.started, meeting.mic_switched)."
+        },
+        "outputs": {
+          "type": "array",
+          "description": "The connected outputs, the default first, where there is an output picker (Windows); absent on macOS, whose far end is tapped from its app wherever it plays.",
+          "items": {
+            "$ref": "#/$defs/AudioDevice",
+            "description": "An output."
+          }
+        },
+        "output": {
+          "type": "string",
+          "description": "The output choice (audio.output), with outputs: default, or the chosen device's id."
+        },
+        "output_wanted": {
+          "$ref": "#/$defs/AudioWanted",
+          "description": "The chosen output as remembered, when output is a device."
+        },
+        "output_using": {
+          "$ref": "#/$defs/AudioOutput",
+          "description": "The output a meeting's far end is to record, and why; absent when there is no output. Record now, and a call whose app could not be heard alone, record it; an app heard from its own output keeps that output."
+        }
+      },
+      "required": [
+        "type",
+        "inputs",
+        "input"
+      ],
+      "additionalProperties": false
+    },
+    "AudioInputFallback": {
+      "type": "object",
+      "description": "The mic the user chose is not connected, and a mic just opened on Automatic in its place (a take, a meeting, a meeting's mic that went, a test): said once until the chosen mic is seen again or the choice changes. The shell says \"<wanted> isn't connected. Inkwell is using <mic> until it is.\"",
+      "properties": {
+        "type": {
+          "const": "audio.input_fallback"
+        },
+        "wanted": {
+          "$ref": "#/$defs/AudioWanted",
+          "description": "The chosen mic."
+        },
+        "mic_name": {
+          "type": "string",
+          "description": "The mic recording instead, as the OS names it."
+        },
+        "mic_transport": {
+          "$ref": "#/$defs/MicTransport",
+          "description": "How that mic connects."
+        }
+      },
+      "required": [
+        "type",
+        "wanted",
+        "mic_name",
+        "mic_transport"
+      ],
+      "additionalProperties": false
+    },
+    "AudioTestStarted": {
+      "type": "object",
+      "description": "A mic test has opened the mic (audio.test): the one dictation and meetings would use now. audio.test_level follows about ten times a second, then audio.tested.",
+      "properties": {
+        "type": {
+          "const": "audio.test_started"
+        },
+        "mic_name": {
+          "type": "string",
+          "description": "The mic, as the OS names it."
+        },
+        "mic_transport": {
+          "$ref": "#/$defs/MicTransport",
+          "description": "How it connects."
+        },
+        "mic_reason": {
+          "$ref": "#/$defs/MicReason",
+          "description": "Why that mic."
+        },
+        "seconds": {
+          "type": "integer",
+          "description": "How long the test runs at most, in seconds."
+        },
+        "ref": {
+          "type": "string",
+          "description": "The id of the command this answers, when it carried one."
+        }
+      },
+      "required": [
+        "type",
+        "mic_name",
+        "mic_transport",
+        "mic_reason",
+        "seconds"
+      ],
+      "additionalProperties": false
+    },
+    "AudioTestLevel": {
+      "type": "object",
+      "description": "The mic test's level over the last 100 ms: the loudest moment, from the ink's band analyzer with no gain applied, on a meter scale.",
+      "properties": {
+        "type": {
+          "const": "audio.test_level"
+        },
+        "level": {
+          "type": "number",
+          "description": "0 at -60 dBFS and below, 1 at full scale, linear in dB between."
+        },
+        "ref": {
+          "type": "string",
+          "description": "The id of the command this answers, when it carried one."
+        }
+      },
+      "required": [
+        "type",
+        "level"
+      ],
+      "additionalProperties": false
+    },
+    "AudioTested": {
+      "type": "object",
+      "description": "The mic test is over. Nothing it heard was kept.",
+      "properties": {
+        "type": {
+          "const": "audio.tested"
+        },
+        "ended": {
+          "$ref": "#/$defs/AudioTestEnd",
+          "description": "How it ended."
+        },
+        "heard": {
+          "type": "boolean",
+          "description": "Whether the mic heard anything louder than a quiet room (-50 dBFS) at any moment: false is the screen's cue for \"Not hearing you?\"."
+        },
+        "peak": {
+          "type": "number",
+          "description": "The loudest moment, on audio.test_level's scale."
+        },
+        "message": {
+          "type": "string",
+          "description": "Why it failed, naming the device, when ended is failed."
+        },
+        "ref": {
+          "type": "string",
+          "description": "The id of the command this answers, when it carried one."
+        }
+      },
+      "required": [
+        "type",
+        "ended",
+        "heard",
+        "peak"
+      ],
+      "additionalProperties": false
+    },
+    "AudioDevice": {
+      "type": "object",
+      "description": "A connected input or output device.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The OS's id for it (a Core Audio UID, a WASAPI endpoint id): what audio.input and audio.output take. Opaque: never shown."
+        },
+        "name": {
+          "type": "string",
+          "description": "Its name as the OS shows it."
+        },
+        "transport": {
+          "$ref": "#/$defs/MicTransport",
+          "description": "How it connects."
+        },
+        "is_default": {
+          "type": "boolean",
+          "description": "Whether it is the system default for its direction."
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "transport",
+        "is_default"
+      ],
+      "additionalProperties": false
+    },
+    "AudioWanted": {
+      "type": "object",
+      "description": "A device the user chose, as the core remembers it from when it was chosen (it may not be connected now).",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The OS's id for it."
+        },
+        "name": {
+          "type": "string",
+          "description": "Its name when it was chosen; absent for a choice stored without one."
+        },
+        "transport": {
+          "$ref": "#/$defs/MicTransport",
+          "description": "How it connected when it was chosen; absent likewise."
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": false
+    },
+    "AudioInput": {
+      "type": "object",
+      "description": "A microphone Inkwell picks, and why.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The OS's id for it."
+        },
+        "name": {
+          "type": "string",
+          "description": "Its name as the OS shows it."
+        },
+        "transport": {
+          "$ref": "#/$defs/MicTransport",
+          "description": "How it connects."
+        },
+        "reason": {
+          "$ref": "#/$defs/MicReason",
+          "description": "Why it is the one."
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "transport",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "AudioOutput": {
+      "type": "object",
+      "description": "The output a meeting's far end is to record (Windows), and why. Record now, and a call whose app could not be heard alone, record it; an app heard from its own output keeps that output.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The OS's id for it."
+        },
+        "name": {
+          "type": "string",
+          "description": "Its name as the OS shows it."
+        },
+        "transport": {
+          "$ref": "#/$defs/MicTransport",
+          "description": "How it connects."
+        },
+        "reason": {
+          "$ref": "#/$defs/OutputReason",
+          "description": "Why it is the one."
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "transport",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "OutputReason": {
+      "type": "string",
+      "description": "Why a meeting's far end records this output (Windows): the one the user chose (chosen), the default because the chosen one is not connected (chosen_missing), or the default output, chosen (default_output).",
+      "enum": [
+        "chosen",
+        "chosen_missing",
+        "default_output"
+      ]
+    },
+    "AudioTestEnd": {
+      "type": "string",
+      "description": "How a mic test ended: its time was up (done), audio.test_stop or the core's shutdown ended it (stopped), a meeting started recording (meeting), or the mic failed or went away (failed, with a message).",
+      "enum": [
+        "done",
+        "stopped",
+        "meeting",
+        "failed"
+      ]
+    },
+    "HotkeyChecked": {
+      "type": "object",
+      "description": "Whether this computer can watch a key binding as the dictation key or the edit key, in answer to hotkey.check. A shell checks a shortcut the user recorded before it stores it with setting.set; nothing is stored here.",
+      "properties": {
+        "type": {
+          "const": "hotkey.checked"
+        },
+        "binding": {
+          "type": "string",
+          "description": "The binding as the command spelled it."
+        },
+        "ok": {
+          "type": "boolean",
+          "description": "Whether this computer can watch it."
+        },
+        "canonical": {
+          "type": "string",
+          "description": "When ok: its one spelling, to store with setting.set and to compare keys by (two spellings of one chord are one key). For example ctrl+shift+space, right_option or f13."
+        },
+        "reason": {
+          "type": "string",
+          "description": "When not ok: why not, in plain words starting in lower case and without a full stop, to show after \"can't use that:\". For example \"that key on its own would stop working everywhere else; add Control, Option or Command\"."
+        },
+        "ref": {
+          "type": "string",
+          "description": "The command's \"id\", when it had one."
+        }
+      },
+      "required": [
+        "type",
+        "binding",
+        "ok"
+      ],
+      "additionalProperties": false
+    },
     "LlmFeature": {
       "type": "string",
       "description": "A feature that sends the user's words to a language model, each with its own consent: polish (the dictation, before it is typed), edit (voice edit: the selection and the spoken instruction) or meetings (a meeting's summary, its commitments and Ask: the meeting's transcript).",
@@ -2820,7 +3599,7 @@
     },
     "ConsentState": {
       "type": "object",
-      "description": "A feature that sends the user's words to a language model: its switch, where the model it would use now sends them, and where the user agreed it may. The feature runs only when on and allowed. In answer to consent.get and consent.allow, and after the feature's switch is set to off.",
+      "description": "A feature that sends the user's words to a language model: its switch, where the model it would use now sends them, and where the user agreed it may. The feature runs only when on and allowed. In answer to consent.get, consent.allow and consent.revoke, and after the feature's switch is set to off.",
       "properties": {
         "type": {
           "const": "consent.state"
@@ -2847,7 +3626,7 @@
         },
         "allowed_to": {
           "$ref": "#/$defs/LlmDestination",
-          "description": "Where the user agreed it may send; absent when never agreed (or turned off since)."
+          "description": "Where the user agreed it may send: for polish, the consent covering the model it would use now, else the first (all of them are consents); absent when never agreed (or turned off since)."
         },
         "allowed_name": {
           "type": "string",
@@ -2855,7 +3634,15 @@
         },
         "allowed": {
           "type": "boolean",
-          "description": "Whether that consent covers the model now: false while the feature is on means it is paused until the user agrees again."
+          "description": "Whether a consent covers the model it would use now: false while the feature is on means it is paused until the user agrees again. For polish, a mode on its own model is judged on that model (modes.listed's polish_models)."
+        },
+        "consents": {
+          "type": "array",
+          "description": "Every destination the user agreed the feature may send to. Polish holds one per destination (a mode may polish on a model elsewhere than the AI setting's: consent.allow adds one, consent.revoke takes one away); voice edit and meetings hold one at most.",
+          "items": {
+            "$ref": "#/$defs/ConsentEntry",
+            "description": "A consent."
+          }
         },
         "error": {
           "type": "string",
@@ -2876,15 +3663,15 @@
     },
     "LlmProviderEntry": {
       "type": "object",
-      "description": "An own-key (BYOK) language model provider the user can choose: its id, what it uses unless told otherwise, and whether its API key is stored. The key itself never leaves the OS key store.",
+      "description": "A language model provider the user can choose: an own-key (BYOK) one, or this machine's model (on_device, listed only where the OS has language models of the core's own: Windows). Its id, what it uses unless told otherwise, and whether its API key is stored. The key itself never leaves the OS key store.",
       "properties": {
         "id": {
           "type": "string",
-          "description": "The provider: openai, groq, anthropic, openrouter or custom (any OpenAI-compatible server)."
+          "description": "The provider: openai, groq, anthropic, openrouter or custom (any OpenAI-compatible server), or on_device (the core's own model on this machine, which needs no key and keeps local-only mode on)."
         },
         "default_model": {
           "type": "string",
-          "description": "The model used when llm.choose names none."
+          "description": "The model used when llm.choose names none; for on_device, the registry id of the language model downloaded, else of the one this OS offers (models.listed)."
         },
         "endpoint": {
           "type": "string",
@@ -2901,6 +3688,10 @@
         "has_key": {
           "type": "boolean",
           "description": "Whether a key is stored for it in the OS key store, asked without reading the key. False when that could not be asked (llm.providers' error says so)."
+        },
+        "installed": {
+          "type": "boolean",
+          "description": "For on_device, whether a language model is downloaded: llm.choose on_device needs one. Absent for the others."
         }
       },
       "required": [
@@ -2915,7 +3706,7 @@
     },
     "LlmProviders": {
       "type": "object",
-      "description": "The own-key language model providers and the one chosen, in answer to llm.providers, llm.key.save, llm.key.delete and llm.choose. A feature (polish, voice edit, summaries and Ask) sends to the chosen provider only when no model is registered by the shell, and only with the user's consent for its endpoint (consent.state).",
+      "description": "The own-key language model providers, this machine's model where the OS has one, and the choice, in answer to llm.providers, llm.key.save, llm.key.delete and llm.choose. The features (polish, voice edit, summaries and Ask) use the chosen provider; with none chosen, the core's own model on this machine once one is downloaded (Windows), else the model the shell registered (Apple's on the Mac). Each only with the user's consent for where it sends (consent.state).",
       "properties": {
         "type": {
           "const": "llm.providers"
@@ -2930,11 +3721,11 @@
         },
         "chosen": {
           "type": "string",
-          "description": "The chosen provider's id; absent when none is chosen."
+          "description": "The chosen provider's id, or on_device for this machine's model; absent when none is chosen."
         },
         "model": {
           "type": "string",
-          "description": "The model the chosen provider is asked for; absent with chosen."
+          "description": "The model the chosen provider is asked for; for on_device, the registry id of the language model downloaded (models.listed), absent while none is. Absent with chosen."
         },
         "base_url": {
           "type": "string",
@@ -2954,7 +3745,7 @@
         },
         "ready": {
           "type": "boolean",
-          "description": "Whether the chosen provider can be called: its key is stored (when it needs one), and local-only mode lets it through. Each feature still needs its own consent."
+          "description": "Whether the chosen provider can be called: its key is stored (when it needs one), and local-only mode lets it through; for on_device, whether a language model is downloaded. Each feature still needs its own consent."
         },
         "error": {
           "type": "string",
@@ -2975,18 +3766,18 @@
     },
     "LlmTested": {
       "type": "object",
-      "description": "The answer to llm.test: one short fixed request (never the user's words) sent to the chosen provider with its stored key, and whether it answered.",
+      "description": "The answer to llm.test: one short fixed request (never the user's words) sent to the chosen provider with its stored key, or, with none chosen, to the core's own model on this machine (loaded first if it is not), and whether it answered, timed.",
       "properties": {
         "type": {
           "const": "llm.tested"
         },
         "provider": {
           "type": "string",
-          "description": "The provider tested."
+          "description": "The provider tested; on_device for this machine's model."
         },
         "model": {
           "type": "string",
-          "description": "The model asked."
+          "description": "The model asked; for on_device, its registry id (models.listed)."
         },
         "ok": {
           "type": "boolean",
@@ -2999,6 +3790,16 @@
         "error": {
           "type": "string",
           "description": "Why it did not answer, as a sentence starting \"couldn't\"; absent when ok. Names what failed, never the key."
+        },
+        "load_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "For on_device, how long loading the model took, in milliseconds (near 0 when it was loaded already). Absent for a provider."
+        },
+        "answer_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How long the answer took, in milliseconds, the load apart; absent when it did not answer. A short request: a dictation's polish reads and writes more."
         },
         "ref": {
           "type": "string",
@@ -3015,7 +3816,7 @@
     },
     "ModesListed": {
       "type": "object",
-      "description": "The user's modes, in answer to modes.list, in the order they are matched: the first mode naming the frontmost app wins, else the default.",
+      "description": "The user's modes, in answer to modes.list, modes.save and modes.delete, in the order they are matched: the first mode naming the frontmost app wins, else the default. Carries the user's words: never log it.",
       "properties": {
         "type": {
           "const": "modes.listed"
@@ -3031,12 +3832,38 @@
             "$ref": "#/$defs/ModeInfo",
             "description": "A mode."
           }
+        },
+        "default_polish_prompt": {
+          "type": "string",
+          "description": "The polish instructions a mode with blank ones uses: the editor's placeholder."
+        },
+        "polish_models": {
+          "type": "array",
+          "description": "Every language model a mode can be polished on now, the AI setting's first. Empty when the core holds none.",
+          "items": {
+            "$ref": "#/$defs/LanguageModelChoice",
+            "description": "A model."
+          }
+        },
+        "setting_polish_model": {
+          "type": "string",
+          "description": "The id (in polish_models) of the model a mode without one of its own is polished on now: the AI setting's. Absent when there is none."
+        },
+        "saved": {
+          "type": "string",
+          "description": "In answer to modes.save: the id of the mode saved (a new mode's id is the core's), so the editor can select it."
+        },
+        "ref": {
+          "type": "string",
+          "description": "The command's \"id\", when it had one."
         }
       },
       "required": [
         "type",
         "default_id",
-        "modes"
+        "modes",
+        "default_polish_prompt",
+        "polish_models"
       ],
       "additionalProperties": false
     },
@@ -3371,6 +4198,14 @@
       ],
       "additionalProperties": false
     },
+    "ModelKind": {
+      "type": "string",
+      "description": "What a model in the catalogue is for: speech (transcription, live words, voice detection, the diarizer) or language (polish, voice edit, a meeting's summary and Ask, run by the core on this computer; Windows only).",
+      "enum": [
+        "speech",
+        "language"
+      ]
+    },
     "CatalogueEntry": {
       "type": "object",
       "description": "A model in the catalogue that runs on this OS.",
@@ -3378,6 +4213,14 @@
         "id": {
           "type": "string",
           "description": "Its id."
+        },
+        "kind": {
+          "$ref": "#/$defs/ModelKind",
+          "description": "What it is for. Always sent; a shell built before language models reads its absence as speech."
+        },
+        "name": {
+          "type": "string",
+          "description": "For a language model, its name for the user (Qwen3 4B Instruct); absent for a speech model, which the shell names itself."
         },
         "licence": {
           "type": "string",
@@ -3394,7 +4237,7 @@
         },
         "jobs": {
           "type": "array",
-          "description": "The jobs it fills, each with its measured error rate. None for a model the core only downloads because the shell runs it (the Mac's Parakeet, parakeet-tdt-0.6b-v3-coreml).",
+          "description": "The jobs it fills, each with its measured error rate. None for a model the core only downloads because the shell runs it (the Mac's Parakeet, parakeet-tdt-0.6b-v3-coreml), and none for a language model.",
           "items": {
             "$ref": "#/$defs/JobScore",
             "description": "A job and its error rate."
@@ -4053,6 +4896,629 @@
         "deleted",
         "failed",
         "before_unix_ms"
+      ],
+      "additionalProperties": false
+    },
+    "DictationStats": {
+      "type": "object",
+      "description": "The user's dictation, counted on this computer: finished dictations by the local day they started. Speed and time saved count only dictations that know how long the key was held.",
+      "properties": {
+        "words_today": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Words dictated today."
+        },
+        "words_week": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Words dictated since this week started (the shell's first weekday)."
+        },
+        "words_all": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Words dictated, all time."
+        },
+        "dictations_all": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Dictations, all time."
+        },
+        "wpm_week": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Words per minute this week: words over the time the key was held. Absent with less than a minute of speech this week."
+        },
+        "wpm_average": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Words per minute over the last 30 days, today included: the user's own average. Absent with less than a minute of speech in them."
+        },
+        "saved_ms_week": {
+          "type": "integer",
+          "description": "Time saved this week, ms: the same words typed at typing_wpm less the time spent speaking. Negative when speaking took longer."
+        },
+        "saved_ms_all": {
+          "type": "integer",
+          "description": "Time saved all time, ms, as saved_ms_week."
+        },
+        "saved_about_week": {
+          "type": "array",
+          "description": "What saved_ms_week is about, largest first (\"about two feature films\"). Absent when there is nothing to picture: time lost, under about 12 minutes, or between two counts.",
+          "items": {
+            "$ref": "#/$defs/TimeEquivalent",
+            "description": "One picture of the time."
+          }
+        },
+        "saved_about_all": {
+          "type": "array",
+          "description": "What saved_ms_all is about, as saved_about_week.",
+          "items": {
+            "$ref": "#/$defs/TimeEquivalent",
+            "description": "One picture of the time."
+          }
+        },
+        "streak_days": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The current streak: local days with a dictation in a row, one missed day forgiven, two ending it. A rest day neither counts nor breaks it, with a dictation or without; a paused day without a dictation is not missed, and one with a dictation counts. Running while at most one day was missed since the last active one (today is never missed)."
+        },
+        "longest_streak_days": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The longest streak, all time."
+        },
+        "latest_streak_days": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The latest streak, running or ended: what it reached. Once a streak has ended, the shell shows this and the longest, never a streak as lost."
+        },
+        "active_days_month": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Local days with a dictation since the month started."
+        },
+        "streak_hidden": {
+          "type": "boolean",
+          "description": "Whether the user hid the streak (stats.streak): show no streak line and offer none on the share card. The numbers are still counted."
+        },
+        "rest_days": {
+          "type": "array",
+          "description": "The weekdays the streak rests on (stats.rest_days), ISO: 1 Monday to 7 Sunday; empty for none. A rest day neither counts nor breaks the streak.",
+          "items": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "An ISO weekday."
+          }
+        },
+        "streak_paused_since": {
+          "type": "string",
+          "description": "The first day of the pause running today (streak.pause), YYYY-MM-DD. Absent while none runs; a pause ends by itself after 90 days."
+        },
+        "heatmap_first_day": {
+          "type": "string",
+          "description": "The heatmap's first local day, YYYY-MM-DD: the first day of the week eleven weeks before this one."
+        },
+        "heatmap_words": {
+          "type": "array",
+          "description": "Words dictated per local day, from heatmap_first_day to today.",
+          "items": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "One day's words."
+          }
+        }
+      },
+      "required": [
+        "words_today",
+        "words_week",
+        "words_all",
+        "dictations_all",
+        "saved_ms_week",
+        "saved_ms_all",
+        "streak_days",
+        "longest_streak_days",
+        "heatmap_first_day",
+        "heatmap_words"
+      ],
+      "additionalProperties": false
+    },
+    "MeetingStats": {
+      "type": "object",
+      "description": "Meetings recorded here and finished, counted (imported meetings are left out: their channels came from elsewhere). Me versus them is stream identity: the mic is the user, the far end everyone else.",
+      "properties": {
+        "meetings": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Meetings."
+        },
+        "recorded_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Their total length, ms."
+        },
+        "you_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The user's talk time, ms: how long their lines cover."
+        },
+        "them_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Everyone else's talk time, ms."
+        },
+        "longest_monologue_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The user's longest stretch of speech with no one else speaking and no pause over 3 seconds, ms."
+        },
+        "questions": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The user's lines ending in a question mark: a plain count."
+        }
+      },
+      "required": [
+        "meetings",
+        "recorded_ms",
+        "you_ms",
+        "them_ms",
+        "longest_monologue_ms",
+        "questions"
+      ],
+      "additionalProperties": false
+    },
+    "PromiseStats": {
+      "type": "object",
+      "description": "Promises from meetings (commitments not merged into another), in Owed's states.",
+      "properties": {
+        "made": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Promises made: kept, open and overdue together."
+        },
+        "kept": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Marked done."
+        },
+        "open": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Not done, and not past their due day."
+        },
+        "overdue": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Not done, past their due day (due today is not late)."
+        }
+      },
+      "required": [
+        "made",
+        "kept",
+        "open",
+        "overdue"
+      ],
+      "additionalProperties": false
+    },
+    "MilestoneKind": {
+      "type": "string",
+      "description": "What a milestone counts: words dictated all time, or the longest streak in days.",
+      "enum": [
+        "words",
+        "streak"
+      ]
+    },
+    "MilestoneName": {
+      "type": "string",
+      "description": "A milestone's name, a key the shells word: first_page (1,000 words), notebook (10,000), short_novel (50,000), novels_worth (100,000), seven_days, thirty_days and hundred_days (streaks).",
+      "enum": [
+        "first_page",
+        "notebook",
+        "short_novel",
+        "novels_worth",
+        "seven_days",
+        "thirty_days",
+        "hundred_days"
+      ]
+    },
+    "MilestoneRow": {
+      "type": "object",
+      "description": "A milestone and whether the library has reached it.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Its id: words_1000, words_10000, words_50000, words_100000, streak_7, streak_30, streak_100."
+        },
+        "kind": {
+          "$ref": "#/$defs/MilestoneKind",
+          "description": "What it counts."
+        },
+        "threshold": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The count that reaches it."
+        },
+        "reached": {
+          "type": "boolean",
+          "description": "Whether it is reached."
+        },
+        "name": {
+          "$ref": "#/$defs/MilestoneName",
+          "description": "Its name, worded by the shell: the same on the chip, in the celebration and on the share card's seal."
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "threshold",
+        "reached"
+      ],
+      "additionalProperties": false
+    },
+    "TimeEquivalentKey": {
+      "type": "string",
+      "description": "Something time saved is about, as long as: working_week 40 h, working_day 8 h, feature_film 2 h, lunch_hour 1 h, coffee_break 15 min.",
+      "enum": [
+        "working_week",
+        "working_day",
+        "feature_film",
+        "lunch_hour",
+        "coffee_break"
+      ]
+    },
+    "TimeEquivalent": {
+      "type": "object",
+      "description": "Time saved, pictured: about count of key, the nearest whole number, within a fifth of the time. Always said with \"about\".",
+      "properties": {
+        "key": {
+          "$ref": "#/$defs/TimeEquivalentKey",
+          "description": "What it is about."
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How many: 1 to 5, or any number of the largest (working_week)."
+        }
+      },
+      "required": [
+        "key",
+        "count"
+      ],
+      "additionalProperties": false
+    },
+    "BestId": {
+      "type": "string",
+      "description": "A personal best: the dictation held longest, the fastest held at least 30 s (neither a take the stuck-key watchdog stopped), the most words in a day, the best week, the longest meeting, the longest monologue.",
+      "enum": [
+        "longest_dictation",
+        "fastest_dictation",
+        "most_words_day",
+        "best_week",
+        "longest_meeting",
+        "longest_monologue"
+      ]
+    },
+    "BestUnit": {
+      "type": "string",
+      "description": "What a best's value counts: ms, words a minute, or words.",
+      "enum": [
+        "ms",
+        "wpm",
+        "words"
+      ]
+    },
+    "BestRow": {
+      "type": "object",
+      "description": "A personal best held.",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/BestId",
+          "description": "Which."
+        },
+        "unit": {
+          "$ref": "#/$defs/BestUnit",
+          "description": "What value counts."
+        },
+        "value": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The best, in its unit."
+        },
+        "date": {
+          "type": "string",
+          "description": "When, YYYY-MM-DD: the take's local day, the day, or the week's first day."
+        },
+        "record": {
+          "type": "string",
+          "description": "The take holding it, for a take's best; absent for a day's or a week's."
+        }
+      },
+      "required": [
+        "id",
+        "unit",
+        "value",
+        "date"
+      ],
+      "additionalProperties": false
+    },
+    "BestNews": {
+      "type": "object",
+      "description": "A best just set, for a short note in the Drop (a dictation's) or at the meeting's end (a meeting's).",
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/BestId",
+          "description": "Which."
+        },
+        "unit": {
+          "$ref": "#/$defs/BestUnit",
+          "description": "What old and new count."
+        },
+        "old": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The best before."
+        },
+        "new": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The best now."
+        },
+        "date": {
+          "type": "string",
+          "description": "When, as a BestRow's date."
+        },
+        "record": {
+          "type": "string",
+          "description": "The take holding it, as a BestRow's record."
+        }
+      },
+      "required": [
+        "id",
+        "unit",
+        "old",
+        "new",
+        "date"
+      ],
+      "additionalProperties": false
+    },
+    "WeekReview": {
+      "type": "object",
+      "description": "Last week, reviewed: gains and plain facts only, nothing said to be down.",
+      "properties": {
+        "week": {
+          "type": "string",
+          "description": "Its first day, YYYY-MM-DD: what stats.review_dismissed takes to dismiss it (kept dismissed if the week's first day changes later)."
+        },
+        "words": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Words dictated."
+        },
+        "saved_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Time saved, ms, as saved_ms_week. Absent unless there was some."
+        },
+        "saved_about": {
+          "type": "array",
+          "description": "What saved_ms is about, as saved_about_week.",
+          "items": {
+            "$ref": "#/$defs/TimeEquivalent",
+            "description": "One picture of the time."
+          }
+        },
+        "best_day": {
+          "type": "string",
+          "description": "The day with the most words, YYYY-MM-DD (the earliest on a tie). Absent without words."
+        },
+        "best_day_words": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Its words."
+        },
+        "wpm": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Words per minute, with at least a minute of speech."
+        },
+        "wpm_gain": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "How many words a minute faster than the four weeks before it. Absent unless it was faster: a slower week is never compared."
+        },
+        "meetings": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Meetings recorded here."
+        },
+        "meeting_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Their length, ms."
+        },
+        "promises_kept": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Of the promises made in its meetings, those done now (no time is kept for when one was done). Absent when none."
+        }
+      },
+      "required": [
+        "week",
+        "words",
+        "meetings",
+        "meeting_ms"
+      ],
+      "additionalProperties": false
+    },
+    "StatsCounted": {
+      "type": "object",
+      "description": "The Stats screen's numbers, in answer to stats.get, streak.pause or streak.resume: counted on this computer from the library, on the user's calendar. Nothing here is sent anywhere or drawn from what was said.",
+      "properties": {
+        "type": {
+          "const": "stats.counted"
+        },
+        "ref": {
+          "type": "string",
+          "description": "The id of the command this answers, echoed so the shell can match the answer to its question."
+        },
+        "today": {
+          "type": "string",
+          "description": "Today on the user's calendar, YYYY-MM-DD."
+        },
+        "typing_wpm": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "The typing speed time saved is measured against (stats.typing_wpm, 40 unless set)."
+        },
+        "dictation": {
+          "$ref": "#/$defs/DictationStats",
+          "description": "Dictation."
+        },
+        "meetings_month": {
+          "$ref": "#/$defs/MeetingStats",
+          "description": "Meetings that started this month."
+        },
+        "meetings_all": {
+          "$ref": "#/$defs/MeetingStats",
+          "description": "Meetings, all time."
+        },
+        "promises_month": {
+          "$ref": "#/$defs/PromiseStats",
+          "description": "Promises made in meetings that started this month."
+        },
+        "promises_all": {
+          "$ref": "#/$defs/PromiseStats",
+          "description": "Promises, all time."
+        },
+        "milestones": {
+          "type": "array",
+          "description": "Every milestone, in a fixed order; with the streak hidden, the words milestones only.",
+          "items": {
+            "$ref": "#/$defs/MilestoneRow",
+            "description": "One milestone."
+          }
+        },
+        "bests": {
+          "type": "array",
+          "description": "The user's personal bests, from takes made here (never an import's), in a fixed order: longest_dictation, fastest_dictation, most_words_day, best_week, longest_meeting, longest_monologue. A best not held yet is absent: nothing to show, never a zero.",
+          "items": {
+            "$ref": "#/$defs/BestRow",
+            "description": "One best."
+          }
+        },
+        "week_review": {
+          "$ref": "#/$defs/WeekReview",
+          "description": "Last week, reviewed, to lead the screen with until the user dismisses it (stats.review_dismissed, its week's first day). Absent when last week had no dictation and no meeting, or once dismissed."
+        }
+      },
+      "required": [
+        "type",
+        "today",
+        "typing_wpm",
+        "dictation",
+        "meetings_month",
+        "meetings_all",
+        "promises_month",
+        "promises_all",
+        "milestones"
+      ],
+      "additionalProperties": false
+    },
+    "MilestonesReached": {
+      "type": "object",
+      "description": "In answer to milestones.check: the milestones reached since the last check, to celebrate, and a best the take just set, for a short note. Each milestone is reported once ever; a library's first check, and any check while stats.celebrate is off, reports none (what is reached is noted all the same). A hidden streak's milestones are noted, not reported.",
+      "properties": {
+        "type": {
+          "const": "milestones.reached"
+        },
+        "ref": {
+          "type": "string",
+          "description": "The id of the command this answers, echoed so the shell can match the answer to its question."
+        },
+        "milestones": {
+          "type": "array",
+          "description": "The newly reached milestones, in the fixed order of stats.counted's; usually none.",
+          "items": {
+            "$ref": "#/$defs/MilestoneRow",
+            "description": "One milestone."
+          }
+        },
+        "best": {
+          "$ref": "#/$defs/BestNews",
+          "description": "A best the newest take, today or this week just set: at most one a day, never on a library's first check or with stats.celebrate off, and only once it beat at least five earlier entries. Absent otherwise."
+        }
+      },
+      "required": [
+        "type",
+        "milestones"
+      ],
+      "additionalProperties": false
+    },
+    "PolishModelState": {
+      "type": "string",
+      "description": "Whether a mode's own language model can polish its takes now: ready (the core holds it, and it sends where it did when the mode was saved), missing (the core does not hold it now: let go of, or another provider chosen; its takes go in as said with polish_model_missing) or moved (it sends somewhere else now than when the mode was saved, such as a custom server re-pointed from this machine to another: its takes go in as said with polish_model_missing until the user confirms it there: modes.save with polish_model_confirm and polish_model_confirm_to, where polish_models says it sends) or unrecorded (where it sends was never recorded, as for a pin saved by an early build: the same until the user confirms it).",
+      "enum": [
+        "ready",
+        "missing",
+        "moved",
+        "unrecorded"
+      ]
+    },
+    "ConsentEntry": {
+      "type": "object",
+      "description": "One destination the user agreed a feature may send to.",
+      "properties": {
+        "to": {
+          "$ref": "#/$defs/LlmDestination",
+          "description": "Where."
+        },
+        "name": {
+          "type": "string",
+          "description": "For cloud, the provider's name the user agreed to."
+        },
+        "endpoint": {
+          "type": "string",
+          "description": "For cloud, its destination: what consent.revoke names to take it away."
+        }
+      },
+      "required": [
+        "to"
+      ],
+      "additionalProperties": false
+    },
+    "MeetingsShortcutState": {
+      "type": "object",
+      "description": "The confirmed global meeting shortcut and whether it is held. Suspension acknowledges that no meeting shortcut can fire while the shell records a new key.",
+      "properties": {
+        "type": {
+          "const": "meetings.shortcut.state"
+        },
+        "key": {
+          "type": "string",
+          "description": "The configured canonical shortcut, or off."
+        },
+        "active": {
+          "type": "boolean",
+          "description": "The global hook is held and can toggle recording."
+        },
+        "suspended": {
+          "type": "boolean",
+          "description": "The shell suspended the hook while recording a shortcut."
+        },
+        "error": {
+          "type": "string",
+          "description": "Why the configured shortcut could not be held."
+        },
+        "ref": {
+          "type": "string",
+          "description": "The suspend/resume command id, when answering one."
+        }
+      },
+      "required": [
+        "type",
+        "key",
+        "active",
+        "suspended"
       ],
       "additionalProperties": false
     }

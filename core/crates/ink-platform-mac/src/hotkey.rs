@@ -41,6 +41,13 @@ use crate::clock::{MacClock, Timebase};
 use binding::Binding;
 use tap::Tap;
 
+/// Whether a session tap can watch `token` (a dictation or edit key the user chose): its
+/// canonical spelling, to store and compare, or why not in plain words. A [`MacHotkeySource`]
+/// binds exactly the tokens this accepts. The words start in lower case, without a full stop.
+pub fn check(token: &str) -> Result<String, &'static str> {
+    binding::check_token(token)
+}
+
 /// The marker in `kCGEventSourceUserData` on every event this crate posts, so its own tap lets
 /// them through. Arbitrary; ASCII for "inkw".
 pub(crate) const SYNTHETIC_EVENT_MARK: i64 = 0x696E_6B77;

@@ -8,7 +8,7 @@
 //
 // The name is the uninstall entry's, else the exe's own FileDescription or ProductName, else the
 // stem (InstalledAppValues.Name). Start-menu shortcuts are not read: their targets need
-// IShellLink, a COM interface this NativeAOT build does not marshal, so an app found only there
+// IShellLink, a COM interface the app does not marshal, so an app found only there
 // reads as a well-known name or its stem. Packaged (Store) apps are not listed either.
 //
 // Registry only, no files opened but the exe's version resource. The Uninstall entries are read

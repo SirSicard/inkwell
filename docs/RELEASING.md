@@ -191,12 +191,20 @@ spctl -a -vv -t open --context context:primary-signature ~/Downloads/inkwell-dry
 ### Cut it
 
 ```bash
-# 0. On an up-to-date main: the Rust notices match its Cargo.lock and a fresh run, so the release
-#    ships what About lists. Fetches the crates it has not got; fails naming any crate whose
-#    notice is missing or stale.
+# 0. One pull request, merged to main: the CHANGELOG heading (## [Unreleased] -> ## [X.Y.Z] - date)
+#    and the core's version. The app's version comes from the tag (build-mac.sh writes it into the
+#    bundle, the Windows build into the app); the core's is core/Cargo.toml's [workspace.package]
+#    version, which About shows as "core X.Y.Z" on both. Set it to X.Y.Z, then the lock and the
+#    Rust notices, which record the lock's fingerprint:
+(cd core && cargo update --workspace)
+mac/scripts/rust-notices.sh
+(cd core && cargo run -p ink-ffi --bin ink-notices -- --windows)
+# 1. On an up-to-date main: the Rust notices match its Cargo.lock and a fresh run, so the release
+#    ships what About lists (fetches the crates it has not got; fails naming any crate whose
+#    notice is missing or stale), and the core says the release's version. Both tags' first step
+#    runs the second check too (core-version.sh), and stops there when it fails.
 mac/scripts/rust-notices.sh --check
-# 1. The CHANGELOG heading: ## [Unreleased] -> ## [X.Y.Z] - date, merged to main. The version
-#    itself comes from the tag: build-mac.sh writes it into the bundle.
+mac/scripts/core-version.sh X.Y.Z
 # 2. Tag main and push the tag. Only v1.X.Y exactly (no suffix: it is also CFBundleVersion, which
 #    Sparkle compares); a pre-release is a dry run.
 git fetch origin && git tag -a v1.X.Y -m "Inkwell X.Y.Z" origin/main && git push origin v1.X.Y
@@ -282,6 +290,8 @@ Before the tag:
       the rows of `THIRD_PARTY.md` that point into `src/` or `src-tauri/`, and the matching
       exception in `NoticesTests`; the scripts only 0.2 uses (`scripts/download-models.*`,
       `scripts/gen-model-chart.py`); and `TODO.md`, the 0.2 work list. `docs/legacy/` stays.
+- [x] The core at 1.0.0 (`core/Cargo.toml`), so About says "core 1.0.0" on both platforms;
+      `mac/scripts/core-version.sh 1.0.0` passes.
 - [ ] The README rewritten for 1.0.
 - [ ] The Windows app ready for the same release, through its own chain.
 - [ ] Step 0, the dry run, on the commit to be tagged; then "Cut it" with `v1.0.0`.
@@ -317,7 +327,7 @@ Then:
 
 The same `v1.X.Y` tag starts `win-release.yml` beside `mac-release.yml`. On x64, the one Windows
 architecture 1.0 ships (`win-release-build.yml`, on `windows-2025`; ARM64 waits for 1.0.1), it
-builds the core with the Windows engines and the app with NativeAOT, checks what they need from a
+builds the core with the Windows engines and the app ReadyToRun, checks what they need from a
 PC, packs the installer and the update feed with Velopack, and then adds them to the tag's
 **draft** release (creating it if the Mac's workflow has not yet). A manual run is the dry run:
 everything but the release, the files kept as the run artifact `inkwell-windows` for 14 days.
@@ -355,7 +365,7 @@ past SmartScreen (`windows/HOMEPAGE-INSTALL.md` is its draft). Signing is a late
 
 | Job | Runs on | Holds | Does |
 |---|---|---|---|
-| `build` (`win-release-build.yml`) | tag and dry run | nothing secret; read access | sherpa-onnx's archive, the Vulkan SDK (pinned by LunarG's published SHA-256) and the diarizer's prefix, all pinned; `windows/scripts/build-core.ps1`; the generated-code and notice checks; the locked restore and NuGet licence check; the NativeAOT publish with the tag's version; `windows/scripts/pack.ps1` |
+| `build` (`win-release-build.yml`) | tag and dry run | nothing secret; read access | sherpa-onnx's archive, the Vulkan SDK (pinned by LunarG's published SHA-256) and the diarizer's prefix, all pinned; `windows/scripts/build-core.ps1`; the generated-code and notice checks; the locked restore and NuGet licence check; the ReadyToRun publish with the tag's version; `windows/scripts/pack.ps1` |
 | `publish` | tag only | write access (environment `release`) | the files checked against their SHA-256s, then added to the tag's draft release, with a Windows section in its notes |
 
 What a release carries for Windows:
@@ -403,9 +413,27 @@ What the checks guarantee:
   binary allowed to need the loader when it loads; the core checks the diarizer loads before its
   first call (ink-engines' `src/nemo.rs`).
 - **It is x64's.** `pack.ps1` refuses an `Inkwell.exe` or core built for another architecture.
+- **The core's version.** A tag waits, as the Mac's does, until `core/Cargo.toml` says the tag's
+  version, which About shows as the core's (`windows/scripts/release-version.sh` runs
+  `mac/scripts/core-version.sh`, as the Mac's release-version.sh does); a dry run says so and
+  goes on.
 - **Notices first.** A tag waits, as the Mac's does, for every notice written without its upstream
   file to be compared with it, the Windows-only ones (`windows/Inkwell.Core/Screens/About/composed-notices.txt`)
   included (`windows/scripts/release-version.sh`).
+
+**When a PC reports a problem.** The app keeps a log of its own on the PC and never sends it
+anywhere: `logs\inkwell.log` in the library folder (`%LOCALAPPDATA%\Inkwell\logs`, or under
+`INK_DATA_DIR`), up to 1 MB, with the two before it as `inkwell.1.log` and `inkwell.2.log`
+(`windows/Inkwell.Core/LocalLog.cs`). It holds the shell's diagnostics (`ScreenLog`: what failed,
+by command name and fixed words, never a command's fields), the ink's (`InkLog`: the GPU it draws
+on, why it could not) and what the core writes to stderr at its default level, info. The core keeps what was said out of its lines; they can name files in
+the library and models folders, and quote an online provider's error. Of anything else written
+to stderr only the length is kept, and of a Rust panic only its first line (where, never the
+message). When an exception ends the app, it first writes
+`crash-YYYYMMDD-HHMMSS.txt` beside the log: the time, the app's and Windows' versions, and each
+exception's type and stack, without its message (the newest ten are kept). A crash inside native
+code (the core, an engine, a GPU driver) ends the process without a note. Ask the user for the
+files; uninstalling leaves them, with the library.
 
 The same build on a PC (Visual Studio's C++ build tools, CMake, Ninja, LLVM, Git Bash, the Vulkan
 SDK with `VULKAN_SDK` set, the .NET SDK `windows/global.json` pins), x64:

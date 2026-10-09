@@ -1,7 +1,7 @@
 // The first-run state: a sheet over the window until the user finishes or skips it, remembered in
 // the core's store (onboarding.done). What Inkwell does, the four permission cards (nothing asked
-// for until the user presses a card's button), the models not on this PC yet (nothing downloads
-// until the user presses the step's Download, which says what, how much and from where; the
+// for until the user presses a card's button), the models as choices by outcome (ModelChoices:
+// nothing downloads until the user presses the step's Download, which carries the total; the
 // downloads are the CatalogueModel's and go on after the sheet), Inkwell 0.2's history (only while
 // there is some to import: Import02Model.Offered), the appearance (the mode and the dots, which
 // Settings > Appearance holds too), polish (off, and turned on only through its
@@ -15,7 +15,7 @@ public enum OnboardingStep
 {
     Welcome,
     Permissions,
-    /// <summary>The models not on this PC yet, and one Download for them.</summary>
+    /// <summary>What Inkwell should be able to do, as choices, and one Download for them (ModelChoices).</summary>
     Models,
     /// <summary>Only while Inkwell 0.2's data is offered.</summary>
     ImportData,
@@ -23,6 +23,17 @@ public enum OnboardingStep
     Appearance,
     Polish,
     Ready,
+}
+
+/// <summary>Where polish's consent step shows in the Polish step: under what asked for it.</summary>
+public enum PolishStepPlace
+{
+    /// <summary>Under the switch (and its line).</summary>
+    UnderSwitch,
+    /// <summary>Under Use Groq, in the own key's disclosure.</summary>
+    UnderGroqUse,
+    /// <summary>Under the other providers' Use, in the own key's disclosure.</summary>
+    UnderOthersUse,
 }
 
 public sealed class OnboardingModel : ObservableModel
@@ -71,6 +82,9 @@ public sealed class OnboardingModel : ObservableModel
             return;
         }
         Step = following[0];
+        // The try-it starts afresh each time the Ready step is reached.
+        NotHearing = false;
+        TakeEnded();
         Changed();
     }
 
@@ -119,10 +133,90 @@ public sealed class OnboardingModel : ObservableModel
         return failed.Command == "setting.get" && failed.Id == SettingId;
     }
 
+    // The Ready step's try-it hint, as the Mac's TryItHint: when the orb heard nothing, where to
+    // pick the microphone. Shown after a take that found no speech or only silence, or 5 s into a
+    // take held with no words heard (only where words come live: with no live model a take shows
+    // none until it ends); gone when words come, or a take types something. One delayed call per
+    // take, no timer. The first run has no picker of its own (one place for it: Settings > Sound).
+
+    public const string NotHearingText = "Not hearing you? Once you're set up, Settings > Sound picks the microphone and tests it.";
+
+    /// <summary>How long a held take may hear no words before the hint shows.</summary>
+    public static readonly TimeSpan NotHearingAfter = TimeSpan.FromSeconds(5);
+
+    /// <summary>The take being held, and its one delayed look.</summary>
+    private long? heldTake;
+    private bool heldHeardWords;
+    private IDisposable? heldLook;
+
+    /// <summary>Whether the try-it heard nothing: the Ready step says where the microphone is picked.</summary>
+    public bool NotHearing { get; private set; }
+
+    /// <summary>Runs the 5 s look (ScreenModels gives it the app's wake scheduler; none: never).</summary>
+    public IWakeScheduler? Wake { get; set; }
+
+    /// <summary>Whether a live model gives words while a take is held (the catalogue's Live words line).</summary>
+    public Func<bool> HasLiveWords { get; set; } = () => false;
+
+    private void SetNotHearing(bool on)
+    {
+        if (NotHearing != on)
+        {
+            NotHearing = on;
+            Changed();
+        }
+    }
+
+    private void TakeEnded()
+    {
+        heldTake = null;
+        heldLook?.Dispose();
+        heldLook = null;
+    }
+
     public void Apply(InkEvent e)
     {
         switch (e)
         {
+            // The try-it is only the Ready step's: a take on another step, or after the first run,
+            // neither shows the hint nor schedules a look.
+            case DictationStarted or DictationPartial or DictationStopped or DictationDiscarded or DictationInserted
+                or DictationFailed or DictationShortPressIgnored or DictationMicFailed
+                when !(Showing && Step == OnboardingStep.Ready):
+                TakeEnded();
+                break;
+            case DictationStarted { Edit: false } started:
+                TakeEnded();
+                heldTake = started.Take;
+                heldHeardWords = false;
+                var take = started.Take;
+                heldLook = Wake?.After(NotHearingAfter, () =>
+                {
+                    if (heldTake == take && !heldHeardWords && HasLiveWords())
+                    {
+                        SetNotHearing(true);
+                    }
+                });
+                break;
+            case DictationPartial words when words.Take == heldTake && !string.IsNullOrWhiteSpace(words.Text):
+                // Words came after all (a pause past 5 s): it hears you.
+                heldHeardWords = true;
+                SetNotHearing(false);
+                break;
+            case DictationStopped:
+                TakeEnded();
+                break;
+            case DictationDiscarded { Reason: Discard.Silence or Discard.NoSpeech or Discard.NothingHeard }:
+                TakeEnded();
+                SetNotHearing(true);
+                break;
+            case DictationInserted:
+                TakeEnded();
+                SetNotHearing(false);
+                break;
+            case DictationDiscarded or DictationFailed or DictationShortPressIgnored or DictationMicFailed or CoreStopped:
+                TakeEnded();
+                break;
             case SettingValue value when value.Key == ShellSetting.OnboardingDone.Key():
                 Completed = value.Value == "true";
                 Changed();
@@ -158,6 +252,40 @@ public sealed class OnboardingModel : ObservableModel
 
     public bool ShowsBack => Step != OnboardingStep.Welcome;
 
+    /// <summary>
+    /// Skip, Back and Continue work: not while polish's consent step is up on the Polish step, as
+    /// nothing moves behind the Mac's alert. The step's Cancel (or Escape) or its agreeing button
+    /// answers it first. Off the Polish step the card can't be seen, so it holds nothing (Escape
+    /// still cancels it); a step Settings asked for is its own dialog and never holds the sheet.
+    /// </summary>
+    public static bool CanNavigate(ConsentModel polishConsent, OnboardingStep step)
+    {
+        ArgumentNullException.ThrowIfNull(polishConsent);
+        return step != OnboardingStep.Polish || !polishConsent.IsShowingStep(ConsentHost.Onboarding);
+    }
+
+    /// <summary>
+    /// Where polish's step shows: right under what asked for it, the switch or the Use in view
+    /// (Use Groq, or the other providers' Use). With the own key's disclosure closed a Use step
+    /// would be hidden inside it, so it shows under the switch.
+    /// </summary>
+    public static PolishStepPlace PolishStepPlaceFor(bool askedBySwitch, bool ownKeyOpen, bool others) =>
+        askedBySwitch || !ownKeyOpen ? PolishStepPlace.UnderSwitch
+        : others ? PolishStepPlace.UnderOthersUse
+        : PolishStepPlace.UnderGroqUse;
+
+    /// <summary>
+    /// Where a step asked for at <paramref name="asked"/> shows now: there while those rows show,
+    /// so it never moves under a Use that did not ask; under the switch while they are hidden (the
+    /// disclosure closed, or the other set of rows shown), so it is never hidden.
+    /// </summary>
+    public static PolishStepPlace PolishStepShownAt(PolishStepPlace asked, bool ownKeyOpen, bool others) => asked switch
+    {
+        PolishStepPlace.UnderGroqUse when ownKeyOpen && !others => asked,
+        PolishStepPlace.UnderOthersUse when ownKeyOpen && others => asked,
+        _ => PolishStepPlace.UnderSwitch,
+    };
+
     /// <summary>Start on the last step; on the import step, Not now until something came over.</summary>
     public string NextTitle => Step switch
     {
@@ -182,8 +310,8 @@ public sealed class OnboardingModel : ObservableModel
 
     public const string ModelsTitle = "Models";
 
-    /// <summary>The step's one Download: every model its line names (CatalogueModel.DownloadMissing).</summary>
-    public const string DownloadTitle = "Download";
+    /// <summary>The step's choices: which are ticked (the first is always).</summary>
+    public ModelChoices Choices { get; } = new();
 
     /// <summary>Shown while a download runs: Continue does not wait for it.</summary>
     public const string ModelsGoOn = "You can go on: the downloads continue, and Settings > Models shows them.";
@@ -191,14 +319,7 @@ public sealed class OnboardingModel : ObservableModel
     /// <summary>Asks for the model list again when it could not be read.</summary>
     public const string ModelsTryAgain = "Try again";
 
-    /// <summary>The models step's rows: every model not installed, and any downloaded this run (it stays, as installed).</summary>
-    public static IReadOnlyList<ModelRow> ModelRows(CatalogueModel catalogue)
-    {
-        ArgumentNullException.ThrowIfNull(catalogue);
-        return catalogue.Rows.Where(r => !r.Entry.Installed || r.Download is not null).ToList();
-    }
-
-    /// <summary>The line over the models step's rows: what they are, or where the list is.</summary>
+    /// <summary>The line over the models step's choices: what they are for, or where the list is.</summary>
     public static string ModelsNote(CatalogueModel catalogue)
     {
         ArgumentNullException.ThrowIfNull(catalogue);
@@ -210,36 +331,9 @@ public sealed class OnboardingModel : ObservableModel
         {
             return "Checking which models are on this PC…";
         }
-        return ModelRows(catalogue).Any(r => !r.Installed)
-            ? "Inkwell turns speech into text with models that run on this PC. These are not on it yet:"
+        return ModelChoices.Shown(catalogue).Any(c => !ModelChoices.Installed(c, catalogue))
+            ? "Inkwell writes down speech with models that run on this PC. Each is downloaded once, and only when you press Download."
             : "Every model Inkwell uses is on this PC.";
-    }
-
-    /// <summary>The line by the step's Download: how much in all, and from where; null when there is nothing left to ask for.</summary>
-    public static string? DownloadLine(CatalogueModel catalogue, IFormatProvider? format = null)
-    {
-        ArgumentNullException.ThrowIfNull(catalogue);
-        var models = catalogue.NotAskedFor;
-        return models.Count == 0
-            ? null
-            : $"{StorageModel.Size(models.Sum(m => m.SizeBytes), format)} in all, from {Sources(models)}. Nothing downloads until you press Download.";
-    }
-
-    /// <summary>The step's Download for screen readers: which models, how much in all, from where.</summary>
-    public static string DownloadName(CatalogueModel catalogue, IFormatProvider? format = null)
-    {
-        ArgumentNullException.ThrowIfNull(catalogue);
-        var models = catalogue.NotAskedFor;
-        return $"Download {And(models.Select(m => CatalogueModel.Name(m.Id)))}: {StorageModel.Size(models.Sum(m => m.SizeBytes), format)} in all, from {Sources(models)}";
-    }
-
-    private static string Sources(IEnumerable<CatalogueEntry> models) => And(models.Select(m => CatalogueModel.Source(m.Id)).Distinct());
-
-    /// <summary>"a", "a and b", "a, b and c".</summary>
-    private static string And(IEnumerable<string> items)
-    {
-        var list = items.ToList();
-        return list.Count < 2 ? string.Concat(list) : $"{string.Join(", ", list.Take(list.Count - 1))} and {list[^1]}";
     }
 
     public const string AppearanceTitle = "Appearance";
@@ -253,10 +347,77 @@ public sealed class OnboardingModel : ObservableModel
 
     public const string PolishToggle = "Polish my words";
 
+    /// <summary>The own-key provider the Polish step offers: Groq, for its free tier (the alternative once this PC's model is offered).</summary>
+    public const string OwnKeyProvider = "groq";
+
+    /// <summary>The own key's disclosure while this PC's model is offered above it: the alternative.</summary>
+    public const string OwnKeyAlternativeTitle = "Or use Groq's free model";
+
+    /// <summary>
+    /// The Polish step's line about this PC's own model, once it is ticked in Models, downloading
+    /// or in: what the switch above uses, or when it can. Null when the user did not take it (the
+    /// step then offers Groq's free key alone).
+    /// </summary>
+    public static string? PolishLocalLine(CatalogueModel catalogue, CloudModel cloud, ModelChoices choices, IFormatProvider? format = null)
+    {
+        ArgumentNullException.ThrowIfNull(catalogue);
+        ArgumentNullException.ThrowIfNull(cloud);
+        ArgumentNullException.ThrowIfNull(choices);
+        if (catalogue.LanguageRow is not ModelRow row)
+        {
+            return null;
+        }
+        if (row.Installed)
+        {
+            return cloud.Chosen is string chosen && chosen != CloudModel.OnDeviceId
+                ? $"{row.Name} is on this PC, but {CloudModel.ProviderName(chosen)} is chosen. Settings > AI can switch polish to this PC's model."
+                : $"{row.Name} is on this PC: turn polish on above, and your words stay on this PC.";
+        }
+        return row.Download switch
+        {
+            ModelDownload.Waiting or ModelDownload.Running =>
+                $"{row.Name} is downloading ({row.Status(format)}). Once it is in, polish can use it and your words stay on this PC: turn it on here, or later in Settings > AI.",
+            ModelDownload.Failed or ModelDownload.NoSpace =>
+                $"{row.Name} didn't download: {row.Status(format)}. Settings > Models can try again.",
+            _ when choices.IsTicked(ModelChoices.OnThisPc, catalogue) =>
+                $"{row.Name} is ticked in Models, but nothing downloads until you press Download there.",
+            _ => null,
+        };
+    }
+
+    /// <summary>
+    /// The Polish step's own key: one choice, Groq's free model, behind this disclosure, with how
+    /// to get the key over its box (<see cref="GroqKeyGuide"/>, <see cref="GroqKeyGuidePlace.FirstRun"/>).
+    /// </summary>
+    public const string OwnKeyTitle = "Use Groq's free model";
+
+    public const string OwnKeyBoxName = "Groq API key";
+
+    /// <summary>The key box's placeholder: short enough to show whole.</summary>
+    public const string OwnKeyPlaceholder = "Paste your Groq key";
+
+    /// <summary>Stores the key, nothing more (CloudModel.SaveKey); Use Groq then asks and chooses.</summary>
+    public const string OwnKeySave = "Save";
+
+    /// <summary>To Settings > AI's rows, for another provider or model.</summary>
+    public const string OtherProviders = "Other providers or models\u2026";
+
+    /// <summary>Back from those rows to Groq's.</summary>
+    public const string BackToGroq = "Back to Groq's free model";
+
     public const string ReadyTitle = "Ready";
 
-    public static string ReadyLine(string keyName) =>
-        $"Hold {keyName}, say something, and let go. Inkwell lives in the notification area; this window opens from there.";
+    /// <summary>
+    /// The last step's line: how to dictate, or, with no speech model installed, that one is needed
+    /// (the Mac's words; never "Hold … and speak" when nothing could be typed). With no model the
+    /// download follows it, then <see cref="TrayLine"/>.
+    /// </summary>
+    public static string ReadyLine(string keyName, bool noSpeechModel = false) => noSpeechModel
+        ? "Inkwell needs a speech model before it can type what you say."
+        : $"Hold {keyName}, say something, and let go. {TrayLine}";
+
+    /// <summary>Where Inkwell lives once the sheet closes.</summary>
+    public const string TrayLine = "Inkwell lives in the notification area; this window opens from there.";
 
     /// <summary>The ready step's warning about cards still off, or null when none is.</summary>
     public static string? StillOff(PermissionsModel permissions)

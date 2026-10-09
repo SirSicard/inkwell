@@ -1,15 +1,17 @@
-// The menu-bar item: Inkwell's one always-present surface. Its icon shows the state: a template
-// symbol, with a dot in your colour while you dictate, in theirs while a meeting records or blots,
-// and in the alert colour when the far end has gone quiet. Its menu is rebuilt from the store each
-// time it opens (menuNeedsUpdate), and the dot follows the ink's state through observation: nothing
-// watches or polls while nothing changes.
+// The menu-bar item: Inkwell's one always-present surface. Its icon shows the state: the app's
+// mark as a template (StatusGlyph), with the live state laid over it (StatusGlyphOverlay, drawn
+// from LiveIcon's frames): the orb in your colour while you dictate, breathing in theirs while a
+// meeting records, the rim filling with the final pass, the orb in the alert colour when the far
+// end has gone quiet. Its menu is rebuilt from the store each time it opens (menuNeedsUpdate), and
+// its spoken label follows the ink's state through observation: nothing watches or polls while
+// nothing changes.
 import AppKit
 import InkBridge
 import InkRenderer
 import Observation
 
 @MainActor
-final class StatusItemController: NSObject, NSMenuDelegate {
+final class StatusItemController: NSObject, NSMenuDelegate, LiveIconSurface {
     private let item: NSStatusItem
     private let store: CoreStore
     private let ink: ShellInk
@@ -21,8 +23,11 @@ final class StatusItemController: NSObject, NSMenuDelegate {
     private let recordItem = NSMenuItem(title: "Record Now", action: nil, keyEquivalent: "")
     private let dictationItem = NSMenuItem(title: "Dictation", action: nil, keyEquivalent: "")
     private let loginItem = NSMenuItem(title: "Open at Login", action: nil, keyEquivalent: "")
-    /// The state dot over the icon's corner.
-    private let dot = NSView()
+    /// The live state over the mark.
+    private let overlay = StatusGlyphOverlay(frame: .zero)
+    /// The mark, and the mark without its orb (while the overlay colours the orb).
+    private let mark = StatusGlyph.image()
+    private let hollowMark = StatusGlyph.image(orb: false)
 
     /// `checkForUpdates`: the updater's item, nil when this build does not update itself.
     init(
@@ -38,21 +43,11 @@ final class StatusItemController: NSObject, NSMenuDelegate {
         super.init()
 
         if let button = item.button {
-            let image = NSImage(systemSymbolName: "drop.fill", accessibilityDescription: "Inkwell")
-            image?.isTemplate = true
-            button.image = image
+            button.image = mark
             button.toolTip = "Inkwell"
-            dot.wantsLayer = true
-            dot.layer?.cornerRadius = 3.5
-            dot.isHidden = true
-            dot.translatesAutoresizingMaskIntoConstraints = false
-            button.addSubview(dot)
-            NSLayoutConstraint.activate([
-                dot.widthAnchor.constraint(equalToConstant: 7),
-                dot.heightAnchor.constraint(equalToConstant: 7),
-                dot.trailingAnchor.constraint(equalTo: button.trailingAnchor, constant: -3),
-                dot.bottomAnchor.constraint(equalTo: button.bottomAnchor, constant: -3),
-            ])
+            overlay.frame = button.bounds
+            overlay.autoresizingMask = [.width, .height]
+            button.addSubview(overlay)
         }
 
         let menu = NSMenu()
@@ -89,26 +84,24 @@ final class StatusItemController: NSObject, NSMenuDelegate {
 
     // MARK: The icon
 
-    /// Brings the dot in line with the ink's state and the theme's colours, then waits for the
-    /// next change (the change is read on the next turn of the main queue, once applied).
+    /// The overlay runs the breath as a layer animation.
+    var breathesItself: Bool { overlay.breathesItself }
+
+    func show(_ frame: LiveIconFrame) {
+        let image = StatusGlyph.markHasOrb(under: frame.look) ? mark : hollowMark
+        if let button = item.button, button.image !== image { button.image = image }
+        overlay.show(frame)
+    }
+
+    func setAwake(_ awake: Bool) {
+        overlay.setAwake(awake)
+    }
+
+    /// Keeps the spoken label in line with the ink's state, then waits for the next change (the
+    /// change is read on the next turn of the main queue, once applied).
     private func showState() {
         withObservationTracking {
-            let state = ink.state
-            // The mode too: the alert colour is resolved per appearance.
-            _ = screens.theme.isDark
-            let colour: NSColor? = switch state {
-            case .idle: nil
-            case .dictating: GlowColours.nsColor(screens.theme.dots.you)
-            case .meeting, .blotting: GlowColours.nsColor(screens.theme.dots.them)
-            case .problem: Theme.dynamic { $0.alert.nsColor }
-            }
-            dot.isHidden = colour == nil
-            if let colour, let button = item.button {
-                button.effectiveAppearance.performAsCurrentDrawingAppearance {
-                    dot.layer?.backgroundColor = colour.cgColor
-                }
-            }
-            item.button?.setAccessibilityLabel(Self.spoken(state))
+            item.button?.setAccessibilityLabel(Self.spoken(ink.state))
         } onChange: { [weak self] in
             DispatchQueue.main.async {
                 MainActor.assumeIsolated { self?.showState() }

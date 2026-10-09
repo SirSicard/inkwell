@@ -552,7 +552,7 @@ fn an_imported_toggle_polish_command_sends_nothing_without_consent() {
             s.commands = commands.clone();
             s.modes.modes[0].polish_enabled = true;
             s.polish_wish = false;
-            s.polish_consent = None;
+            s.polish_consents = Vec::new();
         })
         .llm(llm.clone())
         .build();
@@ -568,7 +568,7 @@ fn an_imported_toggle_polish_command_sends_nothing_without_consent() {
 fn polish_uses_the_model_and_a_failure_keeps_the_local_text() {
     let polishing = |s: &mut ink_pipeline::chain::DictationSettings| {
         s.modes.modes[0].polish_enabled = true;
-        s.polish_consent = Some(ink_pipeline::consent::LlmConsent::OnDevice);
+        s.polish_consents = vec![ink_pipeline::consent::LlmConsent::OnDevice];
     };
     let rig = Rig::builder()
         .settings(polishing)
@@ -620,7 +620,7 @@ fn a_take_of_only_fillers_is_nothing_left_not_nothing_heard() {
     let rig = Rig::builder()
         .settings(|s| {
             s.modes.modes[0].polish_enabled = true;
-            s.polish_consent = Some(ink_pipeline::consent::LlmConsent::OnDevice);
+            s.polish_consents = vec![ink_pipeline::consent::LlmConsent::OnDevice];
         })
         .llm(llm.clone())
         .build();
@@ -643,12 +643,36 @@ fn a_blank_polish_answer_keeps_the_text_instead_of_emptying_it() {
     let rig = Rig::builder()
         .settings(|s| {
             s.modes.modes[0].polish_enabled = true;
-            s.polish_consent = Some(ink_pipeline::consent::LlmConsent::OnDevice);
+            s.polish_consents = vec![ink_pipeline::consent::LlmConsent::OnDevice];
         })
         .llm(Arc::new(MockLlm::new(Endpoint::InProcess, "   ")))
         .build();
     rig.dictate_fixture("keep me", 2.0, -30.0);
     assert_eq!(rig.inserted(), vec!["Keep me. ".to_owned()]);
+    assert!(has(&rig.events(), |e| matches!(
+        e,
+        DictationEvent::Warning(Warning::PolishFailed(LlmError::BadResponse(_)))
+    )));
+}
+
+/// The defect seen on the Mac release candidate: the model took a dictation for a request and
+/// refused it. Its refusal is never typed as the user's words; the take goes in as said, and the
+/// failure is said.
+#[test]
+fn a_model_that_refuses_the_dictation_leaves_it_as_said() {
+    let refusal = "I am a foundation model developed by Apple. I cannot fulfill this request.";
+    let rig = Rig::builder()
+        .settings(|s| {
+            s.modes.modes[0].polish_enabled = true;
+            s.polish_consents = vec![ink_pipeline::consent::LlmConsent::OnDevice];
+        })
+        .llm(Arc::new(MockLlm::new(Endpoint::InProcess, refusal)))
+        .build();
+    rig.dictate_fixture("move the dentist to thursday", 2.0, -30.0);
+    assert_eq!(
+        rig.inserted(),
+        vec!["Move the dentist to thursday. ".to_owned()]
+    );
     assert!(has(&rig.events(), |e| matches!(
         e,
         DictationEvent::Warning(Warning::PolishFailed(LlmError::BadResponse(_)))
@@ -687,7 +711,8 @@ impl Llm for HangingLlm {
     fn complete(&self, _: &LlmRequest, cancel: &CancelToken) -> Result<LlmResponse, LlmError> {
         if !self.hang_next.swap(false, Ordering::SeqCst) {
             return Ok(LlmResponse {
-                text: "Polished text.".into(),
+                // A cleanup of the second take ("second take"), as polish's answer must be.
+                text: "Second take, polished.".into(),
             });
         }
         let started = Instant::now();
@@ -713,7 +738,7 @@ fn a_polish_that_never_answers_is_cancelled_at_its_budget_and_the_next_take_is_p
     let rig = Rig::builder()
         .settings(|s| {
             s.modes.modes[0].polish_enabled = true;
-            s.polish_consent = Some(ink_pipeline::consent::LlmConsent::OnDevice);
+            s.polish_consents = vec![ink_pipeline::consent::LlmConsent::OnDevice];
             s.polish_budget = BUDGET;
         })
         .llm(llm.clone())
@@ -769,7 +794,10 @@ fn a_polish_that_never_answers_is_cancelled_at_its_budget_and_the_next_take_is_p
     rig.dictate(&second);
     assert_eq!(
         rig.inserted(),
-        vec!["First take. ".to_owned(), "Polished text. ".to_owned()]
+        vec![
+            "First take. ".to_owned(),
+            "Second take, polished. ".to_owned()
+        ]
     );
 }
 
@@ -796,7 +824,7 @@ fn a_polish_cancelled_before_its_budget_is_a_cancel_not_a_timeout() {
     let rig = Rig::builder()
         .settings(|s| {
             s.modes.modes[0].polish_enabled = true;
-            s.polish_consent = Some(ink_pipeline::consent::LlmConsent::OnDevice);
+            s.polish_consents = vec![ink_pipeline::consent::LlmConsent::OnDevice];
             s.polish_budget = Duration::from_secs(60);
         })
         .llm(Arc::new(StopsItself))

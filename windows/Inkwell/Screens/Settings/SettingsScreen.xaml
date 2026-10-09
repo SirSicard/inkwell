@@ -1,7 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Settings (the canvas's Settings board): a list of the sections on the left, and one scrolling
      page with every section top to bottom. Choosing a section in the list scrolls to it; scrolling
-     marks the section in view. Each section brings its own Level 2 heading. -->
+     marks the section in view. Each section sits on its own card, Glow's card as Today's
+     (InkCardStyle: translucent over the orb, solid in High Contrast), with its Level 2 heading
+     inside, so in dark mode one section does not run into the next. -->
 <UserControl
     x:Class="Inkwell.Screens.SettingsScreen"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -19,8 +21,16 @@
                 SelectionMode="Single" />
         </Border>
         <ScrollViewer x:Name="Scroller" Grid.Column="1" ViewChanged="OnScrolled">
-            <StackPanel x:Name="Sections" Padding="40,28" Spacing="26">
-                <TextBlock AutomationProperties.HeadingLevel="Level1" Style="{StaticResource InkScreenTitleStyle}" Text="Settings" />
+            <!-- At most the Mac's width (its SettingsScreen.maxCardWidth): 760 epx inside a card, plus
+                 the card's padding and border (2 x 23) and the page's (2 x 40). Wider, lines grew too
+                 long to read and a row's buttons drifted far from what they act on. -->
+            <StackPanel
+                x:Name="Sections"
+                MaxWidth="886"
+                HorizontalAlignment="Left"
+                Padding="40,28"
+                Spacing="16">
+                <TextBlock Margin="0,0,0,10" AutomationProperties.HeadingLevel="Level1" Style="{StaticResource InkScreenTitleStyle}" Text="Settings" />
             </StackPanel>
         </ScrollViewer>
     </Grid>

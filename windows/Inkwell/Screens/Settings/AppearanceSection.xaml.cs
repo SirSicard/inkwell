@@ -114,6 +114,8 @@ public sealed partial class AppearanceSection : UserControl
             ColourRows.Children.Add(ColourRow(dark, you: true));
             ColourRows.Children.Add(ColourRow(dark, you: false));
             EdgeSwitch.IsOn = appearance.EdgeGlow;
+            OrbSlider.Value = appearance.OrbStrength;
+            OrbValue.Text = $"{appearance.OrbStrength} %";
             MotionChoice.SelectedIndex = appearance.Motion == AppearanceMotion.Still ? 1 : 0;
             FailureLine.Text = appearance.Failed ? AppearanceModel.FailedText : "";
             FailureLine.Visibility = appearance.Failed ? Visibility.Visible : Visibility.Collapsed;
@@ -208,6 +210,21 @@ public sealed partial class AppearanceSection : UserControl
         if (!rendering)
         {
             appearance.SetEdgeGlow(EdgeSwitch.IsOn);
+        }
+    }
+
+    private void OnOrbChanged(object sender, Microsoft.UI.Xaml.Controls.Primitives.RangeBaseValueChangedEventArgs e)
+    {
+        // The slider's Minimum moves its value while the XAML loads, before the label beside it
+        // exists: only a loaded section's slider is the user's.
+        if (OrbValue is null || !IsLoaded)
+        {
+            return;
+        }
+        OrbValue.Text = $"{AppearanceModel.OrbStepped(e.NewValue)} %";
+        if (!rendering)
+        {
+            appearance.SetOrbStrength(e.NewValue);
         }
     }
 

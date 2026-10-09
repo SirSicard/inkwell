@@ -25,9 +25,15 @@ public static class TodayText
         return $"{local.ToString("dddd", calendar.Culture)} {local.ToString(calendar.Culture.DateTimeFormat.MonthDayPattern, calendar.Culture)}";
     }
 
-    /// <summary>The hero's status line: "Listening for meetings · Hold Right Ctrl to dictate" (each part once the core says it).</summary>
-    public static string HeroStatus(bool recording, bool? listening, string? dictate) =>
-        string.Join(" · ", new[] { RecordControlsModel.ListeningText(recording, listening).Trim(), dictate }.Where(p => !string.IsNullOrEmpty(p)));
+    /// <summary>What the hero's status line says in place of the dictation key while no speech model is installed.</summary>
+    public const string NoSpeechModelText = "No speech model is installed";
+
+    /// <summary>
+    /// The hero's status line: "Listening for meetings · Hold Right Ctrl to dictate" (each part
+    /// once the core says it). With no speech model nothing can be dictated: it says that instead.
+    /// </summary>
+    public static string HeroStatus(bool recording, bool? listening, string? dictate, bool noSpeechModel = false) =>
+        string.Join(" · ", new[] { RecordControlsModel.ListeningText(recording, listening).Trim(), noSpeechModel ? NoSpeechModelText : dictate }.Where(p => !string.IsNullOrEmpty(p)));
 
     /// <summary>
     /// The live card's line, while a meeting records or blots: "Zoom · Recording · 12:04", or
@@ -52,6 +58,9 @@ public static class TodayText
         }
         return string.Join(" · ", parts);
     }
+
+    /// <summary>The counts' last word: they lead to Stats (Narrator hears the counts without it).</summary>
+    public const string StatsLink = "Stats ›";
 
     /// <summary>The counts at the foot: today's dictation and this week's meetings. A count that could not be read says so; it is never shown as zero. A count not answered yet is left out.</summary>
     /// <param name="today">library.stats since the start of today, when answered.</param>

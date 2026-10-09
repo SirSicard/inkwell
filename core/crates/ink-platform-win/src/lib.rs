@@ -14,6 +14,7 @@
 //! | [`HotkeySource`](ink_core::HotkeySource) | `WinHotkeySource` | `hotkey` |
 //! | [`TextInserter`](ink_core::TextInserter) | `WinTextInserter` | `insert` |
 //! | [`FocusReader`](ink_core::FocusReader) | `WinFocusReader` | `focus` |
+//! | [`SystemInfo`](ink_core::SystemInfo) | `WinSystemInfo` | `system` |
 //!
 //! Beside them, `folders` finds the roaming app data folder, where Inkwell 0.2 kept its data.
 //!
@@ -41,6 +42,7 @@ mod integrity;
 pub mod permissions;
 mod process;
 mod sessions;
+pub mod system;
 
 #[cfg(windows)]
 pub use capture::{WasapiSource, WinCapture};
@@ -58,3 +60,5 @@ pub use hotkey::WinHotkeySource;
 pub use insert::WinTextInserter;
 #[cfg(windows)]
 pub use permissions::WinPermissionProbe;
+#[cfg(windows)]
+pub use system::WinSystemInfo;

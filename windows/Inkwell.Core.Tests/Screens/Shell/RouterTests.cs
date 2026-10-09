@@ -22,8 +22,8 @@ public class RouterTests
     public void TheSidebarListsLiveOnlyWhileAMeetingIsLive()
     {
         var sections = Enum.GetValues<SidebarSection>();
-        Assert.Equal([Route.Today, Route.Library, Route.Owed, Route.Settings], sections.SelectMany(s => s.Listed(false)));
-        Assert.Equal([Route.Today, Route.Library, Route.Owed, Route.Live, Route.Settings], sections.SelectMany(s => s.Listed(true)));
+        Assert.Equal([Route.Today, Route.Library, Route.Owed, Route.Stats, Route.Settings], sections.SelectMany(s => s.Listed(false)));
+        Assert.Equal([Route.Today, Route.Library, Route.Owed, Route.Stats, Route.Live, Route.Settings], sections.SelectMany(s => s.Listed(true)));
         Assert.Empty(SidebarSection.Recording.Listed(false));
         Assert.Equal("While recording", SidebarSection.Recording.Title());
     }

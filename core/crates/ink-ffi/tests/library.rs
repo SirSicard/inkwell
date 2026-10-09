@@ -472,6 +472,9 @@ impl Store for Counting {
     fn finish_record(&self, id: &RecordId, at: i64) -> Result<(), StoreError> {
         self.inner.finish_record(id, at)
     }
+    fn mark_stuck(&self, id: &RecordId) -> Result<(), StoreError> {
+        self.inner.mark_stuck(id)
+    }
     fn delete_record(&self, id: &RecordId) -> Result<(), StoreError> {
         self.inner.delete_record(id)
     }
@@ -519,6 +522,9 @@ impl Store for Counting {
     }
     fn set_speaker_name(&self, id: &RecordId, s: &SpeakerId, n: &str) -> Result<(), StoreError> {
         self.inner.set_speaker_name(id, s, n)
+    }
+    fn clear_speaker_name(&self, id: &RecordId, s: &SpeakerId) -> Result<(), StoreError> {
+        self.inner.clear_speaker_name(id, s)
     }
     fn speaker_names(&self, id: &RecordId) -> Result<Vec<(SpeakerId, String)>, StoreError> {
         self.inner.speaker_names(id)
@@ -592,6 +598,7 @@ fn opening_an_untitled_record_reads_its_transcript_once() {
         installer,
         data_dir: dir.path().to_owned(),
         permissions: Arc::new(ink_ffi::queries::NoPermissionProbe),
+        local: Default::default(),
         meetings: Default::default(),
     });
     let untitled = record(store.as_ref(), RecordKind::Dictation, None, NOON);

@@ -129,6 +129,25 @@ fn a_hold_past_the_stuck_limit_is_stopped_and_processed() {
     rig.release();
     rig.silence(0.5);
     assert_eq!(rig.inserted().len(), 1);
+    // The record says the watchdog ended it, so the Stats screen counts no speed or best from
+    // it; the next take, released as usual, is not marked.
+    let stuck = |rig: &Rig| -> Vec<bool> {
+        rig.store
+            .records(&RecordQuery {
+                kind: Some(RecordKind::Dictation),
+                before: None,
+                limit: 10,
+            })
+            .unwrap()
+            .iter()
+            .map(|r| r.stuck)
+            .collect()
+    };
+    assert_eq!(stuck(&rig), [true]);
+    rig.dictate(&speech_48k(1.0, -25.0, 9));
+    rig.silence(0.6);
+    assert_eq!(rig.inserted().len(), 2);
+    assert_eq!(stuck(&rig), [false, true], "newest first");
 }
 
 /// The watchdog wakes by the worker's deadline alone: with the mic stalled as well (no audio at
@@ -216,6 +235,29 @@ fn a_voice_edit_replaces_the_selection_with_the_rewrite() {
         }));
     assert_eq!(llm.calls(), 1);
     assert!(rig.dictation_records().is_empty(), "an edit is not saved");
+}
+
+/// A model that refuses the edit leaves the selection as it was: its refusal is never pasted over
+/// the user's text, and the edit's failure is said.
+#[test]
+fn a_refused_edit_leaves_the_selection() {
+    let refusal = "I am a foundation model developed by Apple. I cannot fulfill this request.";
+    let rig = Rig::builder()
+        .llm(Arc::new(MockLlm::new(Endpoint::InProcess, refusal)))
+        .settings(|s| s.edit_consent = Some(ink_pipeline::consent::LlmConsent::OnDevice))
+        .build();
+    rig.answer_anything("make it formal");
+    rig.platform.set_selection(Some("hey all"));
+    rig.silence(0.5);
+    rig.edit_press();
+    rig.feed(&speech_48k(1.2, -25.0, 17));
+    rig.edit_release();
+    rig.silence(0.6);
+    assert!(rig.inserted().is_empty(), "nothing replaced the selection");
+    assert!(has(&rig.events(), |e| matches!(
+        e,
+        DictationEvent::EditFailed(EditFailure::Model(LlmError::BadResponse(_)))
+    )));
 }
 
 /// With nothing selected, the edit ends at its confirmation: nothing is transcribed, rewritten or
@@ -366,7 +408,7 @@ fn with_the_polish_switch_off_nothing_is_polished() {
         .settings(|s| {
             s.modes = polishing_modes();
             s.polish_wish = false;
-            s.polish_consent = Some(ink_pipeline::consent::LlmConsent::OnDevice);
+            s.polish_consents = vec![ink_pipeline::consent::LlmConsent::OnDevice];
         })
         .build();
     rig.answer_anything("as said");
@@ -383,7 +425,7 @@ fn with_the_polish_switch_on_the_modes_that_polish_do() {
         .llm(llm.clone())
         .settings(|s| {
             s.modes = polishing_modes();
-            s.polish_consent = Some(ink_pipeline::consent::LlmConsent::OnDevice);
+            s.polish_consents = vec![ink_pipeline::consent::LlmConsent::OnDevice];
         })
         .build();
     rig.answer_anything("as said");

@@ -40,10 +40,11 @@
 //! modes and voice commands until the user saves 1.0's own.
 //!
 //! **The dictation hotkey** is the one value written under a 1.0 name, because 1.0's
-//! ([`DICTATION_KEY_SETTING`]) exists and means the same thing. 1.0 listens for one modifier held
-//! on its own, hold to talk. 0.2's modifier-only keys (`fn`, `right_cmd`, `right_opt`,
-//! `right_ctrl`) map to it; a key combination such as 0.2's default `super+shift+space`, or any
-//! other key, cannot, and the default key stays. On Windows, where Fn never reaches the OS, `fn`
+//! ([`DICTATION_KEY_SETTING`]) exists and means the same thing. 1.0 holds its key to talk. 0.2's
+//! modifier-only keys (`fn`, `right_cmd`, `right_opt`, `right_ctrl`) map to 1.0's tokens; a key
+//! combination such as 0.2's default `super+shift+space`, or any other key, is not carried over
+//! (0.2 spelled them for its global-shortcut plugin, and this crate cannot ask the platform's
+//! parser), and the default key stays: the user can record the same shortcut in Settings. On Windows, where Fn never reaches the OS, `fn`
 //! is replaced by the Windows default (right Ctrl) and the note says so, naming both keys; 0.2's
 //! `right_cmd` there was the right Windows key. Either way the outcome is recorded under
 //! [`KEY_NOTE_KEY`], so Settings can say once what became of the old key (never silently), and a
@@ -166,7 +167,7 @@ pub const DEFAULT_HOTKEY_0_2: &str = "super+shift+space";
 /// Why a 0.2 hotkey has no 1.0 equivalent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Unmappable {
-    /// A key with modifiers (`super+shift+space`): 1.0 holds one key on its own.
+    /// A key with modifiers (`super+shift+space`), spelled for 0.2's global-shortcut plugin.
     Combination,
     /// A single ordinary key, a blank, or a name 0.2 never wrote: not a modifier 1.0 listens for.
     OtherKey,
@@ -185,7 +186,7 @@ impl Unmappable {
 /// 0.2's `hotkey` setting as 1.0's dictation key token, when 1.0 can hold it.
 ///
 /// 0.2 had two kinds of hotkey (`modkey.rs`): a modifier held on its own, written as a token, and
-/// a key combination parsed by its global-shortcut plugin. Only the first kind exists in 1.0.
+/// a key combination parsed by its global-shortcut plugin. Only the first kind is carried over.
 ///
 /// On Windows (0.2 shipped there too), `fn` becomes the Windows default, right Ctrl, because Fn
 /// never reaches Windows ([`replaced_on_this_os`] says so), and `right_cmd`, which 0.2 bound to

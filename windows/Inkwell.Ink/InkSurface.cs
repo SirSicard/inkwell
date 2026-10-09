@@ -7,6 +7,15 @@
 // The canvas follows the prototype's sizing rule, as on the Mac: the display scale, capped at 1.25
 // for a large canvas (over 180,000 square DIPs) and at 2 otherwise.
 //
+// Given bounds (the main window's orb), it wanders (OrbWander), as the Mac's InkView: live, slowly,
+// on the frames it draws anyway; at rest it glides to a new spot for a couple of seconds when it
+// comes on screen, when the screen or the monitor behind it changes (MoveAtRest), and when its
+// window is activated after a few minutes in one spot (Activated), then holds still again. No timer
+// moves it: a window left alone at rest draws nothing. Hidden it never moves; with motion stilled it
+// takes each new spot in the one still frame, without a glide. Held (HoldsStill: something is drawn
+// over it, as a milestone's glow) it takes no new spot until let go, except the one it takes on
+// coming on screen; whatever holds it waits for that glide (Settled) before reading where it is.
+//
 // A frame that fails is not the end: the surface drops the host's device objects and tries again
 // after 0.5, 1 and 2 s, then every 5 s, for as long as the host is on screen (hidden, it waits for
 // the next show: nothing ticks for a hidden ink). Only a lost device (TDR, driver update: the
@@ -63,6 +72,8 @@ public sealed class InkSurface : IDisposable
     /// <summary>Recovery attempts since the last frame that drew.</summary>
     private int attempts;
     private bool retryScheduled;
+    private bool redrawScheduled;
+    private Timer? redrawTimer;
     private bool retryWhenShown;
     private Timer? retryTimer;
     private bool fallbackShown;
@@ -77,6 +88,11 @@ public sealed class InkSurface : IDisposable
     private double lastTick;
     private bool firstTick = true;
     private (int Width, int Height) canvas;
+    private OrbWander? wander;
+    /// <summary>When the wandering orb last moved at rest (InkClock's seconds).</summary>
+    private double lastMove;
+    /// <summary>What awaits Settled: let go once the orb is on screen and not gliding.</summary>
+    private readonly List<TaskCompletionSource> settleWaiters = [];
 
     /// <summary>A surface drawing into <paramref name="target"/> with the loader's pipeline, driven by <paramref name="clock"/> while live. UI thread.</summary>
     public InkSurface(IInkTarget target, InkPipelineLoader loader, InkClock clock)
@@ -109,7 +125,20 @@ public sealed class InkSurface : IDisposable
             {
                 return;
             }
+            var old = schedule.State;
             simulation.State = value;
+            // Going to rest it stays where it got to (and that counts as its last move); going
+            // live it sets off from there. From one live state to another it keeps going.
+            if (!(old.IsLive() && value.IsLive()) && wander is { } w)
+            {
+                var now = Now();
+                w.Hold(now);
+                wander = w;
+                if (!value.IsLive())
+                {
+                    lastMove = now;
+                }
+            }
             Perform(schedule.SetState(value));
         }
     }
@@ -147,6 +176,143 @@ public sealed class InkSurface : IDisposable
         }
     } = InkPlacement.Centre;
 
+    /// <summary>
+    /// The region the orb's centre wanders in, as fractions of the canvas; null keeps it at
+    /// Placement (the Drop, the first run). Its home is Placement, where it starts.
+    /// </summary>
+    public OrbWander.Bounds? WanderBounds
+    {
+        get;
+        set
+        {
+            if (field == value)
+            {
+                return;
+            }
+            field = value;
+            // Held, it starts where it is, not at home: whatever is drawn over it stays on it.
+            var start = HoldsStill ? OrbCentre : (Placement.X, Placement.Y);
+            wander = value is { } bounds ? new OrbWander(bounds, start, WanderRandom) : null;
+            Perform(schedule.SetGliding(false));
+            Perform(schedule.Invalidate());
+        }
+    }
+
+    /// <summary>For tests: the wander's random source, read when WanderBounds is set.</summary>
+    internal InkRandom WanderRandom { get; set; } = InkRandom.System;
+
+    /// <summary>Activation moves a resting orb only this long after its last move (tests shorten it).</summary>
+    internal double RestInterval { get; set; } = OrbWander.RestInterval;
+
+    /// <summary>
+    /// Held: a wandering orb takes no new spot until let go (no change of screen or monitor, no
+    /// activation, no live leg: a live drift stops where it is), and letting go moves nothing. A
+    /// glide under way finishes, and coming on screen still glides to a new spot, so the orb never
+    /// freezes part way. For something drawn over the orb's spot: it holds, awaits Settled, then
+    /// reads OrbCentre, which stays put until it lets go.
+    /// </summary>
+    public bool HoldsStill
+    {
+        get;
+        set
+        {
+            if (field == value)
+            {
+                return;
+            }
+            field = value;
+            if (value && !schedule.Gliding && wander is { } w)
+            {
+                w.Hold(Now());
+                wander = w;
+            }
+        }
+    }
+
+    /// <summary>The spot has been read (what is drawn over it is showing): while held, not even coming on screen moves it.</summary>
+    public bool HoldsSpot { get; set; }
+
+    /// <summary>The orb's centre now, as fractions of the canvas (x from the left, y from the top).</summary>
+    public (double X, double Y) OrbCentre => wander?.Position(Now()) ?? (Placement.X, Placement.Y);
+
+    /// <summary>Whether the orb is gliding to a new spot at rest.</summary>
+    public bool IsGliding => schedule.Gliding;
+
+    /// <summary>On screen with nothing gliding, or never to draw at all.</summary>
+    private bool IsSettled => Failure is not null || (schedule.OnScreen && !schedule.Gliding);
+
+    /// <summary>
+    /// Completes once the orb is on screen and not gliding: at once if it is already, or if it can
+    /// never draw. No timer: the schedule's own changes (coming on screen, a glide arriving) let it
+    /// go. <paramref name="cancel"/> ends the wait (it then completes too). UI thread.
+    /// </summary>
+    public Task Settled(CancellationToken cancel = default)
+    {
+        if (IsSettled || cancel.IsCancellationRequested)
+        {
+            return Task.CompletedTask;
+        }
+        var waiter = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        settleWaiters.Add(waiter);
+        if (cancel.CanBeCanceled)
+        {
+            cancel.Register(() => clock.Post(() =>
+            {
+                settleWaiters.Remove(waiter);
+                waiter.TrySetResult();
+            }));
+        }
+        return waiter.Task;
+    }
+
+    /// <summary>
+    /// What the orb sits behind (the main window's screen) or the monitor it is on changed: at rest,
+    /// on screen, a wandering orb goes to a new spot (a glide; at once with motion stilled, live too
+    /// then: it has no frames of its own to wander on).
+    /// </summary>
+    public void MoveAtRest()
+    {
+        if (wander is not { } w || (State.IsLive() && !schedule.ReduceMotion) || !schedule.OnScreen || HoldsStill)
+        {
+            return;
+        }
+        var now = Now();
+        w.Move(now, animated: !schedule.ReduceMotion);
+        wander = w;
+        lastMove = now;
+        Perform(schedule.ReduceMotion ? schedule.Invalidate() : schedule.SetGliding(true));
+    }
+
+    /// <summary>
+    /// The window behind it was covered by others and is not any more: as coming on screen, a
+    /// resting orb (or a stilled one) goes to a new spot, held too, unless its spot has been read.
+    /// </summary>
+    public void Uncovered()
+    {
+        if (wander is not { } w || (State.IsLive() && !schedule.ReduceMotion) || !schedule.OnScreen || HoldsSpot)
+        {
+            return;
+        }
+        lastMove = Now();
+        w.Move(lastMove, animated: !schedule.ReduceMotion);
+        wander = w;
+        Perform(schedule.ReduceMotion ? schedule.Invalidate() : schedule.SetGliding(true));
+    }
+
+    /// <summary>
+    /// The user comes back to the window (activated): a resting orb moves if it has held its spot
+    /// for RestInterval. No timer: a window left alone at rest draws nothing at all.
+    /// </summary>
+    public void Activated()
+    {
+        if (Now() - lastMove >= RestInterval)
+        {
+            MoveAtRest();
+        }
+    }
+
+    private static double Now() => InkClock.Now();
+
     /// <summary>The orb's colours (the shell's appearance).</summary>
     public GlowLook Look
     {
@@ -179,13 +345,24 @@ public sealed class InkSurface : IDisposable
             field = value;
             if (followsSystem)
             {
-                Perform(schedule.SetReduceMotion(SystemReducesMotion));
+                ReduceMotionChanged(SystemReducesMotion);
             }
         }
     }
 
     /// <summary>The prototype's stand-in voice instead of the live levels (the first run's demo).</summary>
     public bool Demo { get; set; }
+
+    /// <summary>How far the final pass's blot goes (InkSimulation.BlotDepth): 1, the Drop's, unless set.</summary>
+    public double BlotDepth
+    {
+        get => simulation.BlotDepth;
+        set
+        {
+            simulation.BlotDepth = value;
+            Perform(schedule.Invalidate());
+        }
+    }
 
     /// <summary>
     /// Each frame's state, as it is drawn (live on the clock, or the still frame): the window's edge
@@ -252,7 +429,7 @@ public sealed class InkSurface : IDisposable
         set
         {
             followsSystem = value is null;
-            Perform(schedule.SetReduceMotion(value ?? SystemReducesMotion));
+            ReduceMotionChanged(value ?? SystemReducesMotion);
         }
     }
 
@@ -300,8 +477,19 @@ public sealed class InkSurface : IDisposable
     {
         if (followsSystem)
         {
-            Perform(schedule.SetReduceMotion(SystemReducesMotion));
+            ReduceMotionChanged(SystemReducesMotion);
         }
+    }
+
+    /// <summary>Animation effects or Always still changed: stilled, a glide under way stops where it is.</summary>
+    private void ReduceMotionChanged(bool reduce)
+    {
+        if (reduce && wander is { } w)
+        {
+            w.Hold(Now());
+            wander = w;
+        }
+        Perform(schedule.SetReduceMotion(reduce));
     }
 
     /// <summary>
@@ -312,7 +500,20 @@ public sealed class InkSurface : IDisposable
     private void UpdateVisibility()
     {
         UpdateFallback();
-        Perform(schedule.SetOnScreen(hostOnScreen && CanDraw));
+        var onScreen = hostOnScreen && CanDraw;
+        if (onScreen && !schedule.OnScreen && (!State.IsLive() || schedule.ReduceMotion) && !HoldsSpot && wander is { } w)
+        {
+            // Coming on screen at rest (or still, live): a new spot, chosen before anything is
+            // drawn, so a glide starts from where it was and, with motion stilled, the one still
+            // frame is already there. Off screen the clock is stopped, so the action ignored here
+            // is always Nothing; SetOnScreen below acts on both. Held too: what holds it awaits
+            // Settled, so it reads the new spot once the orb is there.
+            lastMove = Now();
+            w.Move(lastMove, animated: !schedule.ReduceMotion);
+            wander = w;
+            _ = schedule.ReduceMotion ? schedule.Invalidate() : schedule.SetGliding(true);
+        }
+        Perform(schedule.SetOnScreen(onScreen));
         UpdateHealth();
     }
 
@@ -451,6 +652,42 @@ public sealed class InkSurface : IDisposable
         FailureChanged?.Invoke(message);
     }
 
+    /// <summary>About a frame: how long a dropped still frame waits to be drawn again.</summary>
+    internal static readonly TimeSpan RedrawDelay = TimeSpan.FromMilliseconds(16);
+
+    /// <summary>
+    /// The host's present was dropped: the compositor had no room for it
+    /// (CompositionSwapChain.Present). On the clock nothing is needed, the next tick draws; a still
+    /// frame (a fade's end, a theme, a change with motion off) is drawn again a frame later, else
+    /// it would stay undrawn until something else changed. UI thread.
+    /// </summary>
+    public void PresentDropped()
+    {
+        if (redrawScheduled || disposed || IsAnimating)
+        {
+            return;
+        }
+        redrawScheduled = true;
+        if (Scheduler is { } scheduler)
+        {
+            scheduler(RedrawDelay, Redraw);
+            return;
+        }
+        redrawTimer?.Dispose();
+        redrawTimer = new Timer(_ => clock.Post(Redraw), null, RedrawDelay, Timeout.InfiniteTimeSpan);
+    }
+
+    private void Redraw()
+    {
+        redrawScheduled = false;
+        redrawTimer?.Dispose();
+        redrawTimer = null;
+        if (!disposed)
+        {
+            Invalidate();
+        }
+    }
+
     private void ScheduleRetry()
     {
         if (retryScheduled || disposed)
@@ -539,6 +776,22 @@ public sealed class InkSurface : IDisposable
                 break;
         }
         UpdateHealth();
+        ResumeSettled();
+    }
+
+    /// <summary>Lets go of whatever awaits Settled, once it is.</summary>
+    private void ResumeSettled()
+    {
+        if (!IsSettled || settleWaiters.Count == 0)
+        {
+            return;
+        }
+        var waiters = settleWaiters.ToList();
+        settleWaiters.Clear();
+        foreach (var waiter in waiters)
+        {
+            waiter.TrySetResult();
+        }
     }
 
     /// <summary>One live frame: the prototype's <c>_frame</c>. dt is 1/60 s on the first tick, then the time since the last, clamped to 0..0.05 s.</summary>
@@ -547,10 +800,26 @@ public sealed class InkSurface : IDisposable
         var dt = firstTick ? 0.016 : Math.Min(0.05, Math.Max(0, now - lastTick));
         lastTick = now;
         firstTick = false;
+        if (!State.IsLive())
+        {
+            // A glide at rest: the settled frame, moving, until it arrives (then the still there).
+            if (wander?.IsMoving(now) != true)
+            {
+                Perform(schedule.SetGliding(false));
+                return;
+            }
+            Draw(moving: false, now);
+            return;
+        }
         var live = Levels?.Invoke() ?? InkLevels.Silent;
         simulation.Step(dt, snap: false, Demo ? InkVoice.Synthetic : InkVoice.Levels(live.Near, live.Far));
+        if (!HoldsStill && wander is { } w)
+        {
+            w.Wander(now);
+            wander = w;
+        }
         Drawn?.Invoke(simulation.Frame(moving: true));
-        Draw(moving: true);
+        Draw(moving: true, now);
     }
 
     /// <summary>The ink at rest in its state, drawing nothing (a host that hid: its next frame starts settled).</summary>
@@ -561,12 +830,23 @@ public sealed class InkSurface : IDisposable
     {
         simulation.Settle(InkVoice.Silent);
         Drawn?.Invoke(simulation.Frame(moving: false));
-        Draw(moving: false);
+        Draw(moving: false, Now());
+    }
+
+    /// <summary>Where the orb sits at <paramref name="now"/>: its placement, or where its wander has got to.</summary>
+    private InkPlacement PlacementAt(double now)
+    {
+        if (wander is not { } w)
+        {
+            return Placement;
+        }
+        var (x, y) = w.Position(now);
+        return Placement with { X = x, Y = y };
     }
 
 
     /// <summary>One frame: live (<paramref name="moving"/>) on the clock, or the still frame, whose time stands still.</summary>
-    private void Draw(bool moving)
+    private void Draw(bool moving, double now)
     {
         if (pipeline is null || canvas.Width <= 0 || disposed)
         {
@@ -575,7 +855,7 @@ public sealed class InkSurface : IDisposable
         bool presented;
         try
         {
-            presented = target.Render(pipeline, simulation.Uniforms(Placement, Look, moving));
+            presented = target.Render(pipeline, simulation.Uniforms(PlacementAt(now), Look, moving));
         }
         catch (InkRendererException e)
         {
@@ -614,9 +894,16 @@ public sealed class InkSurface : IDisposable
         subscription.Dispose();
         retryTimer?.Dispose();
         retryTimer = null;
+        redrawTimer?.Dispose();
+        redrawTimer = null;
         healthTimer?.Dispose();
         healthTimer = null;
         SystemMotion.Changed -= MotionChanged;
         clock.Remove(this);
+        foreach (var waiter in settleWaiters)
+        {
+            waiter.TrySetResult();
+        }
+        settleWaiters.Clear();
     }
 }

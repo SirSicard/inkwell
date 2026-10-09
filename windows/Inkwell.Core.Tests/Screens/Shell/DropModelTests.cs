@@ -52,9 +52,9 @@ public sealed class DropModelTests
         public DropModel Drop { get; }
         public int Changes { get; private set; }
 
-        public Rig(bool hasLanguageModel = false)
+        public Rig(bool hasLanguageModel = false, bool noSpeechModel = false)
         {
-            Drop = new DropModel(Wakes, () => hasLanguageModel);
+            Drop = new DropModel(Wakes, () => hasLanguageModel, noSpeechModel: () => noSpeechModel);
             Drop.Changed += () => Changes++;
         }
 
@@ -175,6 +175,25 @@ public sealed class DropModelTests
         Assert.Equal(DropLineTone.Alert, DictationDrop.Note(Ev.Of("""{"type":"dictation.edit_failed","reason":"secure_input"}"""), false)!.Tone);
     }
 
+    /// <summary>
+    /// A hold with no speech model installed says so, not "the microphone is silent" nor "couldn't
+    /// transcribe that"; with a model the usual lines come back.
+    /// </summary>
+    [Fact]
+    public void AHoldWithNoSpeechModelSaysThereIsNone()
+    {
+        var none = new DropLine("No speech model is installed", "Settings > Models downloads one", DropLineTone.Alert);
+        var rig = new Rig(noSpeechModel: true);
+        rig.Apply(Started, Stopped, """{"type":"dictation.discarded","reason":"silence"}""");
+        Assert.Equal(none, rig.Drop.Line);
+        var failed = new Rig(noSpeechModel: true);
+        failed.Apply(Started, Stopped, """{"type":"dictation.failed","stage":"transcription","message":"model not installed"}""");
+        Assert.Equal(none, failed.Drop.Line);
+        var withModel = new Rig();
+        withModel.Apply(Started, Stopped, """{"type":"dictation.discarded","reason":"silence"}""");
+        Assert.Equal("The microphone is silent", withModel.Drop.Line!.Title);
+    }
+
     [Fact]
     public void EachNoteSaysWhatTheMacSaysWhereTheCauseIsTheSame()
     {
@@ -193,6 +212,10 @@ public sealed class DropModelTests
         Assert.Equal("Couldn't rewrite the selection", Note("""{"type":"dictation.edit_failed","reason":"model"}""", model: true)!.Title);
         Assert.Equal("Not edited", Note("""{"type":"dictation.edit_failed","reason":"not_allowed","message":"Example Cloud"}""")!.Title);
         Assert.Equal("Polish took too long", Note("""{"type":"dictation.warning","kind":"polish_timed_out"}""")!.Title);
+        // The mode names a model of its own the core does not hold, or that sends elsewhere now:
+        // nothing was sent, and Settings > Modes says which (it was quiet before).
+        Assert.Equal(new DropLine("Not polished", "Check this mode's model in Settings > Modes", DropLineTone.Alert),
+            Note("""{"type":"dictation.warning","kind":"polish_model_missing","message":"the mode's model is not held"}"""));
         Assert.Equal("Stopped after 3 minutes", Note("""{"type":"dictation.warning","kind":"release_missed"}""")!.Title);
         Assert.Null(Note("""{"type":"dictation.warning","kind":"focus_unreadable"}"""));
     }

@@ -91,6 +91,56 @@ final class RenderTests: XCTestCase {
         XCTAssertLessThan(Double(centre.b) / max(a, 1), 0.5, "in the ink's dark colour")
     }
 
+    /// At rest the orb leans toward the dots by the palette's rest tint; live, it goes on to yours
+    /// from there. The first live frame is next to the tinted rest frame, not to the plain idle
+    /// one: the change of state starts where the rest colour is, without a jump.
+    func testTheLiveTransitionStartsFromTheTintedRestColour() throws {
+        var tinted = palette
+        tinted.restTint = 0.6
+        let plainRest = try frame(palette) { _ in }
+        let tintedRest = try frame(tinted) { _ in }
+        let firstLive = try frame(tinted) { sim in
+            sim.state = .dictating
+            sim.step(1.0 / 60, snap: false, voice: .silent)
+        }
+        let tint = difference(plainRest, tintedRest), step = difference(tintedRest, firstLive)
+        XCTAssertGreaterThan(tint, 0.1, "the tint shows")
+        XCTAssertLessThan(step * 4, tint, "one live frame moves a little from the tinted rest: \(step) against \(tint)")
+    }
+
+    /// The rest tint rides in idle's fourth lane, clamped to 0...1; 0 rests in idle alone.
+    func testTheRestTintIsPackedClamped() {
+        var tinted = palette
+        let sim = InkSimulation(random: .seeded(1))
+        XCTAssertEqual(sim.uniforms(palette: palette, placement: .centred, motion: false).idle.w, 0)
+        tinted.restTint = 0.2
+        XCTAssertEqual(sim.uniforms(palette: tinted, placement: .centred, motion: false).idle, SIMD4(0.6, 0.6, 0.6, 0.2))
+        tinted.restTint = 3
+        XCTAssertEqual(sim.uniforms(palette: tinted, placement: .centred, motion: false).idle.w, 1)
+        tinted.restTint = -1
+        XCTAssertEqual(sim.uniforms(palette: tinted, placement: .centred, motion: false).idle.w, 0)
+    }
+
+    func testRestBoostUsesTheExistingUniformLaneAndLeavesLiveInkUnchanged() throws {
+        var boosted = palette.withShellStrength(1)
+        let sim = InkSimulation(random: .seeded(1))
+        XCTAssertEqual(MemoryLayout<InkUniforms>.stride, 160)
+        XCTAssertEqual(sim.uniforms(palette: boosted, placement: .centred, motion: false).ink.w, 1)
+        boosted.restBoost = -1
+        XCTAssertEqual(sim.uniforms(palette: boosted, placement: .centred, motion: false).ink.w, 0)
+        boosted.restBoost = 2
+        XCTAssertEqual(sim.uniforms(palette: boosted, placement: .centred, motion: false).ink.w, 1)
+        let stronger = try frame(palette.withShellStrength(1)) { _ in }
+        XCTAssertGreaterThan(coverage(stronger), coverage(try frame(palette) { _ in }))
+        for state in [InkState.dictating, .meeting, .blotting, .problem] {
+            let original = try InkSnapshot.render(state, t: 12, width: 120, height: 120, palette: palette,
+                                                  motion: false, pipeline: pipeline)
+            let boosted = try InkSnapshot.render(state, t: 12, width: 120, height: 120,
+                                                 palette: palette.withShellStrength(1), motion: false, pipeline: pipeline)
+            XCTAssertEqual(original.rgba, boosted.rgba, "settled live and blotting ignore rest boost")
+        }
+    }
+
     /// A still frame stops the shader's time: the same picture whatever the simulation's clock.
     func testAStillFrameIgnoresTheTime() throws {
         let a = try InkSnapshot.render(.dictating, t: 3, width: 120, height: 120, palette: palette, voice: .silent,
@@ -101,6 +151,35 @@ final class RenderTests: XCTestCase {
     }
 
     // MARK: Helpers
+
+    /// A still frame (the shader's time stopped, so two frames differ only by their inputs) of the
+    /// settled idle orb, after `change`.
+    private func frame(_ palette: OrbPalette, _ change: (inout InkSimulation) -> Void) throws -> InkImage {
+        var sim = InkSimulation(random: .seeded(1))
+        sim.canvasWidth = 240
+        sim.canvasHeight = 240
+        sim.settle(voice: .silent)
+        change(&sim)
+        return try InkSnapshot.render(sim.uniforms(palette: palette, placement: .centred, motion: false),
+                                      width: 240, height: 240, pipeline: pipeline)
+    }
+
+    /// How far apart two frames' colours are: the distance between the mean colours (0...1, not
+    /// premultiplied) of the pixels where the orb is solid enough to tell. Coverage apart: the
+    /// first live frame also grows the orb a little.
+    private func difference(_ a: InkImage, _ b: InkImage) -> Double {
+        func mean(_ image: InkImage) -> SIMD3<Double> {
+            var sum = SIMD3<Double>(0, 0, 0), n = 0.0
+            for i in stride(from: 0, to: image.rgba.count, by: 4) where image.rgba[i + 3] >= 64 {
+                let alpha = Double(image.rgba[i + 3])
+                sum += SIMD3(Double(image.rgba[i]), Double(image.rgba[i + 1]), Double(image.rgba[i + 2])) / alpha
+                n += 1
+            }
+            return n > 0 ? sum / n : sum
+        }
+        let d = mean(a) - mean(b)
+        return (d * d).sum().squareRoot()
+    }
 
     private func render(_ state: InkState) throws -> InkImage {
         try InkSnapshot.render(state, t: 12, width: 360, height: 720, palette: palette, pipeline: pipeline)

@@ -145,6 +145,10 @@ pub enum LlmError {
         /// The model refused: where it would have sent the text, for the UI to name.
         refused: crate::llm::LlmInfo,
     },
+    /// The model a call named is not one the caller holds now, or no longer sends where it did
+    /// when the user picked it (a dictation mode's own model, let go of, or re-pointed since).
+    /// Nothing was sent; no other model was called in its place.
+    Unavailable,
 }
 
 impl fmt::Display for LlmError {
@@ -168,6 +172,9 @@ impl fmt::Display for LlmError {
                 "not allowed to send to {}; nothing was sent",
                 refused.endpoint.describe()
             ),
+            Self::Unavailable => {
+                f.write_str("the language model named is not set up now; nothing was sent")
+            }
         }
     }
 }

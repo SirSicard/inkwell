@@ -57,6 +57,7 @@ fn options() -> TranscribeOptions {
         channel: Channel::Mic,
         context: None,
         cancel: CancelToken::new(),
+        live: false,
     }
 }
 
@@ -338,6 +339,40 @@ fn live_partials_settle_a_meetings_two_sides_into_finals_at_real_time() {
             edits.wer()
         );
     }
+}
+
+/// A live window and a final at once: each on its own recognizer (one thread for live windows,
+/// a thread per core for finals), neither waiting for the other, and both hear the clip alike (the
+/// thread count can change a float's rounding, so a word or two may differ; never more).
+#[test]
+#[ignore = "needs sherpa-onnx, the Parakeet model and AMI under $INK_BENCH_DIR; run locally"]
+fn a_live_window_and_a_final_decode_at_once_and_agree() {
+    let engine = SherpaParakeet::load(&model_dir(), info()).unwrap();
+    let bench = bench::bench_dir();
+    let clips = bench::read_ami_tsv(&bench.join("ami-ihm.tsv")).unwrap();
+    let (_, audio) = bench::read_wav(&bench.join("ami-ihm").join(&clips[0].wav)).unwrap();
+    let audio = &audio[..audio.len().min(12 * RATE)];
+    let live = TranscribeOptions {
+        live: true,
+        ..options()
+    };
+    let (heard_live, heard_final) = std::thread::scope(|s| {
+        let live_decode = s.spawn(|| engine.transcribe(audio, &live));
+        let final_decode = engine.transcribe(audio, &options());
+        (live_decode.join().unwrap().unwrap(), final_decode.unwrap())
+    });
+    let (heard_live, heard_final) = (heard_live.text(), heard_final.text());
+    assert!(!heard_final.is_empty(), "the final heard nothing");
+    let edits = bench::score(&heard_final, &heard_live);
+    println!(
+        "live and final: {} of {} words differ",
+        edits.total(),
+        edits.reference
+    );
+    assert!(
+        edits.total() <= 2,
+        "the live window heard {heard_live:?}, the final {heard_final:?}"
+    );
 }
 
 #[test]

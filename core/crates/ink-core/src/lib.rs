@@ -28,6 +28,7 @@ pub mod engine;
 pub mod error;
 pub mod llm;
 pub mod platform;
+pub mod stats;
 pub mod store;
 pub mod threading;
 
@@ -46,9 +47,10 @@ pub use engine::{
 pub use error::{EngineError, LlmError, PlatformError, StoreError};
 pub use llm::{Endpoint, Llm, LlmInfo, LlmRequest, LlmResponse};
 pub use platform::{
-    AppRef, CaptureControl, DeviceId, DeviceInfo, FarEndTarget, FocusInfo, FocusReader,
-    HotkeyBinding, HotkeyEvent, HotkeySource, InsertOutcome, MeetingDetector, MeetingSignal,
-    Permission, PermissionProbe, PermissionState, Platform, TextInserter, Transport,
+    AppRef, AutoInput, AutoReason, CaptureControl, DeviceChange, DeviceId, DeviceInfo,
+    FarEndTarget, FocusInfo, FocusReader, HotkeyBinding, HotkeyEvent, HotkeySource, InsertOutcome,
+    MeetingDetector, MeetingSignal, Permission, PermissionProbe, PermissionState, Platform,
+    SystemInfo, TextInserter, Transport,
 };
 pub use store::{
     Commitment, CommitmentId, DoneEvidence, Explained, NewCommitment, NewRecord, Note, NoteId,

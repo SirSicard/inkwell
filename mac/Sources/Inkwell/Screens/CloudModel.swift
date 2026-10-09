@@ -118,6 +118,35 @@ final class CloudModel {
         return !p.customURL || !Self.isOnThisMac(baseURL(for: p))
     }
 
+    /// Where the provider in the picker sends, with the address typed (nil: none picked), as the
+    /// core names a destination: without the trailing slashes it drops (ink-llm's EndpointUrl).
+    var selectedEndpoint: String? {
+        selectedProvider.map { p in
+            var url = Substring(baseURL(for: p))
+            while url.hasSuffix("/") { url = url.dropLast() }
+            return String(url)
+        }
+    }
+
+    /// Puts `id` in the picker while nothing is chosen or picked (the first run points at Groq's
+    /// free key). Nothing is sent.
+    func suggest(_ id: String) {
+        guard chosen == nil, selected == nil, providers.contains(where: { $0.id == id }) else { return }
+        select(id)
+    }
+
+    /// The first run's own key is one choice, Groq's free model (its key and Use); another
+    /// provider or model is behind "Other providers or models…". Those open first when another
+    /// provider is chosen, or picked here or in Settings > AI: the user's pick stands.
+    var firstRunStartsOnOthers: Bool { selected != nil && selected != "groq" }
+
+    /// Back from the other providers to Groq's free model: Groq in the picker. Nothing is sent,
+    /// and nothing chosen changes until Use.
+    func pickGroq() {
+        guard providers.contains(where: { $0.id == "groq" }) else { return }
+        select("groq")
+    }
+
     /// Whether Use would change anything: another provider, model or address than the chosen one.
     var canUse: Bool {
         guard loaded else { return false }
@@ -148,6 +177,16 @@ final class CloudModel {
             : "This server is on this Mac, so local-only mode stays on. Each feature below uses it only once you allow it; one you already allowed uses it straight away."
     }
 
+    /// What Use means in the first run, where it asks polish's consent before choosing.
+    var firstRunUseNote: String {
+        guard let p = selectedProvider else { return "Pick a provider to bring your own key." }
+        let name = Self.name(p.id)
+        if p.needsKey && !p.hasKey { return "Save your \(name) key first." }
+        return selectedIsCloud
+            ? "Use asks first: polish sends your words to \(name) only once you allow it, which also turns Local only off."
+            : "This server is on this Mac, so Local only stays on. Use asks before polish uses it."
+    }
+
     /// Whether the core keeps the key back from the server in the picker: a custom server over
     /// plain http that is not on this Mac gets no key, stored or not (the core's rule).
     var keyWithheld: Bool {
@@ -155,16 +194,45 @@ final class CloudModel {
         return Self.keyWithheld(from: baseURL(for: p))
     }
 
-    /// The line about the key of the provider in the picker.
+    /// The key's name for people: "Groq key"; a server of the user's own has a "server key".
+    static func keyName(_ p: Provider) -> String {
+        p.customURL ? "server key" : "\(name(p.id)) key"
+    }
+
+    /// "A Groq key", "An OpenAI key".
+    private static func aKey(_ p: Provider) -> String {
+        let key = keyName(p)
+        // By the first letter, whatever its case: an id this build has no name for is lower case.
+        return ("aeiou".contains(key.prefix(1).lowercased()) ? "An " : "A ") + key
+    }
+
+    /// The line about the key of the provider in the picker. Keys are in the keychain of the Mac
+    /// account, shared by every Inkwell on it and never in a library: a scratch library sees the
+    /// user's own key, so the line says whose it is.
     var keyStatus: String {
         guard let p = selectedProvider else { return "" }
         if p.hasKey && keyWithheld {
-            return "A key is stored in your keychain, but it is not sent to this server: keys go only over https or to a server on this Mac."
+            return "\(Self.aKey(p)) is already saved in your keychain for this Mac account, but it is not sent to this server: keys go only over https or to a server on this Mac."
         }
         if keyWithheld { return "No key is sent to this server: keys go only over https or to a server on this Mac." }
         if !p.needsKey && !p.hasKey { return "No key is needed unless your server asks for one." }
-        return p.hasKey ? "A key is stored in your keychain." : "No key is stored yet."
+        return p.hasKey
+            ? "\(Self.aKey(p)) is already saved in your keychain for this Mac account."
+            : "No \(Self.keyName(p)) is saved yet."
     }
+
+    /// The Delete button of the provider in the picker: what it deletes, and that it asks first.
+    var deleteKeyLabel: String {
+        selectedProvider.map { "Delete \(Self.keyName($0))\u{2026}" } ?? "Delete key\u{2026}"
+    }
+
+    /// The question Delete asks about `id`'s key (the provider it was pressed for).
+    func deleteKeyTitle(_ id: String?) -> String {
+        providers.first { $0.id == id }.map { "Delete the \(Self.keyName($0)) from your keychain?" }
+            ?? "Delete the key from your keychain?"
+    }
+
+    static let deleteKeyMessage = "It is saved in your keychain for this Mac account, not in this library: every Inkwell on this account stops using it. You can paste it again later."
 
     /// The line about what is in use now.
     var status: String {
@@ -228,28 +296,32 @@ final class CloudModel {
         send(.llmKeySave(provider: p.id, key: key, ref: nextRef("key.save")))
     }
 
-    /// Deletes the stored key of the provider in the picker.
-    func deleteKey() {
-        guard let p = selectedProvider else { return }
+    /// Deletes the stored key of `id`: the provider Delete was pressed for, so a confirmation
+    /// answered after the picker moved (Settings > AI shares it) deletes what it named.
+    func deleteKey(_ id: String) {
+        guard providers.contains(where: { $0.id == id }) else { return }
         failure = nil
         forgetTest()
-        send(.llmKeyDelete(provider: p.id, ref: nextRef("key.delete")))
+        send(.llmKeyDelete(provider: id, ref: nextRef("key.delete")))
     }
 
     /// Use: chooses the provider in the picker with its model (and address), or none. For a
-    /// provider off this Mac it carries the user's say-so that local-only mode goes off.
-    func use() {
-        guard canUse else { return }
+    /// provider off this Mac it carries the user's say-so that local-only mode goes off. Returns
+    /// whether it sent the choice.
+    @discardableResult
+    func use() -> Bool {
+        guard canUse else { return false }
         failure = nil
         forgetTest()
         guard let p = selectedProvider else {
             send(.llmChoose(provider: "none", model: nil, baseURL: nil, localOnlyOff: false, ref: nextRef("choose")))
-            return
+            return true
         }
         let model = draftModel.trimmingCharacters(in: .whitespaces)
         send(.llmChoose(
             provider: p.id, model: model.isEmpty ? nil : model, baseURL: p.customURL ? baseURL(for: p) : nil,
             localOnlyOff: selectedIsCloud, ref: nextRef("choose")))
+        return true
     }
 
     /// Test: one short fixed request to the chosen provider.

@@ -6,8 +6,8 @@
 // when the store, the router, the owed list or the appearance does.
 //
 // The window's keys (Windows has no menu bar; the title bar's "…" lists them under File and View):
-// Ctrl+1–4 the routes, Ctrl+, Settings, Ctrl+F the search, Ctrl+Shift+R Record now, Ctrl+. Stop.
-// While Live shows, Ctrl+1–4 and Ctrl+. are its own (the asks it answers, and Stop).
+// Ctrl+1–4 the routes, Ctrl+, Settings, Ctrl+F the search. The core owns the configurable global meeting toggle.
+// While Live shows, Ctrl+1–4 are its own (the asks it answers).
 using Inkwell.Core;
 using Inkwell.Core.Screens;
 using Inkwell.Ink;
@@ -31,7 +31,7 @@ public sealed partial class MainWindow : Window
     private readonly InfoBadge liveDot = new() { Value = -1 };
     private readonly Storyboard pulse = new() { RepeatBehavior = RepeatBehavior.Forever, AutoReverse = true };
     private readonly List<KeyboardAccelerator> routeKeys = [];
-    private KeyboardAccelerator? stopKey;
+    public MeetingShortcutModel? MeetingShortcut { get; set; }
     private Router? router;
     private CoreStore? store;
     private MeetingModel? meetings;
@@ -42,6 +42,8 @@ public sealed partial class MainWindow : Window
     private bool meetingLive;
     private bool syncing;
     private bool pulsing;
+    private Route? shownRoute;
+    private Microsoft.UI.Windowing.OverlappedPresenterState? frameState;
 
     public MainWindow()
     {
@@ -58,11 +60,56 @@ public sealed partial class MainWindow : Window
         Accelerators();
     }
 
+    /// <summary>
+    /// UI thread. Keeps the window inside its display's work area (WindowFrame.Fitted): moved and,
+    /// if bigger, shrunk so all of it shows. Not while minimised or maximised (Windows places those).
+    /// </summary>
+    internal void FitToWorkArea()
+    {
+        if (AppWindow.Presenter is Microsoft.UI.Windowing.OverlappedPresenter { State: not Microsoft.UI.Windowing.OverlappedPresenterState.Restored }
+            || TerraFX.Interop.Windows.Windows.IsIconic((TerraFX.Interop.Windows.HWND)Microsoft.UI.Win32Interop.GetWindowFromWindowId(AppWindow.Id)))
+        {
+            return;
+        }
+        var area = Microsoft.UI.Windowing.DisplayArea.GetFromWindowId(AppWindow.Id, Microsoft.UI.Windowing.DisplayAreaFallback.Nearest).WorkArea;
+        var frame = new WindowFrame(AppWindow.Position.X, AppWindow.Position.Y, AppWindow.Size.Width, AppWindow.Size.Height);
+        var fitted = frame.Fitted(new WindowFrame(area.X, area.Y, area.Width, area.Height));
+        if (fitted != frame)
+        {
+            AppWindow.MoveAndResize(new Windows.Graphics.RectInt32(fitted.X, fitted.Y, fitted.Width, fitted.Height));
+        }
+    }
+
+    /// <summary>
+    /// UI thread, on any change of the window (AppWindow.Changed). Restored from minimised or
+    /// maximised, it comes back where it was, which may now be off screen: fitted then. Windows
+    /// says "restored" while the window is still at its minimised place, so the fit waits until
+    /// the restore is done (the next turn of the UI thread).
+    /// </summary>
+    internal void FrameChanged()
+    {
+        var state = (AppWindow.Presenter as Microsoft.UI.Windowing.OverlappedPresenter)?.State;
+        if (state == Microsoft.UI.Windowing.OverlappedPresenterState.Restored
+            && frameState is not null and not Microsoft.UI.Windowing.OverlappedPresenterState.Restored)
+        {
+            DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, FitToWorkArea);
+        }
+        frameState = state;
+    }
+
     /// <summary>UI thread. The window's orb follows the shell's ink state; the edge glow follows the orb.</summary>
     internal void ShowInk(ShellInk ink)
     {
+        // Soft blotting: the window's orb, wide behind the text, stops partway (the Drop blots fully).
+        Orb.BlotDepth = 0.45;
+        // It wanders, so it is not always in the same place (OrbWander).
+        Orb.WanderBounds = OrbWander.Main;
         Orb.State = ink.State;
-        ink.Changed += () => Orb.State = ink.State;
+        ink.Changed += () =>
+        {
+            Orb.State = ink.State;
+            DimOrb();
+        };
         Orb.Drawn += Edge.Show;
     }
 
@@ -81,14 +128,55 @@ public sealed partial class MainWindow : Window
         {
             return;
         }
-        Orb.Look = theme.Look;
+        Orb.Look = theme.Look.WithShellStrength(theme.OrbStrength);
         Orb.AlwaysStill = theme.AlwaysStill;
-        // High Contrast: the orb dimmed behind the text.
-        Orb.Opacity = theme.HighContrast ? 0.3 : 1;
+        DimOrb();
         Edge.Set(theme.Colours, theme.EdgeGlow);
         liveDot.Background = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["GlowThemBrush"];
         UpdatePulse();
     }
+
+    /// <summary>
+    /// The orb behind the text: the user's strength at rest (70 % unless set), less while anything
+    /// is live (dictating, a meeting, the final pass: 30 % at the default, OrbFade.BehindText), and
+    /// no more than 45 % under High Contrast, so what is written over it reads.
+    /// </summary>
+    private void DimOrb() => Orb.OrbOpacity = OrbFade.BehindText(
+        Orb.State.IsLive(), theme?.HighContrast == true, theme?.OrbStrength ?? OrbFade.RestBehindText);
+
+    /// <summary>UI thread. The window was activated: a resting orb that has held its spot for a while moves (OrbWander.RestInterval).</summary>
+    internal void WindowActivated() => Orb.Activated();
+
+    /// <summary>UI thread, once. A milestone reached glows over the orb and says its line at the foot (MilestoneView).</summary>
+    internal void ShowMilestones(StatsModel stats, WindowPresence presence)
+    {
+        if (theme is not null)
+        {
+            milestones = new MilestoneView(stats, presence, theme, Orb, GlowLayer, Root);
+        }
+    }
+
+    /// <summary>Held for the window's life: it follows the stats model.</summary>
+    private MilestoneView? milestones;
+
+    /// <summary>UI thread. Other windows hid all of it, and now do not (WindowCover): a resting orb moves.</summary>
+    internal void WindowUncovered() => Orb.Uncovered();
+
+    /// <summary>
+    /// UI thread, on any change of the window's place: on another monitor, a resting orb goes to a
+    /// new spot.
+    /// </summary>
+    internal void PlaceChanged()
+    {
+        var display = Microsoft.UI.Windowing.DisplayArea.GetFromWindowId(AppWindow.Id, Microsoft.UI.Windowing.DisplayAreaFallback.Nearest).DisplayId.Value;
+        if (lastDisplay is { } before && before != display)
+        {
+            Orb.MoveAtRest();
+        }
+        lastDisplay = display;
+    }
+
+    private ulong? lastDisplay;
 
     /// <summary>UI thread. Why the Drop cannot draw its ink (it shows a plain panel meanwhile), or null once it draws again.</summary>
     internal void ShowInkFailure(string? failure)
@@ -246,15 +334,18 @@ public sealed partial class MainWindow : Window
         }
         Screen.Content = screen;
         WindowTitle.Text = $"Inkwell · {route.Title()}";
-        // Live's own Ctrl+1–4 (the asks) and Ctrl+. (Stop) take over while it shows.
+        // Another screen in front of the orb: at rest it goes to a new spot (the Mac's contentID).
+        if (shownRoute is { } before && before != route)
+        {
+            Orb.MoveAtRest();
+        }
+        shownRoute = route;
+        // Live's own Ctrl+1–4 (the asks) take over while it shows.
         foreach (var key in routeKeys)
         {
             key.IsEnabled = route != Route.Live;
         }
-        if (stopKey is not null)
-        {
-            stopKey.IsEnabled = route != Route.Live;
-        }
+
     }
 
     /// <summary>UI thread. The core's state: shown in the title bar only while it is not ready.</summary>
@@ -285,12 +376,9 @@ public sealed partial class MainWindow : Window
         }
         Key(Comma, VirtualKeyModifiers.Control, () => router?.Open(Route.Settings));
         Key(VirtualKey.F, VirtualKeyModifiers.Control, FocusSearch);
-        Key(VirtualKey.R, VirtualKeyModifiers.Control | VirtualKeyModifiers.Shift, RecordNow);
-        stopKey = Key(Period, VirtualKeyModifiers.Control, Stop);
     }
 
     private const VirtualKey Comma = (VirtualKey)188;
-    private const VirtualKey Period = (VirtualKey)190;
 
     private KeyboardAccelerator Key(VirtualKey key, VirtualKeyModifiers modifiers, Action action)
     {
@@ -338,11 +426,11 @@ public sealed partial class MainWindow : Window
         var file = new MenuFlyoutSubItem { Text = "File" };
         if (store?.Meeting is { } meeting)
         {
-            file.Items.Add(Item("Stop Recording", "Ctrl+.", Stop, enabled: !meeting.Stopping));
+            file.Items.Add(Item("Stop Recording", MeetingShortcut?.ShortcutLabel ?? "", Stop, enabled: !meeting.Stopping));
         }
         else
         {
-            file.Items.Add(Item("Record Now", "Ctrl+Shift+R", RecordNow, enabled: store?.Status.Kind == CoreStatusKind.Ready));
+            file.Items.Add(Item("Record Now", MeetingShortcut?.ShortcutLabel ?? "", RecordNow, enabled: store?.Status.Kind == CoreStatusKind.Ready));
         }
         OverflowMenu.Items.Add(file);
 

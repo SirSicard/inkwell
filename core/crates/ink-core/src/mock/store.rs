@@ -133,6 +133,7 @@ impl Store for MemStore {
             audio_dir: new.audio_dir,
             revision: 1,
             imported: false,
+            stuck: false,
         };
         inner.records.insert(
             id.clone(),
@@ -180,6 +181,11 @@ impl Store for MemStore {
 
     fn finish_record(&self, id: &RecordId, ended_at_unix_ms: i64) -> Result<(), StoreError> {
         lock(&self.inner).data(id)?.record.ended_at_unix_ms = Some(ended_at_unix_ms);
+        Ok(())
+    }
+
+    fn mark_stuck(&self, id: &RecordId) -> Result<(), StoreError> {
+        lock(&self.inner).data(id)?.record.stuck = true;
         Ok(())
     }
 
@@ -361,6 +367,11 @@ impl Store for MemStore {
             .data(id)?
             .speakers
             .insert(speaker.clone(), name.into());
+        Ok(())
+    }
+
+    fn clear_speaker_name(&self, id: &RecordId, speaker: &SpeakerId) -> Result<(), StoreError> {
+        lock(&self.inner).data(id)?.speakers.remove(speaker);
         Ok(())
     }
 

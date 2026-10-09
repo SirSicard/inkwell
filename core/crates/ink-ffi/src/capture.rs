@@ -1,23 +1,37 @@
 //! A meeting's capture from this machine's devices: the mic and the far end, opened for
 //! `meeting.start`, never started here (the meeting run starts them once its chain has).
 //!
-//! The platform decides which mic (with Bluetooth output, the built-in one, unless the user's
-//! headset-mic setting says otherwise) and taps the far end: the meeting's app when one is known,
-//! everything this machine plays otherwise (on the Mac, Inkwell itself is never tapped). Errors
-//! name the device or the app, never audio.
+//! The mic is the user's choice in Settings > Sound, or Automatic (the platform's routing: with
+//! Bluetooth output, not the headset's call-quality mic), resolved by [`devices`](crate::devices).
+//! The far end is tapped: the meeting's app when one is known, everything this machine plays
+//! otherwise (on the Mac, Inkwell itself is never tapped). Errors name the device or the app,
+//! never audio.
+//!
+//! **The mic moves only when it goes** ([`FollowMic`]). A meeting keeps the mic it started with:
+//! a mic plugged in mid-call, or a new default, changes nothing (the owner's call, 2026-10-05).
+//! When its own mic goes (unplugged, a headset switched off: the source ends by itself), it opens
+//! the mic again from the choice as it is then, which may be Automatic standing in for a chosen
+//! mic that left, and the shell is told (`meeting.mic_switched`).
 //!
 //! On Windows ([`WinMeetingCapture`]) the far end of an app is S0.4's plan: process loopback,
 //! which hears the app alone, for Zoom and the browsers; device loopback of the output the app
 //! plays to for every other app (per-process loopback is silent on new Teams), which hears
 //! everything that device plays, Inkwell's own sounds included, and is said as such (`far_end`
 //! "everything"). Device loopback is bound to one output, so it moves with the call ([`Follow`]):
-//! a headset plugged in mid-call, an output unplugged, a new default under Record now.
+//! a headset plugged in mid-call, an output unplugged, a new default under Record now. All output
+//! (Record now, and an app that could not be heard alone) records the output chosen in Settings >
+//! Sound (`audio.output`, [`crate::devices::pinned_output`]) instead of the default: it stays there
+//! when the default changes, records the default while the chosen one is unplugged, and goes back
+//! when it returns.
+
+use std::sync::Arc;
 
 use ink_core::{AppRef, AudioSource, Transport};
 #[cfg(any(target_os = "macos", windows))]
 use ink_pipeline::meeting::watchdog::FarDelivery;
 use ink_pipeline::meeting::watchdog::Routing;
 
+use crate::devices::{Choices, InputChoice, Wanted};
 use crate::meeting::CaptureSide;
 
 /// The mic a meeting records, as the shell may show it ("why is it using the laptop mic?").
@@ -27,10 +41,12 @@ pub struct MicInfo {
     pub name: String,
     /// How it connects.
     pub transport: Transport,
-    /// Why it was chosen: a schema word (`default_input`, `built_in_for_bluetooth_output`,
-    /// `headset_mic_setting`, `no_built_in_mic`, `first_input`, `requested`, `le_audio_headset`
-    /// (Windows), or `unknown` for a reason this build does not name).
+    /// Why it was chosen: a schema word (`chosen`, `chosen_missing`, or Automatic's reason:
+    /// `default_input`, `built_in_for_bluetooth_output`, `no_built_in_mic`, `first_input`,
+    /// `le_audio_headset` (Windows), or `unknown` for a reason this build does not name).
     pub reason: &'static str,
+    /// The chosen mic this one stands in for, while that one is not connected (`chosen_missing`).
+    pub wanted: Option<Wanted>,
 }
 
 /// What a meeting's far end records.
@@ -84,21 +100,74 @@ pub trait Follow: Send {
     /// opens the side again wherever it should be, even where it was. Errors name the device or
     /// the app, never audio.
     fn moved(&mut self, again: bool) -> Result<Option<Reopened>, String>;
+
+    /// For a mic side: the mic it records now (after a move, the new one), for
+    /// `meeting.mic_switched`. `None` for a far end.
+    fn mic(&self) -> Option<&MicInfo> {
+        None
+    }
 }
 
 /// Opens a meeting's capture on this machine.
 pub trait MeetingCapture: Send + Sync {
     /// **Worker.** The mic and the far end for a meeting with `app` (`None`: everything this
-    /// machine plays), opened and not started. `headset_mic`: the user's setting.
-    fn open(&self, app: Option<&AppRef>, headset_mic: bool) -> Result<Opened, String>;
+    /// machine plays), opened and not started. The mic is `choices`' input, read now; a mic that
+    /// goes mid-meeting reads it again ([`FollowMic`]). `choices`' output is what the Windows far
+    /// end of all output records (the module docs); the Mac's tap has no output to pick.
+    fn open(&self, app: Option<&AppRef>, choices: &Choices) -> Result<Opened, String>;
+
+    /// **Worker.** What the far end of `app` would record, when the platform knows without
+    /// opening anything: on Windows, everything for an app its plan gives device loopback.
+    /// `None` when only [`open`](Self::open) can tell (the default; the Mac's tap may find no
+    /// process for the app, and an app given process loopback may not be running).
+    fn planned_far(&self, _app: &AppRef) -> Option<FarScope> {
+        None
+    }
 }
 
 /// No devices: a platform without capture, or a test core.
 pub struct NoCapture;
 
 impl MeetingCapture for NoCapture {
-    fn open(&self, _: Option<&AppRef>, _: bool) -> Result<Opened, String> {
+    fn open(&self, _: Option<&AppRef>, _: &Choices) -> Result<Opened, String> {
         Err("this platform cannot capture a meeting yet".into())
+    }
+}
+
+/// Opens a meeting's mic for a choice, not started, and says which mic it is.
+pub type OpenMic =
+    Arc<dyn Fn(&InputChoice) -> Result<(Box<dyn AudioSource>, MicInfo), String> + Send + Sync>;
+
+/// A meeting's mic, opened again only when it goes (the module docs): asked every
+/// [`FOLLOW_INTERVAL`](crate::meeting::FOLLOW_INTERVAL), it stays; told its source ended, it opens
+/// the mic again from the choice as it is now. No device is polled.
+pub struct FollowMic {
+    open: OpenMic,
+    choices: Choices,
+    mic: MicInfo,
+}
+
+impl FollowMic {
+    /// Follows a mic opened as `mic`, opening again through `open` with `choices`' input.
+    pub fn new(open: OpenMic, choices: Choices, mic: MicInfo) -> Self {
+        Self { open, choices, mic }
+    }
+}
+
+impl Follow for FollowMic {
+    fn moved(&mut self, again: bool) -> Result<Option<Reopened>, String> {
+        if !again {
+            // A new mic, or a new default, never takes a meeting's mic away from it.
+            return Ok(None);
+        }
+        let (source, mic) = (self.open)(&self.choices.input())?;
+        let what = mic.name.clone();
+        self.mic = mic;
+        Ok(Some((source, what)))
+    }
+
+    fn mic(&self) -> Option<&MicInfo> {
+        Some(&self.mic)
     }
 }
 
@@ -121,49 +190,41 @@ mod mac {
     use ink_audio::DEFAULT_RING_DURATION;
     use ink_core::{AppRef, AudioSource, FarEndTarget};
     use ink_platform_mac::MacCapture;
-    use ink_platform_mac::capture::MicRouteReason;
 
     use super::*;
 
-    /// [`MeetingCapture`] on the Mac: the routed mic's own IOProc and a process tap.
+    /// [`MeetingCapture`] on the Mac: the chosen (or routed) mic's own IOProc and a process tap.
     pub struct MacMeetingCapture {
-        capture: MacCapture,
+        capture: Arc<MacCapture>,
     }
 
     impl MacMeetingCapture {
         /// Capture on the platform clock.
         pub fn new(capture: MacCapture) -> Self {
-            Self { capture }
+            Self {
+                capture: Arc::new(capture),
+            }
         }
     }
 
-    fn reason(r: MicRouteReason) -> &'static str {
-        match r {
-            MicRouteReason::Requested => "requested",
-            MicRouteReason::DefaultInput => "default_input",
-            MicRouteReason::BuiltInForBluetoothOutput => "built_in_for_bluetooth_output",
-            MicRouteReason::HeadsetMicSetting => "headset_mic_setting",
-            MicRouteReason::NoBuiltInMic => "no_built_in_mic",
-            MicRouteReason::FirstInput => "first_input",
-            // The platform's enum is non-exhaustive: a reason added there is said to be unknown,
-            // never passed off as another one.
-            _ => "unknown",
-        }
+    /// **Worker** (or the meeting's pump, when its mic went). The mic for `choice`, opened and
+    /// not started, and which it is.
+    fn open_mic(
+        capture: &MacCapture,
+        choice: &InputChoice,
+    ) -> Result<(Box<dyn AudioSource>, MicInfo), String> {
+        let picked = crate::devices::pick_mic(capture, choice)?;
+        let mic = capture
+            .open_mic_source(Some(&picked.device.id))
+            .map_err(|e| format!("the microphone {}: {e}", picked.device.name))?;
+        let transport = mic.transport();
+        Ok((Box::new(mic), picked.mic_info(transport)))
     }
 
     impl MeetingCapture for MacMeetingCapture {
-        fn open(&self, app: Option<&AppRef>, headset_mic: bool) -> Result<Opened, String> {
-            self.capture.set_headset_mic(headset_mic);
-            let (device, why) = self
-                .capture
-                .mic_route()
-                .map_err(|e| format!("the microphone: {e}"))?
-                .ok_or("there is no microphone")?;
-            let mic = self
-                .capture
-                .open_mic_source(Some(&device.id))
-                .map_err(|e| format!("the microphone {}: {e}", device.name))?;
-            let transport = mic.transport();
+        fn open(&self, app: Option<&AppRef>, choices: &Choices) -> Result<Opened, String> {
+            let (mic, info) = open_mic(&self.capture, &choices.input())?;
+            let transport = info.transport;
             let (far, scope) = match app {
                 Some(app) => match self
                     .capture
@@ -191,59 +252,30 @@ mod mac {
                 ),
             };
             let far = far.map_err(|e| format!("the other side's sound: {e}"))?;
-            // The tap follows its process whatever output it plays to: nothing moves it.
-            let side = |source: Box<dyn AudioSource>| CaptureSide {
-                source,
-                ring: DEFAULT_RING_DURATION,
-                start_at: None,
-                follow: None,
-            };
+            // The tap follows its process whatever output it plays to: nothing moves it. The mic
+            // opens again when it goes.
+            let capture = Arc::clone(&self.capture);
+            let follow = FollowMic::new(
+                Arc::new(move |choice: &InputChoice| open_mic(&capture, choice)),
+                choices.clone(),
+                info.clone(),
+            );
+            let side =
+                |source: Box<dyn AudioSource>, follow: Option<Box<dyn Follow>>| CaptureSide {
+                    source,
+                    ring: DEFAULT_RING_DURATION,
+                    start_at: None,
+                    follow,
+                };
             Ok(Opened {
-                sides: vec![side(Box::new(mic)), side(Box::new(far))],
+                sides: vec![side(mic, Some(Box::new(follow))), side(Box::new(far), None)],
                 routing: Routing {
                     mic: transport,
                     far: FarDelivery::WhilePlaying,
                 },
-                mic: Some(MicInfo {
-                    name: device.name,
-                    transport,
-                    reason: reason(why),
-                }),
+                mic: Some(info),
                 far: scope,
             })
-        }
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-
-        /// Review (S2.8): each reason the platform names has its own schema word, none of them
-        /// "unknown", and every word (with "unknown") is one the event schema allows.
-        #[test]
-        fn each_mic_reason_is_its_own_schema_word() {
-            let words: Vec<&str> = [
-                MicRouteReason::Requested,
-                MicRouteReason::DefaultInput,
-                MicRouteReason::BuiltInForBluetoothOutput,
-                MicRouteReason::HeadsetMicSetting,
-                MicRouteReason::NoBuiltInMic,
-                MicRouteReason::FirstInput,
-            ]
-            .into_iter()
-            .map(reason)
-            .collect();
-            let mut distinct = words.clone();
-            distinct.sort_unstable();
-            distinct.dedup();
-            assert_eq!(distinct.len(), words.len(), "{words:?}");
-            assert!(!words.contains(&"unknown"));
-            let schema: serde_json::Value =
-                serde_json::from_str(crate::schema::EVENTS_SCHEMA).unwrap();
-            let allowed = schema["$defs"]["MicReason"]["enum"].as_array().unwrap();
-            for word in words.iter().chain(&["unknown"]) {
-                assert!(allowed.iter().any(|a| a == word), "{word}");
-            }
         }
     }
 }
@@ -253,14 +285,12 @@ pub use win::{FarHears, WinDevices, WinMeetingCapture};
 
 #[cfg(windows)]
 mod win {
-    use std::sync::Arc;
-
     use ink_audio::DEFAULT_RING_DURATION;
-    use ink_core::{AppRef, AudioSource, DeviceId, FarEndTarget, PlatformError};
+    use ink_core::{AppRef, AudioSource, CaptureControl, DeviceId, FarEndTarget, PlatformError};
     use ink_platform_win::WinCapture;
-    use ink_platform_win::capture::{Endpoint, MicRouteReason};
 
     use super::*;
+    use crate::devices::{OutputChoice, Picked};
 
     /// What a far end opened by [`WinDevices::open_far`] hears.
     #[derive(Clone, Debug, PartialEq, Eq)]
@@ -280,42 +310,54 @@ mod win {
     /// that opens replay sources in the tests (CI has no devices). **Worker**, every method (and
     /// the meeting's pump, for a far end that moves).
     pub trait WinDevices: Send + Sync {
-        /// The mic a meeting records with the headset-mic setting at `headset_mic`, and why;
-        /// `None` when there is no input at all.
-        fn route_mic(
-            &self,
-            headset_mic: bool,
-        ) -> Result<Option<(Endpoint, MicRouteReason)>, PlatformError>;
+        /// The mic a meeting records for the user's `choice`, and why
+        /// ([`crate::devices::pick_mic`]). Errors name the device.
+        fn pick_mic(&self, choice: &InputChoice) -> Result<Picked, String>;
         /// Opens the mic `device`, not started.
         fn open_mic(&self, device: &DeviceId) -> Result<Box<dyn AudioSource>, PlatformError>;
-        /// Opens the far end for `target`, not started, and what it hears.
+        /// The output all output is pinned to for the user's `choice`, while it is connected
+        /// ([`crate::devices::pinned_output`]); `None`: the default.
+        fn pinned_output(&self, choice: &OutputChoice) -> Result<Option<String>, PlatformError>;
+        /// Opens the far end for `target`, not started, and what it hears; all output on `pinned`
+        /// when given.
         fn open_far(
             &self,
             target: &FarEndTarget,
+            pinned: Option<&str>,
         ) -> Result<(Box<dyn AudioSource>, FarHears), PlatformError>;
         /// Whether a device-loopback far end opened for `target` on the output `endpoint` should
-        /// be opened again (the platform's `far_end_moved`). Opens nothing.
-        fn far_moved(&self, target: &FarEndTarget, endpoint: &str) -> Result<bool, PlatformError>;
+        /// be opened again (the platform's `far_end_moved`, with all output's `pinned` output).
+        /// Opens nothing.
+        fn far_moved(
+            &self,
+            target: &FarEndTarget,
+            endpoint: &str,
+            pinned: Option<&str>,
+        ) -> Result<bool, PlatformError>;
     }
 
     impl WinDevices for WinCapture {
-        fn route_mic(
-            &self,
-            headset_mic: bool,
-        ) -> Result<Option<(Endpoint, MicRouteReason)>, PlatformError> {
-            self.set_headset_mic(headset_mic);
-            self.mic_route()
+        fn pick_mic(&self, choice: &InputChoice) -> Result<Picked, String> {
+            crate::devices::pick_mic(self, choice)
         }
 
         fn open_mic(&self, device: &DeviceId) -> Result<Box<dyn AudioSource>, PlatformError> {
             Ok(Box::new(self.open_mic_source(Some(device))?))
         }
 
+        fn pinned_output(&self, choice: &OutputChoice) -> Result<Option<String>, PlatformError> {
+            if *choice == OutputChoice::Default {
+                return Ok(None);
+            }
+            Ok(crate::devices::pinned_output(&self.output_devices()?, choice).map(|id| id.0))
+        }
+
         fn open_far(
             &self,
             target: &FarEndTarget,
+            pinned: Option<&str>,
         ) -> Result<(Box<dyn AudioSource>, FarHears), PlatformError> {
-            let far = self.open_far_end_source(target)?;
+            let far = self.open_far_end_source(target, pinned)?;
             let hears = match far.endpoint() {
                 Some(id) if !far.is_process_loopback() => FarHears::Device {
                     id: id.to_owned(),
@@ -326,8 +368,13 @@ mod win {
             Ok((Box::new(far), hears))
         }
 
-        fn far_moved(&self, target: &FarEndTarget, endpoint: &str) -> Result<bool, PlatformError> {
-            self.far_end_moved(target, endpoint)
+        fn far_moved(
+            &self,
+            target: &FarEndTarget,
+            endpoint: &str,
+            pinned: Option<&str>,
+        ) -> Result<bool, PlatformError> {
+            self.far_end_moved(target, endpoint, pinned)
         }
     }
 
@@ -347,7 +394,8 @@ mod win {
     }
 
     /// A device-loopback far end, moved with its call ([`Follow`]): to where the app plays now,
-    /// or to the new default output when it records all output.
+    /// or, when it records all output, to the chosen output (back to it when it returns) or the
+    /// new default output.
     struct FollowOutput {
         devices: Arc<dyn WinDevices>,
         /// What it was opened for: the app, or all output (Record now, or an app that could not
@@ -355,14 +403,66 @@ mod win {
         target: FarEndTarget,
         /// The output it records now.
         endpoint: String,
+        /// The user's output choice, read again at every question (all output only).
+        choices: Choices,
+        /// The output all output was last pinned to; kept when the outputs cannot be read.
+        pinned: Option<String>,
+        /// Why the choice or the outputs could not be read, logged once until they can.
+        unread: Option<String>,
         /// Why the last question could not be answered, logged once until it can.
         unasked: Option<String>,
     }
 
+    impl FollowOutput {
+        /// The pinned output now, for all output (an app keeps its own output); the last one
+        /// known when the outputs cannot be read. Says when the chosen output goes or comes back.
+        fn pinned_now(&mut self) -> Option<String> {
+            if self.target != FarEndTarget::AllOutput {
+                return None;
+            }
+            // Kept as it was when the choice or the outputs cannot be read: a store or a device
+            // list failing for a moment must not move the recording to the default and back.
+            let now = self.choices.try_output().and_then(|choice| {
+                self.devices
+                    .pinned_output(&choice)
+                    .map(|now| (choice, now))
+                    .map_err(|e| e.to_string())
+            });
+            match now {
+                Ok((choice, now)) => {
+                    self.unread = None;
+                    match (&self.pinned, &now) {
+                        (Some(_), None) if choice != OutputChoice::Default => {
+                            log::warn!(
+                                "meeting: the chosen output is not connected; recording the default output until it is"
+                            );
+                        }
+                        (None, Some(_)) => log::info!("meeting: back on the chosen output"),
+                        _ => {}
+                    }
+                    self.pinned = now;
+                }
+                Err(e) => {
+                    if self.unread.as_ref() != Some(&e) {
+                        log::warn!(
+                            "meeting: the chosen output or the outputs could not be read: {e}"
+                        );
+                        self.unread = Some(e);
+                    }
+                }
+            }
+            self.pinned.clone()
+        }
+    }
+
     impl Follow for FollowOutput {
         fn moved(&mut self, again: bool) -> Result<Option<Reopened>, String> {
+            let pinned = self.pinned_now();
             if !again {
-                match self.devices.far_moved(&self.target, &self.endpoint) {
+                match self
+                    .devices
+                    .far_moved(&self.target, &self.endpoint, pinned.as_deref())
+                {
                     Ok(moved) => {
                         self.unasked = None;
                         if !moved {
@@ -384,7 +484,10 @@ mod win {
                 }
             }
             let theirs = |e: PlatformError| format!("the other side's sound: {e}");
-            let (far, hears) = self.devices.open_far(&self.target).map_err(theirs)?;
+            let (far, hears) = self
+                .devices
+                .open_far(&self.target, pinned.as_deref())
+                .map_err(theirs)?;
             let what = match hears {
                 FarHears::Device { id, name } => {
                     self.endpoint = id;
@@ -398,47 +501,54 @@ mod win {
         }
     }
 
-    /// The schema word (`MicReason`) for why Windows chose a mic.
-    fn reason(r: MicRouteReason) -> &'static str {
-        match r {
-            MicRouteReason::Requested => "requested",
-            MicRouteReason::DefaultInput => "default_input",
-            MicRouteReason::LeAudioHeadset => "le_audio_headset",
-            // Not the Bluetooth headset's call-quality mic because the output is Bluetooth: on
-            // Windows the mic kept may be USB as well as built in (the schema's word says both).
-            MicRouteReason::NotBluetoothForBluetoothOutput => "built_in_for_bluetooth_output",
-            MicRouteReason::HeadsetMicSetting => "headset_mic_setting",
-            // The output is Bluetooth and no other mic exists: the default, as the Mac's word
-            // for a Mac without a built-in mic says.
-            MicRouteReason::OnlyBluetoothMics => "no_built_in_mic",
-            MicRouteReason::FirstInput => "first_input",
-            // The platform's enum is non-exhaustive: a reason added there is said to be unknown,
-            // never passed off as another one.
-            _ => "unknown",
-        }
+    /// **Worker** (or the meeting's pump, when its mic went). The mic for `choice`, opened and
+    /// not started, and which it is.
+    fn open_mic(
+        devices: &dyn WinDevices,
+        choice: &InputChoice,
+    ) -> Result<(Box<dyn AudioSource>, MicInfo), String> {
+        let picked = devices.pick_mic(choice)?;
+        let mic = devices
+            .open_mic(&picked.device.id)
+            .map_err(|e| format!("the microphone {}: {e}", picked.device.name))?;
+        Ok((mic, picked.mic_info(picked.device.transport)))
     }
 
     impl MeetingCapture for WinMeetingCapture {
-        fn open(&self, app: Option<&AppRef>, headset_mic: bool) -> Result<Opened, String> {
-            let (device, why) = self
-                .devices
-                .route_mic(headset_mic)
-                .map_err(|e| format!("the microphone: {e}"))?
-                .ok_or("there is no microphone")?;
-            let mic = self
-                .devices
-                .open_mic(&device.info.id)
-                .map_err(|e| format!("the microphone {}: {e}", device.info.name))?;
-            let transport = device.info.transport;
+        fn planned_far(&self, app: &AppRef) -> Option<FarScope> {
+            // The plan's own test: any other app is heard by device loopback, whatever runs. One
+            // on the list is known only once opened (not running: everything instead).
+            (!ink_platform_win::capture::is_process_loopback_app(&app.id))
+                .then_some(FarScope::Everything)
+        }
+
+        /// All output records `choices`' output while it is connected, else the default.
+        fn open(&self, app: Option<&AppRef>, choices: &Choices) -> Result<Opened, String> {
+            let (mic, info) = open_mic(self.devices.as_ref(), &choices.input())?;
+            let transport = info.transport;
+            // Read once for the start; a far end of all output reads it again as it follows.
+            let pinned = match choices.try_output().and_then(|choice| {
+                self.devices
+                    .pinned_output(&choice)
+                    .map_err(|e| e.to_string())
+            }) {
+                Ok(pinned) => pinned,
+                Err(e) => {
+                    log::warn!(
+                        "meeting: the chosen output or the outputs could not be read ({e}); the default output"
+                    );
+                    None
+                }
+            };
             let everything = || {
                 self.devices
-                    .open_far(&FarEndTarget::AllOutput)
+                    .open_far(&FarEndTarget::AllOutput, pinned.as_deref())
                     .map(|opened| (opened, FarEndTarget::AllOutput))
             };
             let (far, scope) = match app {
                 Some(app) => {
                     let target = FarEndTarget::Apps(vec![app.clone()]);
-                    match self.devices.open_far(&target) {
+                    match self.devices.open_far(&target, None) {
                         Ok(opened @ (_, FarHears::App)) => (Ok((opened, target)), FarScope::App),
                         // Device loopback of the output the app plays to (Teams, and every app
                         // but Zoom and the browsers): by plan, not a fallback, and it hears
@@ -465,8 +575,13 @@ mod win {
             let follow = match hears {
                 FarHears::Device { id, .. } => Some(Box::new(FollowOutput {
                     devices: Arc::clone(&self.devices),
+                    pinned: (target == FarEndTarget::AllOutput)
+                        .then(|| pinned.clone())
+                        .flatten(),
                     target,
                     endpoint: id,
+                    choices: choices.clone(),
+                    unread: None,
                     unasked: None,
                 }) as Box<dyn Follow>),
                 FarHears::App => None,
@@ -477,19 +592,24 @@ mod win {
                 start_at: None,
                 follow,
             };
+            // The mic opens again when it goes (never for a new mic or a new default).
+            let devices = Arc::clone(&self.devices);
+            let follow_mic = FollowMic::new(
+                Arc::new(move |choice: &InputChoice| open_mic(devices.as_ref(), choice)),
+                choices.clone(),
+                info.clone(),
+            );
             Ok(Opened {
-                // A mic that is switched is not followed: it stops, and the watchdog says so.
-                sides: vec![side(mic, None), side(far, follow)],
+                sides: vec![
+                    side(mic, Some(Box::new(follow_mic) as Box<dyn Follow>)),
+                    side(far, follow),
+                ],
                 routing: Routing {
                     mic: transport,
                     // Loopback delivers nothing while nothing plays: idle, not stalled.
                     far: FarDelivery::WhilePlaying,
                 },
-                mic: Some(MicInfo {
-                    name: device.info.name,
-                    transport,
-                    reason: reason(why),
-                }),
+                mic: Some(info),
                 far: scope,
             })
         }
@@ -500,37 +620,15 @@ mod win {
         use std::sync::Mutex;
         use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-        use ink_core::{AudioSink, Channel, DeviceInfo, SourceStats, StreamFormat};
+        use ink_core::mock::MemStore;
+        use ink_core::{AudioSink, AutoReason, Channel, DeviceInfo, SourceStats, StreamFormat};
 
         use super::*;
+        use crate::devices::MicReason;
 
-        /// Each reason Windows names has its own schema word, none of them "unknown", and every
-        /// word is one the event schema allows.
-        #[test]
-        fn each_mic_reason_is_its_own_schema_word() {
-            let words: Vec<&str> = [
-                MicRouteReason::Requested,
-                MicRouteReason::DefaultInput,
-                MicRouteReason::LeAudioHeadset,
-                MicRouteReason::NotBluetoothForBluetoothOutput,
-                MicRouteReason::HeadsetMicSetting,
-                MicRouteReason::OnlyBluetoothMics,
-                MicRouteReason::FirstInput,
-            ]
-            .into_iter()
-            .map(reason)
-            .collect();
-            let mut distinct = words.clone();
-            distinct.sort_unstable();
-            distinct.dedup();
-            assert_eq!(distinct.len(), words.len(), "{words:?}");
-            assert!(!words.contains(&"unknown"));
-            let schema: serde_json::Value =
-                serde_json::from_str(crate::schema::EVENTS_SCHEMA).unwrap();
-            let allowed = schema["$defs"]["MicReason"]["enum"].as_array().unwrap();
-            for word in words.iter().chain(&["unknown"]) {
-                assert!(allowed.iter().any(|a| a == word), "{word}");
-            }
+        /// The choices of a library with none set: Automatic.
+        fn choices() -> Choices {
+            Choices::new(Arc::new(MemStore::default()))
         }
 
         /// A source that only says what it is (these tests never start one).
@@ -566,15 +664,19 @@ mod win {
         }
 
         struct Devices {
-            mic: Option<(Endpoint, MicRouteReason)>,
+            mic: Option<Picked>,
             app_far: AppFar,
             all_output_fails: AtomicBool,
             /// What `far_moved` answers.
             moved: AtomicBool,
+            /// Whether a chosen output is connected (`pinned_output`).
+            pinned_connected: AtomicBool,
+            /// Whether `pinned_output` cannot read the outputs.
+            pinned_fails: AtomicBool,
             /// Device-loopback far ends opened so far: each is on the output "out-N".
             outputs: AtomicUsize,
-            /// What was asked: the headset setting, the mic opened, each far-end target, each
-            /// question whether the far end moved.
+            /// What was asked: the mic picked (for which choice), the mic opened, each far-end
+            /// target, each question whether the far end moved.
             asked: Mutex<Vec<String>>,
         }
 
@@ -589,43 +691,46 @@ mod win {
             }
         }
 
-        fn endpoint(name: &str, transport: Transport) -> Endpoint {
-            Endpoint {
-                info: DeviceInfo {
+        fn picked(name: &str, transport: Transport, reason: AutoReason) -> Picked {
+            Picked {
+                device: DeviceInfo {
                     id: DeviceId(format!("{{0.0.1.00000000}}.{name}")),
                     name: name.into(),
                     transport,
                     is_default: true,
                 },
-                container: None,
-                rate: Some(48_000),
+                reason: MicReason::Auto(reason),
+                wanted: None,
             }
         }
 
         fn devices(app_far: AppFar) -> Devices {
             Devices {
-                mic: Some((
-                    endpoint("Microphone (USB Audio)", Transport::Usb),
-                    MicRouteReason::DefaultInput,
+                mic: Some(picked(
+                    "Microphone (USB Audio)",
+                    Transport::Usb,
+                    AutoReason::DefaultInput,
                 )),
                 app_far,
                 all_output_fails: AtomicBool::new(false),
                 moved: AtomicBool::new(false),
+                pinned_connected: AtomicBool::new(true),
+                pinned_fails: AtomicBool::new(false),
                 outputs: AtomicUsize::new(0),
                 asked: Mutex::new(Vec::new()),
             }
         }
 
         impl WinDevices for &'static Devices {
-            fn route_mic(
-                &self,
-                headset_mic: bool,
-            ) -> Result<Option<(Endpoint, MicRouteReason)>, PlatformError> {
-                self.asked
-                    .lock()
-                    .unwrap()
-                    .push(format!("headset {headset_mic}"));
-                Ok(self.mic.clone())
+            fn pick_mic(&self, choice: &InputChoice) -> Result<Picked, String> {
+                let what = match choice {
+                    InputChoice::Auto => "auto".to_owned(),
+                    InputChoice::Device(w) => w.id.0.clone(),
+                };
+                self.asked.lock().unwrap().push(format!("pick {what}"));
+                self.mic
+                    .clone()
+                    .ok_or_else(|| "there is no microphone".into())
             }
 
             fn open_mic(&self, device: &DeviceId) -> Result<Box<dyn AudioSource>, PlatformError> {
@@ -633,14 +738,35 @@ mod win {
                 Ok(Box::new(Stub(Channel::Mic)))
             }
 
+            fn pinned_output(
+                &self,
+                choice: &OutputChoice,
+            ) -> Result<Option<String>, PlatformError> {
+                if self.pinned_fails.load(Ordering::Relaxed) {
+                    return Err(PlatformError::Device("the outputs cannot be listed".into()));
+                }
+                Ok(match choice {
+                    OutputChoice::Default => None,
+                    OutputChoice::Device(w) => self
+                        .pinned_connected
+                        .load(Ordering::Relaxed)
+                        .then(|| w.id.0.clone()),
+                })
+            }
+
             fn open_far(
                 &self,
                 target: &FarEndTarget,
+                pinned: Option<&str>,
             ) -> Result<(Box<dyn AudioSource>, FarHears), PlatformError> {
                 let far = || Box::new(Stub(Channel::Far)) as Box<dyn AudioSource>;
                 match target {
                     FarEndTarget::AllOutput => {
-                        self.asked.lock().unwrap().push("far all output".into());
+                        let what = match pinned {
+                            Some(p) => format!("far all output on {p}"),
+                            None => "far all output".into(),
+                        };
+                        self.asked.lock().unwrap().push(what);
                         if self.all_output_fails.load(Ordering::Relaxed) {
                             return Err(PlatformError::Device("no output device".into()));
                         }
@@ -664,10 +790,12 @@ mod win {
                 &self,
                 target: &FarEndTarget,
                 endpoint: &str,
+                pinned: Option<&str>,
             ) -> Result<bool, PlatformError> {
-                let what = match target {
-                    FarEndTarget::AllOutput => "all output".to_owned(),
-                    FarEndTarget::Apps(apps) => apps[0].id.clone(),
+                let what = match (target, pinned) {
+                    (FarEndTarget::AllOutput, Some(p)) => format!("all output pinned {p}"),
+                    (FarEndTarget::AllOutput, None) => "all output".to_owned(),
+                    (FarEndTarget::Apps(apps), _) => apps[0].id.clone(),
                 };
                 self.asked
                     .lock()
@@ -697,7 +825,7 @@ mod win {
         fn zoom_is_heard_alone_through_the_routed_mic() {
             let d = leak(devices(AppFar::Alone));
             let opened = WinMeetingCapture::new(d)
-                .open(Some(&app("Zoom.exe")), false)
+                .open(Some(&app("Zoom.exe")), &choices())
                 .unwrap();
             assert_eq!(channels(&opened), [Channel::Mic, Channel::Far]);
             assert_eq!(opened.far, FarScope::App);
@@ -714,12 +842,13 @@ mod win {
                     name: "Microphone (USB Audio)".into(),
                     transport: Transport::Usb,
                     reason: "default_input",
+                    wanted: None,
                 })
             );
             assert_eq!(
                 *d.asked.lock().unwrap(),
                 [
-                    "headset false",
+                    "pick auto",
                     "mic {0.0.1.00000000}.Microphone (USB Audio)",
                     "far [\"Zoom.exe\"]",
                 ]
@@ -732,11 +861,11 @@ mod win {
         fn an_app_on_device_loopback_is_said_to_record_everything() {
             let d = leak(devices(AppFar::Device));
             let opened = WinMeetingCapture::new(d)
-                .open(Some(&app("ms-teams.exe")), true)
+                .open(Some(&app("ms-teams.exe")), &choices())
                 .unwrap();
             assert_eq!(opened.far, FarScope::Everything);
             assert_eq!(opened.far.name(), "everything");
-            assert_eq!(d.asked.lock().unwrap()[0], "headset true");
+            assert_eq!(d.asked.lock().unwrap()[0], "pick auto");
             assert!(
                 !d.asked
                     .lock()
@@ -751,7 +880,7 @@ mod win {
         fn an_app_that_cannot_be_heard_falls_back_to_the_default_output_and_says_why() {
             let d = leak(devices(AppFar::Fails));
             let opened = WinMeetingCapture::new(d)
-                .open(Some(&app("Zoom.exe")), false)
+                .open(Some(&app("Zoom.exe")), &choices())
                 .unwrap();
             assert_eq!(channels(&opened), [Channel::Mic, Channel::Far]);
             assert_eq!(
@@ -769,7 +898,7 @@ mod win {
         #[test]
         fn record_now_records_the_default_output() {
             let d = leak(devices(AppFar::Fails));
-            let opened = WinMeetingCapture::new(d).open(None, false).unwrap();
+            let opened = WinMeetingCapture::new(d).open(None, &choices()).unwrap();
             assert_eq!(opened.far, FarScope::Everything);
             assert_eq!(d.asked.lock().unwrap()[2..], ["far all output"]);
         }
@@ -779,13 +908,15 @@ mod win {
             let mut none = devices(AppFar::Alone);
             none.mic = None;
             assert_eq!(
-                WinMeetingCapture::new(leak(none)).open(None, false).err(),
+                WinMeetingCapture::new(leak(none))
+                    .open(None, &choices())
+                    .err(),
                 Some("there is no microphone".into())
             );
             let silent = devices(AppFar::Fails);
             silent.all_output_fails.store(true, Ordering::Relaxed);
             let err = WinMeetingCapture::new(leak(silent))
-                .open(Some(&app("Zoom.exe")), false)
+                .open(Some(&app("Zoom.exe")), &choices())
                 .err()
                 .unwrap();
             assert!(err.starts_with("the other side's sound: "), "{err}");
@@ -798,15 +929,18 @@ mod win {
         fn a_device_loopback_far_end_follows_its_call() {
             let d = leak(devices(AppFar::Alone));
             let zoom = WinMeetingCapture::new(d)
-                .open(Some(&app("Zoom.exe")), false)
+                .open(Some(&app("Zoom.exe")), &choices())
                 .unwrap();
-            assert!(zoom.sides.iter().all(|s| s.follow.is_none()));
+            assert!(zoom.sides[1].follow.is_none(), "process loopback stays");
 
             let d = leak(devices(AppFar::Device));
             let mut opened = WinMeetingCapture::new(d)
-                .open(Some(&app("ms-teams.exe")), false)
+                .open(Some(&app("ms-teams.exe")), &choices())
                 .unwrap();
-            assert!(opened.sides[0].follow.is_none(), "the mic is not followed");
+            assert!(
+                opened.sides[0].follow.is_some(),
+                "the mic opens again when it goes"
+            );
             let follow = opened.sides[1].follow.as_mut().expect("the far end moves");
             assert!(follow.moved(false).unwrap().is_none(), "it stays");
             d.moved.store(true, Ordering::Relaxed);
@@ -838,7 +972,7 @@ mod win {
             for app_opened in [Some(app("Zoom.exe")), None] {
                 let d = leak(devices(AppFar::Fails));
                 let mut opened = WinMeetingCapture::new(d)
-                    .open(app_opened.as_ref(), false)
+                    .open(app_opened.as_ref(), &choices())
                     .unwrap();
                 let follow = opened.sides[1].follow.as_mut().expect("it moves");
                 assert!(follow.moved(false).unwrap().is_none());
@@ -853,18 +987,101 @@ mod win {
             }
         }
 
+        /// Record now with an output chosen: opened on it, asked about it at every interval, on
+        /// the default while it is unplugged (the platform decides where; asked unpinned), and
+        /// pinned again when it is back. An app's own output is never pinned.
+        #[test]
+        fn record_now_records_the_chosen_output_while_it_is_connected() {
+            use ink_core::Store;
+            let store = Arc::new(MemStore::default());
+            store
+                .set_setting(crate::devices::OUTPUT_KEY, "dock")
+                .unwrap();
+            store
+                .set_setting(
+                    crate::devices::OUTPUT_DEVICE_KEY,
+                    r#"{"id":"dock","name":"Dock","transport":"usb"}"#,
+                )
+                .unwrap();
+            let choices = Choices::new(store);
+            let d = leak(devices(AppFar::Device));
+            let mut opened = WinMeetingCapture::new(d).open(None, &choices).unwrap();
+            let follow = opened.sides[1].follow.as_mut().expect("it moves");
+            assert!(follow.moved(false).unwrap().is_none());
+            // The outputs cannot be read for a moment: it keeps its pin, and stays.
+            d.pinned_fails.store(true, Ordering::Relaxed);
+            assert!(follow.moved(false).unwrap().is_none());
+            d.pinned_fails.store(false, Ordering::Relaxed);
+            d.pinned_connected.store(false, Ordering::Relaxed);
+            assert!(follow.moved(false).unwrap().is_none());
+            d.pinned_connected.store(true, Ordering::Relaxed);
+            d.moved.store(true, Ordering::Relaxed);
+            follow.moved(false).unwrap().expect("back to the dock");
+            assert_eq!(
+                d.asked.lock().unwrap()[2..],
+                [
+                    "far all output on dock",
+                    "moved? all output pinned dock on out-0",
+                    "moved? all output pinned dock on out-0",
+                    "moved? all output on out-0",
+                    "moved? all output pinned dock on out-0",
+                    "far all output on dock",
+                ]
+            );
+
+            let d = leak(devices(AppFar::Device));
+            let mut teams = WinMeetingCapture::new(d)
+                .open(Some(&app("ms-teams.exe")), &choices)
+                .unwrap();
+            teams.sides[1]
+                .follow
+                .as_mut()
+                .unwrap()
+                .moved(false)
+                .unwrap();
+            assert_eq!(
+                d.asked.lock().unwrap()[2..],
+                ["far [\"ms-teams.exe\"]", "moved? ms-teams.exe on out-0"]
+            );
+        }
+
         /// A Bluetooth mic's routing reaches the watchdog, which then takes its zeros for the
         /// user's silence (S3.1: a classic headset gates to zeros).
         #[test]
         fn a_bluetooth_mic_is_routed_as_bluetooth() {
             let mut d = devices(AppFar::Alone);
-            d.mic = Some((
-                endpoint("Headset (Earbuds)", Transport::Bluetooth),
-                MicRouteReason::LeAudioHeadset,
+            d.mic = Some(picked(
+                "Headset (Earbuds)",
+                Transport::Bluetooth,
+                AutoReason::LeAudioHeadset,
             ));
-            let opened = WinMeetingCapture::new(leak(d)).open(None, false).unwrap();
+            let opened = WinMeetingCapture::new(leak(d))
+                .open(None, &choices())
+                .unwrap();
             assert_eq!(opened.routing.mic, Transport::Bluetooth);
             assert_eq!(opened.mic.unwrap().reason, "le_audio_headset");
+        }
+
+        /// The mic stays through every interval's question (no device is asked), and opens again
+        /// from the choice only when told its source ended.
+        #[test]
+        fn the_mic_opens_again_only_when_it_goes() {
+            let d = leak(devices(AppFar::Alone));
+            let mut opened = WinMeetingCapture::new(d)
+                .open(Some(&app("Zoom.exe")), &choices())
+                .unwrap();
+            let asked = d.asked.lock().unwrap().len();
+            let follow = opened.sides[0].follow.as_mut().unwrap();
+            assert!(follow.moved(false).unwrap().is_none());
+            assert_eq!(d.asked.lock().unwrap().len(), asked, "nothing asked");
+            let (source, what) = follow.moved(true).unwrap().expect("opened again");
+            assert_eq!(source.channel(), Channel::Mic);
+            assert_eq!(what, "Microphone (USB Audio)");
+            assert_eq!(follow.mic().unwrap().reason, "default_input");
+            assert_eq!(
+                d.asked.lock().unwrap()[asked..],
+                ["pick auto", "mic {0.0.1.00000000}.Microphone (USB Audio)"]
+            );
         }
     }
 }

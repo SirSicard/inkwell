@@ -69,6 +69,30 @@ final class ScheduleTests: XCTestCase {
         XCTAssertEqual(s.set(reduceMotion: true), .stopClockAndDrawStill)
     }
 
+    /// A glide at rest (the main window's orb moving to a new spot) runs the clock for its length
+    /// only, then the settled frame at the new spot; never off screen or with motion off.
+    func testAGlideAtRestRunsTheClockOnlyWhileItLasts() {
+        var s = InkSchedule()
+        _ = s.set(onScreen: true)
+        XCTAssertEqual(s.set(gliding: true), .startClock)
+        XCTAssertEqual(s.set(gliding: false), .stopClockAndDrawStill, "arrived: one still frame there")
+        XCTAssertEqual(s.update(), .nothing, "and nothing after it")
+        XCTAssertFalse(s.clockRunning)
+
+        XCTAssertEqual(s.set(gliding: true), .startClock)
+        XCTAssertEqual(s.set(reduceMotion: true), .stopClockAndDrawStill, "motion stilled mid-glide: it holds")
+        XCTAssertFalse(s.gliding)
+        XCTAssertEqual(s.set(reduceMotion: false), .nothing, "and no glide resumes")
+        _ = s.set(reduceMotion: true)
+        XCTAssertEqual(s.set(gliding: true), .nothing, "motion off: no glide")
+        _ = s.set(gliding: false)
+        _ = s.set(reduceMotion: false)
+        _ = s.set(gliding: true)
+        XCTAssertEqual(s.set(onScreen: false), .stopClock, "hidden mid-glide")
+        XCTAssertFalse(s.gliding)
+        XCTAssertEqual(s.set(gliding: true), .nothing, "off screen: nothing moves")
+    }
+
     func testAResizeWhileIdleRedrawsOnceAndWhileLiveNotAtAll() {
         var s = InkSchedule()
         _ = s.set(onScreen: true)

@@ -22,6 +22,7 @@
 #![warn(missing_docs)]
 
 mod codec;
+mod digest;
 mod fts;
 pub mod import;
 mod schema;
@@ -44,6 +45,7 @@ use rusqlite::{
 
 use codec::{Fail, channel_at, channel_text, kind_at, kind_text, ms, ms_at, stretch};
 
+pub use digest::{DIGEST_BATCH, DIGEST_LINE_BUDGET};
 pub use schema::SCHEMA_VERSION;
 
 /// How long a call waits for another process holding the write lock (a backup tool, a second
@@ -73,9 +75,9 @@ const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 /// page SQLite writes next, but with WAL that page goes to the log, and the log still holds the
 /// earlier frames with the text; the database file keeps its old page until a checkpoint. So
 /// every call that deletes or replaces user text (deleting a record or a note; a supersede;
-/// replacing a title, a note, a summary, a speaker's name, the removed lines or a setting) ends,
-/// after its commit, with `PRAGMA wal_checkpoint(TRUNCATE)`: the file gets the zeroed pages, and
-/// the log is cut to nothing. Another process reading the database (a backup tool, a second copy
+/// replacing a title, a note, a summary, a speaker's name, the removed lines or a setting;
+/// clearing a speaker's name) ends, after its commit, with `PRAGMA wal_checkpoint(TRUNCATE)`: the
+/// file gets the zeroed pages, and the log is cut to nothing. Another process reading the database (a backup tool, a second copy
 /// of the app) keeps the log from being cut: the checkpoint is tried [`SCRUB_ATTEMPTS`] times,
 /// waiting up to [`SCRUB_WAIT`] for readers each time, and if it still cannot finish the call
 /// succeeds anyway (its change is committed), [`Store::unscrubbed`] says so, a warning is logged
@@ -450,7 +452,7 @@ fn put_setting(conn: &Connection, key: &str, value: &str) -> Result<(), Fail> {
 macro_rules! record_columns {
     () => {
         "id, kind, title, started_at_unix_ms, ended_at_unix_ms, source_app, audio_dir, revision, \
-         imported"
+         imported, stuck"
     };
 }
 
@@ -465,6 +467,7 @@ fn record_at(row: &Row<'_>) -> rusqlite::Result<Record> {
         audio_dir: row.get(6)?,
         revision: row.get(7)?,
         imported: row.get(8)?,
+        stuck: row.get(9)?,
     })
 }
 
@@ -853,6 +856,12 @@ impl Store for SqliteStore {
         })
     }
 
+    fn mark_stuck(&self, id: &RecordId) -> Result<(), StoreError> {
+        self.with("mark_stuck", |conn| {
+            changed(conn.execute("UPDATE record SET stuck = 1 WHERE id = ?1", [&id.0])?)
+        })
+    }
+
     fn delete_record(&self, id: &RecordId) -> Result<(), StoreError> {
         // The foreign keys cascade to segments (and through a trigger, the search index), removed
         // lines, notes, the summary, speaker names and commitments with their spans. Commitments elsewhere
@@ -1073,6 +1082,18 @@ impl Store for SqliteStore {
         })
     }
 
+    fn clear_speaker_name(&self, id: &RecordId, speaker: &SpeakerId) -> Result<(), StoreError> {
+        // Scrubbed: the name the user cleared leaves the log too.
+        self.write_scrubbed("clear_speaker_name", |tx| {
+            revision(tx, id)?;
+            tx.execute(
+                "DELETE FROM speaker WHERE record_id = ?1 AND speaker = ?2",
+                params![id.0, speaker.0],
+            )?;
+            Ok(())
+        })
+    }
+
     fn speaker_names(&self, id: &RecordId) -> Result<Vec<(SpeakerId, String)>, StoreError> {
         self.read("speaker_names", |tx| {
             revision(tx, id)?;
@@ -1259,6 +1280,14 @@ impl Store for SqliteStore {
                 .iter()
                 .try_for_each(|(key, value)| put_setting(conn, key, value))
         })
+    }
+
+    fn digests(&self) -> Result<Vec<ink_core::stats::RecordDigest>, StoreError> {
+        self.digests_kept()
+    }
+
+    fn commitment_states(&self) -> Result<Vec<ink_core::stats::CommitmentState>, StoreError> {
+        self.commitment_states_read()
     }
 
     fn unscrubbed(&self) -> bool {

@@ -2,7 +2,8 @@
 // SwapChainPanel in the window) and by offscreen renders: the Mac's InkPipeline
 // (mac/Sources/InkRenderer/InkPipeline.swift) on Windows. Its only resource is the uniform block
 // G (160 bytes, b0); the shader writes premultiplied alpha, transparent wherever there is no orb,
-// so each draw clears its target first.
+// so each draw clears its target first, and blends the orb over what it cleared to: transparent
+// for the Drop and offscreen renders, the colour behind the orb for a SwapChainPanel (InkPanel).
 //
 // The shader ships as source: Shaders/ink.hlsl, generated from shaders/ink.wgsl by
 // core/crates/ink-shader, compiled here with D3DCompile (the FXC compiler in d3dcompiler_47.dll,
@@ -53,6 +54,7 @@ public sealed unsafe class InkPipeline : IDisposable
     private ID3D11PixelShader* pixelShader;
     private ID3D11Buffer* constants;
     private ID3D11RasterizerState* rasterizer;
+    private ID3D11BlendState* over;
     private bool disposed;
 
     /// <summary>Whether this pipeline draws with WARP (no GPU, or asked for).</summary>
@@ -106,6 +108,24 @@ public sealed unsafe class InkPipeline : IDisposable
             ID3D11RasterizerState* r;
             InkRendererException.Check(Device->CreateRasterizerState(&rd, &r), "make the ink's rasterizer state");
             rasterizer = r;
+
+            // Premultiplied "over": the orb on what the target was cleared to. Over a transparent
+            // clear it writes exactly what the shader wrote.
+            var bd = new D3D11_BLEND_DESC();
+            bd.RenderTarget[0] = new D3D11_RENDER_TARGET_BLEND_DESC
+            {
+                BlendEnable = true,
+                SrcBlend = D3D11_BLEND.D3D11_BLEND_ONE,
+                DestBlend = D3D11_BLEND.D3D11_BLEND_INV_SRC_ALPHA,
+                BlendOp = D3D11_BLEND_OP.D3D11_BLEND_OP_ADD,
+                SrcBlendAlpha = D3D11_BLEND.D3D11_BLEND_ONE,
+                DestBlendAlpha = D3D11_BLEND.D3D11_BLEND_INV_SRC_ALPHA,
+                BlendOpAlpha = D3D11_BLEND_OP.D3D11_BLEND_OP_ADD,
+                RenderTargetWriteMask = (byte)D3D11_COLOR_WRITE_ENABLE.D3D11_COLOR_WRITE_ENABLE_ALL,
+            };
+            ID3D11BlendState* b;
+            InkRendererException.Check(Device->CreateBlendState(&bd, &b), "make the ink's blend state");
+            over = b;
         }
         catch
         {
@@ -233,12 +253,27 @@ public sealed unsafe class InkPipeline : IDisposable
     /// Clears <paramref name="target"/> (<paramref name="width"/> x <paramref name="height"/>
     /// pixels) to transparent and draws the orb over it, premultiplied. UI thread. Allocation-free.
     /// </summary>
-    public void Encode(ID3D11RenderTargetView* target, int width, int height, in InkUniforms uniforms)
+    public void Encode(ID3D11RenderTargetView* target, int width, int height, in InkUniforms uniforms) =>
+        Encode(target, width, height, uniforms, null);
+
+    /// <summary>
+    /// Clears <paramref name="target"/> to <paramref name="backdrop"/> (opaque, 0 to 1), or to
+    /// transparent when null, and draws the orb over it, premultiplied. UI thread. Allocation-free.
+    /// </summary>
+    public void Encode(ID3D11RenderTargetView* target, int width, int height, in InkUniforms uniforms, (float R, float G, float B)? backdrop)
     {
         ObjectDisposedException.ThrowIf(disposed, this);
         var ctx = Context;
-        // Transparent: the orb is drawn over whatever is behind its surface.
+        // Transparent: the orb is drawn over whatever is behind its surface. A backdrop: the
+        // surface is opaque and shows that colour where there is no orb.
         var clear = stackalloc float[4] { 0, 0, 0, 0 };
+        if (backdrop is var (r, g, b))
+        {
+            clear[0] = r;
+            clear[1] = g;
+            clear[2] = b;
+            clear[3] = 1;
+        }
         ctx->ClearRenderTargetView(target, clear);
         fixed (InkUniforms* u = &uniforms)
         {
@@ -248,6 +283,7 @@ public sealed unsafe class InkPipeline : IDisposable
         ctx->OMSetRenderTargets(1, &target, null);
         ctx->RSSetViewports(1, &viewport);
         ctx->RSSetState(rasterizer);
+        ctx->OMSetBlendState(over, null, 0xFFFFFFFF);
         ctx->IASetInputLayout(null);
         ctx->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY.D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
         ctx->VSSetShader(vertexShader, null, 0);
@@ -268,6 +304,7 @@ public sealed unsafe class InkPipeline : IDisposable
             return;
         }
         disposed = true;
+        Com.Release(ref over);
         Com.Release(ref rasterizer);
         Com.Release(ref constants);
         Com.Release(ref pixelShader);

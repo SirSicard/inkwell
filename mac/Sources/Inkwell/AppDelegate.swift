@@ -26,8 +26,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var mainWindow: MainWindowController?
     /// The ink every surface shows, and the Drop that shows it while something is live.
     private lazy var ink = ShellInk(
-        store: core.store, permissions: core.screens.permissions, meetings: core.screens.meetings)
+        store: core.store, permissions: core.screens.permissions, meetings: core.screens.meetings,
+        calls: core.screens.calls)
     private var drop: DropController?
+    /// What the Dock tile and the menu-bar item show of the state.
+    private let liveIcon = LiveIcon()
+    /// Pauses the live icon while nobody can see the screen.
+    private var displayWatch: DisplayWatch?
+    /// The Dock tile's surface, attached while the main window is open (the only time the tile
+    /// exists). The art is the bundle's icon, read before anything draws over the tile.
+    private lazy var liveDock = LiveIconDock(tile: NSApp.dockTile, base: NSApp.applicationIconImage ?? NSImage())
     private var dropDemo: DropDemo?
     private var signalSources: [DispatchSourceSignal] = []
     private var quitting = false
@@ -77,7 +85,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         core.screens.theme.start()
         let drop = DropController(ink: ink, notes: core.screens.dictation, theme: core.screens.theme)
         let screens = core.screens
-        drop.onAction = { action in screens.meetings.perform(action, permissions: screens.permissions) }
+        drop.onAction = { [weak self] action in
+            screens.performDropAction(action) { route in
+                self?.showMainWindow()
+                self?.router.open(route)
+            }
+        }
         self.drop = drop
         if let interval = DropDemo.interval(from: ProcessInfo.processInfo.environment) {
             dropDemo = DropDemo(ink: ink, interval: interval)
@@ -90,6 +103,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self?.showMainWindow()
                 self?.router.open(.settings)
             })
+        if let statusItem { liveIcon.attach(statusItem) }
+        liveIcon.follow(ink: ink, theme: core.screens.theme)
+        displayWatch = DisplayWatch { [weak self] awake in self?.liveIcon.setAwake(awake) }
         // Opened by the user: show the window. Opened at login: stay in the menu bar, unless a
         // second copy asked for the window while this one was starting (served by attach).
         if !LoginItem.launchedAtLogin() {
@@ -135,8 +151,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             mainWindow = MainWindowController(
                 router: router, store: core.store, ink: ink, updates: updates, screens: core.screens,
                 library: core.library)
+            mainWindow?.didClose = { [weak self] in
+                guard let self else { return }
+                liveIcon.detach(liveDock)
+                liveDock.clear()
+            }
         }
         mainWindow?.present()
+        // On the next turn, once the switch to a regular app (made by present) has given it a
+        // tile: a still look is drawn only once, so it must not land before the tile exists.
+        DispatchQueue.main.async { [weak self] in
+            MainActor.assumeIsolated {
+                // Not closed meanwhile (a minimised window still has its tile).
+                guard let self, let window = self.mainWindow?.window,
+                      window.isVisible || window.isMiniaturized else { return }
+                self.liveIcon.attach(self.liveDock)
+            }
+        }
     }
 
     /// SIGTERM and SIGINT become an ordinary Quit, so they stop the core like any other.

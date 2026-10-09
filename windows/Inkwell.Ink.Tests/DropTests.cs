@@ -2,6 +2,7 @@
 // becoming the foreground or active window, drawing while live and nothing while hidden. Whether
 // keystrokes really stay in another app needs a person at the desktop (windows/S3.4-CHECKLIST.md).
 using Inkwell.Ink;
+using Inkwell.Core.Glow;
 using TerraFX.Interop.Windows;
 using Xunit;
 using static TerraFX.Interop.Windows.Windows;
@@ -16,6 +17,41 @@ public sealed class DropTests
     private const string NoCompositor = "(0x887A0022)";
 
     private static readonly InkState[] LiveStates = [InkState.Dictating, InkState.Meeting, InkState.Blotting, InkState.Problem];
+
+    [Fact]
+    public void OnlyTheOrdinaryRecordingBannerUsesThePaletteAndLargeType()
+    {
+        var recording = new DropText("● REC", "Zoom", DropTone.Recording);
+        Assert.True(DropRecording.IsBanner(recording));
+        Assert.False(DropRecording.IsBanner(recording with { Buttons = new DropButtons("Stop", "Stop and delete") }));
+        Assert.False(DropRecording.IsBanner(recording with { Title = "● REC · Zoom", Detail = "The far end is silent" }));
+        Assert.False(DropRecording.IsBanner(recording with { Tone = DropTone.Alert }));
+        Assert.False(DropRecording.IsBanner(recording with { LiveWords = true }));
+    }
+
+    [Fact]
+    public void RecordingFillTracksBothVoicesAndKeepsWhiteTextReadable()
+    {
+        var palette = GlowLook.Default with { YouA = (1, 0, 0), ThemA = (0, 1, 1) };
+        var fill = DropRecording.Colours(palette);
+        Assert.True(fill.A.R > 0 && fill.A.G == 0 && fill.A.B == 0);
+        Assert.True(fill.B.R == 0 && fill.B.G > 0 && fill.B.B > 0);
+        Assert.True(fill.Middle.R < fill.A.R && fill.Middle.G < fill.B.G);
+        Assert.NotEqual(fill, DropRecording.Colours(palette with { YouA = (0, 0, 1) }));
+        static (float, float, float) C(GlowRgb c) => ((float)c.R, (float)c.G, (float)c.B);
+        static double Linear(float c) => c <= 0.04045 ? c / 12.92 : Math.Pow((c + 0.055) / 1.055, 2.4);
+        foreach (var dark in new[] { false, true })
+        foreach (var preset in GlowScheme.Presets)
+        {
+            var resolved = GlowScheme.Resolve(dark, preset.Id);
+            var colours = DropRecording.Colours(palette with { YouA = C(resolved.You), ThemA = C(resolved.Them) });
+            foreach (var colour in new[] { colours.A, colours.Middle, colours.B })
+            {
+                var luminance = 0.2126 * Linear(colour.R) + 0.7152 * Linear(colour.G) + 0.0722 * Linear(colour.B);
+                Assert.True(1.05 / (luminance + 0.05) >= 4.5, $"{preset.Id}, dark={dark}");
+            }
+        }
+    }
 
     [Fact]
     public void TheDropNeverActivates()
@@ -535,6 +571,96 @@ public sealed class DropTests
 
         var plain = new RECT { right = S(DropLayout.Width), bottom = S(DropLayout.Height) };
         Assert.True((DropFallback.Lines(buttons: false, plain, scale).DetailFormat & DT.DT_SINGLELINE) != 0);
+    }
+
+    /// <summary>The call offer's four buttons (Record, Not this one, Always for, Never for): two rows of two, inside the panel, each found where it is drawn.</summary>
+    private static readonly DropText FourButtons = new("Microsoft Teams opened the microphone", "Recording keeps both sides on this PC. Tell the others you are recording.")
+    {
+        Buttons = new DropButtons("Record this call", "Not this one", "Always for Microsoft Teams", "Never for Microsoft Teams"),
+    };
+
+    [Fact]
+    public void TheCallOffersFourButtonsLieInTwoRowsInsideItsPanel()
+    {
+        var (w, h) = DropLayout.Size(FourButtons);
+        Assert.Equal(DropLayout.WidthWithButtons, w);
+        Assert.True(h > DropLayout.HeightWithButtons, "a second row deepens the pill");
+        var rects = Enumerable.Range(0, 4).Select(i => DropLayout.Button(i)).ToList();
+        foreach (var (l, t, r, b) in rects)
+        {
+            Assert.True(l >= DropLayout.TextLeft && r <= w - DropLayout.TextRight + 0.01, "beside the ink, inside the panel");
+            Assert.True(t > 0 && b <= h - DropLayout.ButtonBottom + 0.01, "above the bottom edge");
+        }
+        Assert.Equal(rects[0].Top, rects[1].Top);
+        Assert.Equal(rects[2].Top, rects[3].Top);
+        Assert.True(rects[2].Top >= rects[0].Bottom + DropLayout.ButtonGap - 0.01, "the second row under the first");
+        for (var i = 0; i < 4; i++)
+        {
+            for (var j = i + 1; j < 4; j++)
+            {
+                var (a, b) = (rects[i], rects[j]);
+                Assert.False(a.Left < b.Right && b.Left < a.Right && a.Top < b.Bottom && b.Top < a.Bottom, $"buttons {i} and {j} overlap");
+            }
+            Assert.Equal(i, DropLayout.ButtonAt(FourButtons.Buttons, (rects[i].Left + rects[i].Right) / 2, (rects[i].Top + rects[i].Bottom) / 2));
+        }
+        // Two buttons keep the offer's one row and its size.
+        Assert.Equal((DropLayout.WidthWithButtons, DropLayout.HeightWithButtons), DropLayout.Size(Offer));
+        Assert.Equal(new DropButtons("A", "B"), new DropButtons(new List<string> { "A", "B" }));
+        Assert.NotEqual(new DropButtons("A", "B"), new DropButtons("A"));
+        // Narrator hears the buttons drawn on it.
+        Assert.Equal(
+            "Inkwell: Microsoft Teams opened the microphone, Recording keeps both sides on this PC. Tell the others you are recording. "
+            + "Buttons: Record this call, Not this one, Always for Microsoft Teams, Never for Microsoft Teams",
+            FourButtons.AccessibleName);
+    }
+
+    /// <summary>
+    /// An Always app asked instead says why on a third line: the buttons move down by a line, and
+    /// the plain fallback holds the whole sentence above them, the reminder to tell the others
+    /// included. Measured with the fallback's own font.
+    /// </summary>
+    [Theory]
+    [InlineData(1.0)]
+    [InlineData(1.5)]
+    public unsafe void ANotAloneOfferSaysWhyOnAThirdLineAboveItsButtons(double scale)
+    {
+        var notAlone = new DropText(
+            "Microsoft Teams opened the microphone",
+            "Inkwell can't hear it alone: recording takes in everything this PC plays. Tell the others you are recording.")
+        {
+            Buttons = new DropButtons("Record this call", "Not this one", "Never for Microsoft Teams"),
+            DetailLines = 3,
+        };
+        Assert.Equal(DropLayout.Button(0).Top + DropLayout.DetailLineHeight, DropLayout.Button(0, 3).Top, 3);
+        var (w, h) = DropLayout.Size(notAlone);
+        Assert.True(DropLayout.Button(2, 3).Bottom <= h - DropLayout.ButtonBottom + 0.01);
+        Assert.Equal(2, DropLayout.ButtonAt(notAlone.Buttons, DropLayout.Button(2, 3).Left + 5, DropLayout.Button(2, 3).Top + 5, 3));
+
+        int S(double dips) => (int)Math.Round(dips * scale);
+        var client = new RECT { right = S(w), bottom = S(h) };
+        var (title, detail, _) = DropFallback.Lines(buttons: true, client, scale, detailLines: 3);
+        Assert.True(title.bottom <= detail.top);
+        Assert.True(detail.bottom <= S(DropLayout.Button(0, 3).Top), "above the buttons");
+        var dc = CreateCompatibleDC(HDC.NULL);
+        var font = DropFallback.Font(S(DropLayout.DetailSize), FW.FW_NORMAL);
+        var before = SelectObject(dc, (HGDIOBJ)font.Value);
+        try
+        {
+            var needed = detail;
+            var words = notAlone.Detail;
+            fixed (char* p = words)
+            {
+                Assert.True(DrawTextW(dc, p, words.Length, &needed, DT.DT_CALCRECT | DT.DT_WORDBREAK | DT.DT_NOPREFIX | DT.DT_LEFT | DT.DT_TOP) > 0);
+            }
+            var height = needed.bottom - needed.top;
+            Assert.True(height <= detail.bottom - detail.top, $"{height} px fits the detail's {detail.bottom - detail.top} px");
+        }
+        finally
+        {
+            SelectObject(dc, before);
+            DeleteObject((HGDIOBJ)font.Value);
+            DeleteDC(dc);
+        }
     }
 
     private static unsafe RECT Rect(HWND hwnd)

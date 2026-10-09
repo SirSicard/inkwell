@@ -13,6 +13,17 @@ public abstract record CoreCommand
 {
     private CoreCommand() { }
 
+    public sealed record MeetingsShortcutSuspend(bool Suspended, string? Id = null) : CoreCommand
+    {
+        public override string Name => "meetings.shortcut.suspend";
+        private protected override IEnumerable<(string Key, object Value)> Fields()
+        {
+            yield return ("cmd", Name);
+            yield return ("suspended", Suspended);
+            if (Id is not null) yield return ("id", Id);
+        }
+    }
+
     /// <summary>The command's name, for a log line (never its fields: a note's words travel in them).</summary>
     public abstract string Name { get; }
 
@@ -104,6 +115,31 @@ public abstract record CoreCommand
     }
 
     /// <summary>
+    /// Stops <paramref name="Model"/>'s download (one running or queued in the core), only when the
+    /// user asks: it ends with that update's model.update_finished, cancelled, and its part files
+    /// stay for the next download to resume. Its id names the model ("model.cancel:&lt;id&gt;"), so a
+    /// failure (not_downloading) is matched to its row.
+    /// </summary>
+    public sealed record ModelCancel(string Model) : CoreCommand
+    {
+        public override string Name => "model.cancel";
+        private protected override IEnumerable<(string, object)> Fields() =>
+            [("cmd", Name), ("model", Model), ("id", $"{Name}:{Model}")];
+    }
+
+    /// <summary>
+    /// Deletes <paramref name="Model"/>'s files, only after the user confirmed it: models.listed
+    /// with the id as its ref, or a command.failed with it (model_in_use: nothing was deleted). Its
+    /// id names the model ("model.remove:&lt;id&gt;").
+    /// </summary>
+    public sealed record ModelRemove(string Model) : CoreCommand
+    {
+        public override string Name => "model.remove";
+        private protected override IEnumerable<(string, object)> Fields() =>
+            [("cmd", Name), ("model", Model), ("id", $"{Name}:{Model}")];
+    }
+
+    /// <summary>
     /// Loads the job's model and keeps it loaded: answered by model.warmed, model.refused or
     /// model.warm_failed. Its id names the job ("model.warm:dictation_final"), as the Mac's.
     /// </summary>
@@ -137,10 +173,41 @@ public abstract record CoreCommand
             [("cmd", Name), ("key", Key.Key()), ("value", Value), ("id", Key.CommandId())];
     }
 
-    public sealed record ModesList : CoreCommand
+    /// <summary>
+    /// Settings > Modes: each answered by modes.listed with <paramref name="Ref"/> (a save's with
+    /// saved), or a command.failed with it as the id and, for a refusal the editor shows, a code.
+    /// </summary>
+    public sealed record ModesList(string Ref) : CoreCommand
     {
         public override string Name => "modes.list";
-        private protected override IEnumerable<(string, object)> Fields() => [("cmd", Name)];
+        private protected override IEnumerable<(string, object)> Fields() => [("cmd", Name), ("id", Ref)];
+    }
+
+    /// <summary>A mode added or changed: only the fields <paramref name="Save"/> sets are named.</summary>
+    public sealed record ModesSave(ModeSave Save, string Ref) : CoreCommand
+    {
+        public override string Name => "modes.save";
+        private protected override IEnumerable<(string, object)> Fields()
+        {
+            yield return ("cmd", Name);
+            yield return ("mode", Save.ModeFields());
+            yield return ("id", Ref);
+            if (Save.TakeApps)
+            {
+                yield return ("take_apps", true);
+            }
+            if (Save.ReplaceUnreadable)
+            {
+                yield return ("replace_unreadable", true);
+            }
+        }
+    }
+
+    /// <summary>A mode deleted, only after the user confirmed it: its apps go back to the default mode.</summary>
+    public sealed record ModesDelete(string Mode, string Ref) : CoreCommand
+    {
+        public override string Name => "modes.delete";
+        private protected override IEnumerable<(string, object)> Fields() => [("cmd", Name), ("mode", Mode), ("id", Ref)];
     }
 
     /// <summary>
@@ -185,6 +252,41 @@ public abstract record CoreCommand
             [("cmd", Name), ("record", Record), ("id", Ref)];
     }
 
+    /// <summary>
+    /// Names a far-end speaker of a record by the diarizer's label (<paramref name="Given"/> is the
+    /// name; empty clears it). Answered by speaker.named with the ref, or a command.failed with it
+    /// as the id.
+    /// </summary>
+    public sealed record SpeakerName(string Record, string Speaker, string Given, string Ref) : CoreCommand
+    {
+        public override string Name => "speaker.name";
+        private protected override IEnumerable<(string, object)> Fields() =>
+            [("cmd", Name), ("record", Record), ("speaker", Speaker), ("name", Given), ("id", Ref)];
+    }
+
+    /// <summary>
+    /// Asks whether this computer can watch <paramref name="Binding"/> as a dictation or edit key
+    /// (the shortcut recorder, before it stores one). Answered by hotkey.checked with the ref: its
+    /// canonical spelling, or why not; or a command.failed with it as the id.
+    /// </summary>
+    public sealed record HotkeyCheck(string Binding, string Ref) : CoreCommand
+    {
+        public override string Name => "hotkey.check";
+        private protected override IEnumerable<(string, object)> Fields() =>
+            [("cmd", Name), ("binding", Binding), ("id", Ref)];
+    }
+
+    /// <summary>
+    /// Deletes a record whole, only after the user confirmed it. Answered by record.deleted with
+    /// the ref, or a command.failed with it as the id (a record still live is refused).
+    /// </summary>
+    public sealed record RecordDelete(string Record, string Ref) : CoreCommand
+    {
+        public override string Name => "record.delete";
+        private protected override IEnumerable<(string, object)> Fields() =>
+            [("cmd", Name), ("record", Record), ("id", Ref)];
+    }
+
     public sealed record LibraryStats(long SinceUnixMs, string Ref) : CoreCommand
     {
         public override string Name => "library.stats";
@@ -221,6 +323,51 @@ public abstract record CoreCommand
     {
         public override string Name => "meeting.dismiss";
         private protected override IEnumerable<(string, object)> Fields() => [("cmd", Name), ("app", App), ("id", Name)];
+    }
+
+    /// <summary>
+    /// "Stop and delete", in a meeting's first minute (until its delete_until_unix_ms): the
+    /// recording ends and is deleted as if never made (meeting.stopped, then meeting.discarded).
+    /// </summary>
+    public sealed record MeetingDiscard : CoreCommand
+    {
+        public override string Name => "meeting.discard";
+        private protected override IEnumerable<(string, object)> Fields() => [("cmd", Name), ("id", Name)];
+    }
+
+    /// <summary>The call policies: meetings.calls with <paramref name="Ref"/>, or a command.failed with it as the id.</summary>
+    public sealed record MeetingsCallsList(string Ref) : CoreCommand
+    {
+        public override string Name => "meetings.calls.list";
+        private protected override IEnumerable<(string, object)> Fields() => [("cmd", Name), ("id", Ref)];
+    }
+
+    /// <summary>
+    /// One app's call policy, by the identity detection reports: always, ask, never, or default
+    /// (follow the default again). The core refuses it over a stored list it cannot read unless
+    /// <paramref name="ReplaceUnreadable"/> (the user chose to start the list over).
+    /// </summary>
+    public sealed record MeetingsCallsSet(string App, string Policy, bool ReplaceUnreadable, string Ref) : CoreCommand
+    {
+        public override string Name => "meetings.calls.set";
+        private protected override IEnumerable<(string, object)> Fields()
+        {
+            yield return ("cmd", Name);
+            yield return ("app", App);
+            yield return ("policy", Policy);
+            yield return ("id", Ref);
+            if (ReplaceUnreadable)
+            {
+                yield return ("replace_unreadable", true);
+            }
+        }
+    }
+
+    /// <summary>Forget an app's call choice and seen history; recordings stay in the library.</summary>
+    public sealed record MeetingsCallsRemove(string App, string ExpectedDefault, string Ref) : CoreCommand
+    {
+        public override string Name => "meetings.calls.remove";
+        private protected override IEnumerable<(string, object)> Fields() => [("cmd", Name), ("app", App), ("expected_default", ExpectedDefault), ("id", Ref)];
     }
 
     /// <summary><paramref name="Ref"/> comes back in meeting.answered, or as the id of a command.failed.</summary>
@@ -298,6 +445,27 @@ public abstract record CoreCommand
         }
     }
 
+    /// <summary>
+    /// Takes polish's consent for one destination away (Settings > AI lists each): consent.state
+    /// with <paramref name="Ref"/>, or command.failed with it as the id. Revoking the last turns
+    /// polish off.
+    /// </summary>
+    public sealed record ConsentRevoke(LlmFeature Feature, LlmDestination To, string? Endpoint, string Ref) : CoreCommand
+    {
+        public override string Name => "consent.revoke";
+        private protected override IEnumerable<(string, object)> Fields()
+        {
+            yield return ("cmd", Name);
+            yield return ("feature", Wire.Name(Feature));
+            yield return ("to", Wire.Name(To));
+            yield return ("id", Ref);
+            if (Endpoint is not null)
+            {
+                yield return ("endpoint", Endpoint);
+            }
+        }
+    }
+
     /// <summary>Settings > AI's language model: the own-key providers and the one chosen (llm.providers with <paramref name="Ref"/>).</summary>
     public sealed record LlmProviders(string Ref) : CoreCommand
     {
@@ -358,6 +526,46 @@ public abstract record CoreCommand
     {
         public override string Name => "llm.test";
         private protected override IEnumerable<(string, object)> Fields() => [("cmd", Name), ("id", Ref)];
+    }
+
+    /// <summary>
+    /// The Stats screen's numbers (stats.counted with <paramref name="Ref"/>, or a command.failed
+    /// with it as the id), counted on the user's calendar: their zone's UTC offsets over time and
+    /// the ISO weekday their weeks start on (StatsModel.CalendarFields).
+    /// </summary>
+    public sealed record StatsGet(IReadOnlyList<UtcOffset> UtcOffsets, int WeekStart, string Ref) : CoreCommand
+    {
+        public override string Name => "stats.get";
+        private protected override IEnumerable<(string, object)> Fields() =>
+            [("cmd", Name), ("utc_offsets", UtcOffsets.Select(o => o.Fields()).ToList()), ("week_start", WeekStart), ("id", Ref)];
+    }
+
+    /// <summary>The milestones reached since the last check, each reported once ever: milestones.reached with <paramref name="Ref"/>. Takes stats.get's calendar.</summary>
+    public sealed record MilestonesCheck(IReadOnlyList<UtcOffset> UtcOffsets, int WeekStart, string Ref) : CoreCommand
+    {
+        public override string Name => "milestones.check";
+        private protected override IEnumerable<(string, object)> Fields() =>
+            [("cmd", Name), ("utc_offsets", UtcOffsets.Select(o => o.Fields()).ToList()), ("week_start", WeekStart), ("id", Ref)];
+    }
+
+    /// <summary>
+    /// Pauses the streak from today (days without a dictation then don't count against it, for up
+    /// to 90 days): stats.counted with <paramref name="Ref"/>, or a command.failed with it as the
+    /// id. Takes stats.get's calendar.
+    /// </summary>
+    public sealed record StreakPause(IReadOnlyList<UtcOffset> UtcOffsets, int WeekStart, string Ref) : CoreCommand
+    {
+        public override string Name => "streak.pause";
+        private protected override IEnumerable<(string, object)> Fields() =>
+            [("cmd", Name), ("utc_offsets", UtcOffsets.Select(o => o.Fields()).ToList()), ("week_start", WeekStart), ("id", Ref)];
+    }
+
+    /// <summary>Ends the running pause of the streak: answered as <see cref="StreakPause"/>.</summary>
+    public sealed record StreakResume(IReadOnlyList<UtcOffset> UtcOffsets, int WeekStart, string Ref) : CoreCommand
+    {
+        public override string Name => "streak.resume";
+        private protected override IEnumerable<(string, object)> Fields() =>
+            [("cmd", Name), ("utc_offsets", UtcOffsets.Select(o => o.Fields()).ToList()), ("week_start", WeekStart), ("id", Ref)];
     }
 
     /// <summary>Settings > Snippets: answered by snippets.listed with <paramref name="Ref"/>.</summary>
@@ -445,12 +653,51 @@ public abstract record CoreCommand
         public override string Name => "import.run";
         private protected override IEnumerable<(string, object)> Fields() => [("cmd", Name), ("id", Name)];
     }
+
+    /// <summary>
+    /// Settings > Sound: the microphones, the outputs, the choices and what records now, answered by
+    /// audio.devices with <paramref name="Ref"/> (then audio.devices_changed unasked as devices come
+    /// and go), or a command.failed with it as the id.
+    /// </summary>
+    public sealed record AudioDevices(string Ref) : CoreCommand
+    {
+        public override string Name => "audio.devices";
+        private protected override IEnumerable<(string, object)> Fields() => [("cmd", Name), ("id", Ref)];
+    }
+
+    /// <summary>
+    /// The mic test: audio.test_started, audio.test_level about ten times a second, then
+    /// audio.tested, all with <paramref name="Ref"/>; or a command.failed with it as the id
+    /// (meeting_recording while a meeting records). Nothing it hears is kept.
+    /// </summary>
+    public sealed record AudioTest(string Ref) : CoreCommand
+    {
+        public override string Name => "audio.test";
+        private protected override IEnumerable<(string, object)> Fields() => [("cmd", Name), ("id", Ref)];
+    }
+
+    /// <summary>Ends the running test: its own audio.tested (stopped), or a command.failed with <paramref name="Ref"/> when none runs.</summary>
+    public sealed record AudioTestStop(string Ref) : CoreCommand
+    {
+        public override string Name => "audio.test_stop";
+        private protected override IEnumerable<(string, object)> Fields() => [("cmd", Name), ("id", Ref)];
+    }
 }
 
 /// <summary>Where a page of records continues: the last record of the previous page.</summary>
 public readonly record struct RecordCursor(long StartedAtUnixMs, string Record);
 
 /// <summary>A snippet as Settings edits it.</summary>
+/// <summary>A UTC offset from the moment it took effect (stats.get's and milestones.check's utc_offsets).</summary>
+public sealed record UtcOffset(long FromUnixMs, int Minutes)
+{
+    internal SortedDictionary<string, object> Fields() => new(StringComparer.Ordinal)
+    {
+        ["from_unix_ms"] = FromUnixMs,
+        ["minutes"] = Minutes,
+    };
+}
+
 public sealed record SnippetDraft(string Id, string Trigger, string Expansion, string Category = "", bool Enabled = true)
 {
     public SnippetDraft(SnippetInfo info)
@@ -510,12 +757,20 @@ public enum ShellSetting
     OnboardingDone,
     /// <summary>"on" or "off": the user's switch for dictation polish. Only "off" is set this way: polish turns on through the consent step.</summary>
     DictationPolish,
-    /// <summary>"on" (the default) or "off": listen for calls and offer to record them.</summary>
-    MeetingsDetect,
+    /// <summary>
+    /// "ask" (the default), "always" or "never": the call policy for apps not chosen for. It
+    /// replaced "meetings.detect" ("Offer to record calls"), which the core migrates.
+    /// </summary>
+    MeetingsCallsDefault,
+    MeetingsKey,
+    /// <summary>"on" once the reminder to tell the others has been shown during a call its app's Always recorded: it shows on the first such call only (MeetingModel).</summary>
+    MeetingsAutoReminderShown,
     /// <summary>"on" or "off": the switch for a meeting's summary and Ask. Only "off" is set this way.</summary>
     MeetingsLlm,
-    /// <summary>"on" or "off" (the default): with Bluetooth output, record the headset's own mic.</summary>
-    MeetingsHeadsetMic,
+    /// <summary>The microphone for dictation, meetings and the test: "auto" (the default) or a device's id from audio.devices, connected when set.</summary>
+    AudioInput,
+    /// <summary>The output Record now's far end records: "default" (the default) or an output's id from audio.devices, connected when set.</summary>
+    AudioOutput,
     /// <summary>"forever" (the default), or days: how long the library keeps records.</summary>
     RetentionDays,
     /// <summary>The dictation key (a token).</summary>
@@ -544,8 +799,22 @@ public enum ShellSetting
     AppearanceEdgeGlow,
     /// <summary>"system" (the default: Windows' Animation effects) or "still".</summary>
     AppearanceMotion,
+    /// <summary>"10" to "100" in tens ("70" unless set): how strongly the window's orb shows behind its text, at rest.</summary>
+    AppearanceOrb,
     /// <summary>"on" (the default) or "off": local-only mode (Settings > AI's "Nothing leaves this computer").</summary>
     LlmLocalOnly,
+    /// <summary>The typing speed the Stats screen measures time saved against: a whole number of words a minute, 10 to 200 (40 unless set).</summary>
+    StatsTypingWpm,
+    /// <summary>"on" (the default) or "off": a milestone reached, or a best set, is celebrated.</summary>
+    StatsCelebrate,
+    /// <summary>The weekdays the streak rests on: "none" (the default), or ISO weekdays ascending and comma-separated ("6,7"), never all seven.</summary>
+    StatsRestDays,
+    /// <summary>"shown" (the default) or "hidden": a hidden streak shows nowhere and celebrates nothing.</summary>
+    StatsStreak,
+    /// <summary>"on" or "off" (the default): the share card may carry the heatmap.</summary>
+    StatsShareHeatmap,
+    /// <summary>The first day (YYYY-MM-DD) of the week whose review the user dismissed.</summary>
+    StatsReviewDismissed,
 }
 
 public static class ShellSettings
@@ -555,9 +824,12 @@ public static class ShellSettings
     {
         ShellSetting.OnboardingDone => "onboarding.done",
         ShellSetting.DictationPolish => "dictation.polish",
-        ShellSetting.MeetingsDetect => "meetings.detect",
+        ShellSetting.MeetingsKey => "meetings.key",
+        ShellSetting.MeetingsCallsDefault => "meetings.calls.default",
+        ShellSetting.MeetingsAutoReminderShown => "meetings.auto_reminder_shown",
         ShellSetting.MeetingsLlm => "meetings.llm",
-        ShellSetting.MeetingsHeadsetMic => "meetings.headset_mic",
+        ShellSetting.AudioInput => "audio.input",
+        ShellSetting.AudioOutput => "audio.output",
         ShellSetting.RetentionDays => "retention.days",
         ShellSetting.DictationKey => "dictation.key",
         ShellSetting.DictationEditKey => "dictation.edit_key",
@@ -572,7 +844,14 @@ public static class ShellSettings
         ShellSetting.AppearanceThemDark => "appearance.them.dark",
         ShellSetting.AppearanceEdgeGlow => "appearance.edge_glow",
         ShellSetting.AppearanceMotion => "appearance.motion",
+        ShellSetting.AppearanceOrb => "appearance.orb",
         ShellSetting.LlmLocalOnly => "llm.local_only",
+        ShellSetting.StatsTypingWpm => "stats.typing_wpm",
+        ShellSetting.StatsCelebrate => "stats.celebrate",
+        ShellSetting.StatsRestDays => "stats.rest_days",
+        ShellSetting.StatsStreak => "stats.streak",
+        ShellSetting.StatsShareHeatmap => "stats.share_heatmap",
+        ShellSetting.StatsReviewDismissed => "stats.review_dismissed",
         _ => throw new ArgumentOutOfRangeException(nameof(setting)),
     };
 
@@ -588,8 +867,18 @@ public sealed class ScreenLog(Action<string> write)
 {
     public void Write(string message) => write(message);
 
-    /// <summary>The debug trace (the core logs its own side). Built from command names and fixed words only.</summary>
-    public static ScreenLog System { get; } = new(message => global::System.Diagnostics.Trace.WriteLine($"Inkwell screens: {message}"));
+    /// <summary>
+    /// The debug trace, and <see cref="Also"/> once the app has set it (the local log). Built from
+    /// command names and fixed words only.
+    /// </summary>
+    public static ScreenLog System { get; } = new(message =>
+    {
+        global::System.Diagnostics.Trace.WriteLine($"Inkwell screens: {message}");
+        Also?.Invoke(message);
+    });
+
+    /// <summary>Where <see cref="System"/>'s lines also go: the local log, set once at launch (App).</summary>
+    public static Action<string>? Also { get; set; }
 }
 
 /// <summary>An enum value's JSON name (its JsonStringEnumMemberName), through the source-generated serializer.</summary>
@@ -605,7 +894,15 @@ public static class Wire
 [System.Text.Json.Serialization.JsonSerializable(typeof(string))]
 internal sealed partial class WireJson : System.Text.Json.Serialization.JsonSerializerContext;
 
-/// <summary>Writes a command's fields as one JSON object: strings, numbers, booleans, lists and objects of them.</summary>
+/// <summary>A field written as JSON's null (a mode's polish_model: the AI setting's).</summary>
+internal sealed class JsonNull
+{
+    public static JsonNull Value { get; } = new();
+
+    private JsonNull() { }
+}
+
+/// <summary>Writes a command's fields as one JSON object: strings, numbers, booleans, null, lists and objects of them.</summary>
 internal static class JsonFields
 {
     public static string Write(IEnumerable<(string Key, object Value)> fields)
@@ -627,6 +924,9 @@ internal static class JsonFields
     {
         switch (value)
         {
+            case JsonNull:
+                w.WriteNullValue();
+                break;
             case string s:
                 w.WriteStringValue(s);
                 break;

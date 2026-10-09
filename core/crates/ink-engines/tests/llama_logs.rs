@@ -194,6 +194,7 @@ fn a_transcription_logs_no_word_of_its_transcript() {
         channel: Channel::Mic,
         context: None,
         cancel: CancelToken::new(),
+        live: false,
     };
     let text = engine.transcribe(&audio, &options).unwrap().text();
     check(capture, loaded, from, &text, "transcription");

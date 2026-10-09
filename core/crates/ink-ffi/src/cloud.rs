@@ -10,7 +10,7 @@
 //! | `llm.key.save {provider, key}` | `llm.providers`, once the key is in the OS key store |
 //! | `llm.key.delete {provider}` | `llm.providers` |
 //! | `llm.choose {provider, model?, base_url?, local_only?}` | `setting.value` of `llm.local_only`, a `consent.state` per feature, then `llm.providers` |
-//! | `llm.test` | `llm.tested`, from its own thread: one short fixed request to the chosen provider |
+//! | `llm.test` | `llm.tested`, from its own thread: one short fixed request to the chosen provider, or to this machine's model, timed |
 //!
 //! Each answer echoes the command's `id` as `ref`; a failure is `command.failed` with that id.
 //!
@@ -32,9 +32,19 @@
 //!
 //! # Which model a feature uses
 //!
-//! The chosen provider comes first, then a model the shell registered (the Mac's Foundation Models)
-//! while none is chosen ([`ShellLlms::pick`](crate::llms::ShellLlms::pick)). Choosing none on the
-//! Mac goes back to Apple Intelligence.
+//! The chosen provider comes first; while none is chosen, the core's own model on this machine
+//! once one is downloaded ([`local`](crate::local), Windows), else a model the shell registered
+//! (the Mac's Foundation Models) ([`ShellLlms::pick`](crate::llms::ShellLlms::pick)). Choosing none
+//! on the Mac goes back to Apple Intelligence.
+//!
+//! # This machine's model
+//!
+//! `llm.choose` with provider [`ON_DEVICE`] chooses the core's own model on this machine: whichever
+//! one is downloaded (one at a time), so a later change of model keeps the choice. It needs no key and
+//! keeps local-only mode on (it is in this process), and while it is chosen nothing else stands in
+//! for it: removed, the features have no model, and never fall through to a shell's or a
+//! provider's. `llm.providers` lists it (when this OS has such models) with whether one is
+//! installed; `llm.test` loads it and times the load and the answer.
 
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -62,6 +72,9 @@ pub const CLOUD_KEY: &str = "llm.cloud";
 
 /// [`CLOUD_KEY`]'s value, and `llm.choose`'s provider, for no provider.
 pub const NONE: &str = "none";
+
+/// `llm.choose`'s provider, and `llm.providers`' entry, for the core's own model on this machine.
+pub const ON_DEVICE: &str = "on_device";
 
 /// The longest key `llm.key.save` takes, in characters: far beyond any provider's.
 pub const MAX_KEY_CHARS: usize = 1_024;
@@ -215,6 +228,36 @@ pub struct Choice {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UnreadableChoice;
 
+/// What [`CLOUD_KEY`] holds: an own-key provider, or this machine's model.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Selection {
+    /// An own-key provider.
+    Provider(Choice),
+    /// The core's own model on this machine, whichever is installed (`{"provider":"on_device"}`).
+    OnDevice,
+}
+
+impl Selection {
+    /// The stored form.
+    pub fn to_setting(&self) -> String {
+        match self {
+            Self::Provider(choice) => choice.to_setting(),
+            Self::OnDevice => json!({ "provider": ON_DEVICE }).to_string(),
+        }
+    }
+
+    /// Reads the stored form: `Ok(None)` for nothing stored or [`NONE`].
+    pub fn from_setting(value: Option<&str>) -> Result<Option<Self>, UnreadableChoice> {
+        let on_device = value
+            .and_then(|v| serde_json::from_str::<Value>(v).ok())
+            .is_some_and(|v| v == json!({ "provider": ON_DEVICE }));
+        if on_device {
+            return Ok(Some(Self::OnDevice));
+        }
+        Choice::from_setting(value).map(|c| c.map(Self::Provider))
+    }
+}
+
 impl Choice {
     /// The stored form.
     pub fn to_setting(&self) -> String {
@@ -361,9 +404,9 @@ pub(crate) fn set_services(
 }
 
 /// **Worker.** The stored choice, or none; one that cannot be read is none, and logged by name.
-fn stored(shared: &Shared) -> Result<Option<Choice>, String> {
+fn stored(shared: &Shared) -> Result<Option<Selection>, String> {
     match shared.store.setting(CLOUD_KEY) {
-        Ok(v) => Choice::from_setting(v.as_deref()).map_err(|_| {
+        Ok(v) => Selection::from_setting(v.as_deref()).map_err(|_| {
             log::error!("own-key providers: {CLOUD_KEY} cannot be read; no provider is used");
             "couldn't read the chosen provider".to_owned()
         }),
@@ -375,18 +418,28 @@ fn stored(shared: &Shared) -> Result<Option<Choice>, String> {
 }
 
 /// **Worker.** Builds the stored choice, if any, as the provider features may use (at launch,
-/// before anything can call a model). A choice that cannot be read or built is none, and logged.
+/// before anything can call a model). A choice that cannot be built is none, and logged. One that
+/// cannot be read fails closed: no model is used until a choice is written again (it may have
+/// been this machine's model, or a provider).
 pub(crate) fn load(shared: &Shared) {
-    let llm = match stored(shared) {
-        Ok(Some(choice)) => match build(shared, &choice) {
-            Ok(llm) => Some(llm),
+    let mut unreadable = false;
+    let (llm, on_device) = match stored(shared) {
+        Ok(Some(Selection::Provider(choice))) => match build(shared, &choice) {
+            Ok(llm) => (Some(llm), false),
             Err(e) => {
                 log::error!("own-key providers: the chosen provider cannot be built ({e})");
-                None
+                (None, false)
             }
         },
-        Ok(None) | Err(_) => None,
+        Ok(Some(Selection::OnDevice)) => (None, true),
+        Ok(None) => (None, false),
+        Err(_) => {
+            unreadable = true;
+            (None, false)
+        }
     };
+    shared.llms.set_choice_unreadable(unreadable);
+    shared.llms.set_on_device(on_device);
     shared.llms.set_cloud(llm);
 }
 
@@ -414,6 +467,17 @@ fn key_store_error(e: KeyStoreError) -> &'static str {
 fn parse_provider(name: &str, id: &str) -> Result<Provider, String> {
     Provider::from_id(id).ok_or_else(|| {
         format!("{name}: \"provider\" is openai, groq, anthropic, openrouter or custom")
+    })
+}
+
+/// Whether this OS has language models of the core's own (Windows), so `on_device` is offered.
+fn offers_on_device(shared: &Shared) -> bool {
+    ink_engines::Os::current().is_some_and(|os| {
+        shared
+            .registry
+            .rows()
+            .iter()
+            .any(|r| r.runs_on(os) && crate::models::is_language(r))
     })
 }
 
@@ -506,6 +570,9 @@ fn choose(
     local_only: Option<String>,
 ) -> Result<(), String> {
     const NAME: &str = "llm.choose";
+    if id == ON_DEVICE {
+        return choose_on_device(shared, model, base_url, local_only);
+    }
     let (setting, llm) = if id == NONE {
         if model.is_some() || base_url.is_some() || local_only.is_some() {
             return Err(format!(
@@ -568,11 +635,21 @@ fn choose(
     // Whatever changes, it never passes through a state more open than the one before or after.
     if remote {
         shared.llms.set_cloud(llm);
+        shared.llms.set_on_device(false);
         shared.local_only.set(false);
     } else {
         shared.local_only.set(true);
         shared.llms.set_cloud(llm);
+        shared.llms.set_on_device(false);
     }
+    // Written now: what it says is what the features use.
+    shared.llms.set_choice_unreadable(false);
+    chosen(shared, local);
+    Ok(())
+}
+
+/// Says what a choice changed: local-only mode, then each feature's consent state.
+fn chosen(shared: &Shared, local: &str) {
     shared.events.emit(crate::queries::setting_value(
         LOCAL_ONLY_KEY,
         Some(local.into()),
@@ -584,6 +661,54 @@ fn choose(
                 .emit(crate::consent::state(shared, feature, None));
         }
     }
+}
+
+/// `llm.choose` of [`ON_DEVICE`]: the core's own model on this machine, which must be downloaded
+/// (`model`, when given, must name it). Written with local-only mode on, together or not at all.
+fn choose_on_device(
+    shared: &Shared,
+    model: Option<String>,
+    base_url: Option<String>,
+    local_only: Option<String>,
+) -> Result<(), String> {
+    const NAME: &str = "llm.choose";
+    if base_url.is_some() {
+        return Err(format!("{NAME}: \"{ON_DEVICE}\" takes no base_url"));
+    }
+    if local_only.is_some() {
+        return Err(format!(
+            "{NAME}: \"{ON_DEVICE}\" keeps local-only mode on: leave out \"local_only\""
+        ));
+    }
+    let Some(local) = shared.llms.local() else {
+        return Err(format!(
+            "{NAME}: no language model is downloaded on this computer to choose"
+        ));
+    };
+    if let Some(model) = model.as_deref().map(str::trim).filter(|m| !m.is_empty())
+        && model != local.row().id
+    {
+        return Err(format!(
+            "{NAME}: \"model\" is not the language model downloaded on this computer"
+        ));
+    }
+    shared
+        .store
+        .set_settings(&[
+            (CLOUD_KEY, &Selection::OnDevice.to_setting()),
+            (LOCAL_ONLY_KEY, "on"),
+        ])
+        .map_err(|e| {
+            log::error!("{NAME}: the choice could not be saved: {e}");
+            "couldn't save the choice, so the provider and local-only mode stay as they were"
+                .to_owned()
+        })?;
+    // Local-only on first: the state between is never more open than either end.
+    shared.local_only.set(true);
+    shared.llms.set_cloud(None);
+    shared.llms.set_on_device(true);
+    shared.llms.set_choice_unreadable(false);
+    chosen(shared, "on");
     Ok(())
 }
 
@@ -605,7 +730,7 @@ pub fn providers(shared: &Shared, reference: Option<&str>) -> Value {
             false
         }
     };
-    let list: Vec<Value> = Provider::ALL
+    let mut list: Vec<Value> = Provider::ALL
         .into_iter()
         .map(|p| {
             json!({
@@ -618,6 +743,25 @@ pub fn providers(shared: &Shared, reference: Option<&str>) -> Value {
             })
         })
         .collect();
+    let local = shared.llms.local();
+    if offers_on_device(shared) {
+        // The model downloaded, else the one this OS offers: what choosing it would use.
+        let model = local
+            .as_ref()
+            .map(|l| l.row().id.clone())
+            .or_else(|| crate::models::language_row(shared).map(|r| r.id.clone()));
+        if let Some(model) = model {
+            list.push(json!({
+                "id": ON_DEVICE,
+                "default_model": model,
+                "endpoint": ink_core::Endpoint::InProcess.describe(),
+                "custom_url": false,
+                "needs_key": false,
+                "has_key": false,
+                "installed": local.is_some(),
+            }));
+        }
+    }
     let choice = match stored(shared) {
         Ok(c) => c,
         Err(_) => {
@@ -627,8 +771,10 @@ pub fn providers(shared: &Shared, reference: Option<&str>) -> Value {
     };
     let local_only = shared.local_only.is_on();
     let llm = shared.llms.cloud();
-    let (info, ready) = match (&choice, &llm) {
-        (Some(choice), Some(llm)) => {
+    // What the choice reaches: its info, the model as llm.providers names it, and whether it can
+    // be called.
+    let (info, model, ready) = match (&choice, &llm) {
+        (Some(Selection::Provider(choice)), Some(llm)) => {
             let info = llm.info();
             let keyed = !choice.provider.needs_key()
                 || list
@@ -636,23 +782,31 @@ pub fn providers(shared: &Shared, reference: Option<&str>) -> Value {
                     .find(|p| p["id"] == choice.provider.id())
                     .is_some_and(|p| p["has_key"] == true);
             let allowed = info.endpoint.is_local() || !local_only;
-            (Some(info), keyed && allowed)
+            let model = info.model.clone();
+            (Some(info), Some(model), keyed && allowed)
         }
-        _ => (None, false),
+        (Some(Selection::OnDevice), _) => {
+            let info = ink_core::LlmInfo {
+                provider: ON_DEVICE.into(),
+                model: String::new(),
+                endpoint: ink_core::Endpoint::InProcess,
+            };
+            let model = local.as_ref().map(|l| l.row().id.clone());
+            (Some(info), model, local.is_some())
+        }
+        _ => (None, None, false),
+    };
+    let base_url = match &choice {
+        Some(Selection::Provider(c)) if info.is_some() => c.base_url.clone(),
+        _ => None,
     };
     event(
         "llm.providers",
         &[
             ("providers", Some(Value::Array(list))),
             ("chosen", info.as_ref().map(|i| i.provider.clone().into())),
-            ("model", info.as_ref().map(|i| i.model.clone().into())),
-            (
-                "base_url",
-                info.as_ref()
-                    .and(choice.as_ref())
-                    .and_then(|c| c.base_url.clone())
-                    .map(Into::into),
-            ),
+            ("model", model.map(Into::into)),
+            ("base_url", base_url.map(Into::into)),
             (
                 "endpoint",
                 info.as_ref().map(|i| i.endpoint.describe().into()),
@@ -726,7 +880,8 @@ impl Tester {
     }
 
     /// Ends the thread once the test in flight is done: the shutdown's cancel ends it at once,
-    /// its request on the wire included (left to end on its own).
+    /// its request on the wire included (left to end on its own). A load of the on-device model
+    /// already under way cannot be stopped, so a test of it waits for that load (seconds) first.
     pub fn stop(self) {
         let _ = self.tx.send(Msg::Quit);
         if self.thread.join().is_err() {
@@ -773,18 +928,20 @@ fn run(shared: &Shared, rx: &Receiver<Msg>, busy: &AtomicBool) {
 }
 
 /// **Worker.** Sends [`probe`] to the chosen provider, through its local-only check, within
-/// [`TEST_BUDGET`]: the answer that says whether it answered, for the caller to emit.
+/// [`TEST_BUDGET`], or, with none chosen, to the core's own model on this machine (loading it):
+/// the answer that says whether it answered and how long it took, for the caller to emit.
 fn test(shared: &Shared, reference: Option<&str>) -> Value {
     let Some(llm) = shared.llms.cloud() else {
-        log::warn!("command llm.test failed: no provider is chosen");
-        return events::command_failed("llm.test", reference, "no provider is chosen");
+        return test_local(shared, reference);
     };
     let info = llm.info();
     // The shutdown's cancel, with the test's own budget.
     let cancel = shared
         .shutdown
         .clone_with_deadline(Instant::now() + TEST_BUDGET);
+    let asked = shared.clock.now_ns();
     let outcome = llm.complete(&probe(), &cancel);
+    let answer_ms = shared.clock.now_ns().saturating_sub(asked) / 1_000_000;
     let (status, error) = match &outcome {
         Ok(_) => (None, None),
         Err(e) => {
@@ -805,6 +962,60 @@ fn test(shared: &Shared, reference: Option<&str>) -> Value {
             ("ok", Some(outcome.is_ok().into())),
             ("status", status.map(Into::into)),
             ("error", error.map(Into::into)),
+            ("answer_ms", outcome.is_ok().then(|| answer_ms.into())),
+            ("ref", reference.map(Into::into)),
+        ],
+    )
+}
+
+/// **Worker.** [`probe`] to the core's own model on this machine, when it is what the features use
+/// (no provider chosen): loaded first if it is not, the load and the answer timed apart.
+fn test_local(shared: &Shared, reference: Option<&str>) -> Value {
+    if shared.llms.choice_unreadable() {
+        log::warn!("command llm.test failed: the chosen provider cannot be read");
+        return events::command_failed(
+            "llm.test",
+            reference,
+            "couldn't read the chosen provider; choose one again",
+        );
+    }
+    let Some(local) = shared.llms.local() else {
+        let why = if shared.llms.on_device() {
+            "no language model is downloaded on this computer"
+        } else {
+            "no provider is chosen"
+        };
+        log::warn!("command llm.test failed: {why}");
+        return events::command_failed("llm.test", reference, why);
+    };
+    let cancel = shared
+        .shutdown
+        .clone_with_deadline(Instant::now() + TEST_BUDGET);
+    // Local-only mode, as every call: this model is in this process, so it passes.
+    let (load_ms, answer_ms, outcome) = match shared.local_only.check(&local.info().endpoint) {
+        Ok(()) => local.timed(&probe(), &cancel),
+        Err(e) => (0, None, Err(e)),
+    };
+    let error = outcome.as_ref().err().map(|e| {
+        log::warn!("llm.test: the on-device model did not answer: {e}");
+        tested_error(e, false, shared.shutdown.is_cancelled())
+    });
+    event(
+        "llm.tested",
+        &[
+            ("provider", Some(ON_DEVICE.into())),
+            ("model", Some(local.row().id.as_str().into())),
+            ("ok", Some(outcome.is_ok().into())),
+            ("error", error.map(Into::into)),
+            ("load_ms", Some(load_ms.into())),
+            (
+                "answer_ms",
+                outcome
+                    .is_ok()
+                    .then_some(answer_ms)
+                    .flatten()
+                    .map(Into::into),
+            ),
             ("ref", reference.map(Into::into)),
         ],
     )

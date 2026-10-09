@@ -775,7 +775,7 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
             "MIT", WinUIExText)
         { Composed = true },
         new("dotnet-runtime", ".NET runtime",
-            "Compiled into Inkwell.exe by NativeAOT: .NET 10.0.12.",
+            "Copied beside the app, compiled ahead of time (ReadyToRun): .NET 10.0.12.",
             "MIT, with the notices of the code it includes", DotnetText),
         new("windows-sdk-net", "Windows SDK projection for .NET, by Microsoft",
             "The Windows APIs as C# sees them, shipped with the app: Microsoft.Windows.SDK.NET.dll and WinRT.Runtime.dll from Microsoft.Windows.SDK.NET.Ref 10.0.26100.57.",
@@ -856,6 +856,10 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
         new("silero-vad", "Silero VAD v6", "the Silero team", "MIT",
             "Hears where speech starts and stops.", Silero)
         { Composed = true },
+        // Windows only, and only when downloaded: the Mac uses Apple's on-device model.
+        new("qwen3-4b-instruct", "Qwen3 4B Instruct", "the Qwen team, Alibaba Cloud", "Apache-2.0",
+            "Polish, voice edits, meeting summaries and Ask on this PC, once downloaded.",
+            "Qwen3-4B-Instruct-2507 by the Qwen team, Alibaba Cloud, licensed under the Apache License 2.0. Converted to GGUF by Unsloth on Hugging Face."),
     ];
 
     /// <summary>The Apache License 2.0, shared by the components under it (Notices.swift's apache2).</summary>

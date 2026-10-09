@@ -13,9 +13,18 @@
 //! [`EditFailure::NotAllowed`](crate::events::EditFailure::NotAllowed),
 //! [`MeetingWarning::SummaryNotAllowed`](crate::meeting::events::MeetingWarning::SummaryNotAllowed)).
 //!
-//! The store keeps each feature's consent as a setting ([`Feature::setting_key`]), written by
-//! [`LlmConsent::to_setting`] and read by [`LlmConsent::from_setting`]. A value that does not read
-//! is no consent: the feature fails closed.
+//! The store keeps each feature's consent as a setting ([`Feature::setting_key`]), read by
+//! [`Feature::read`]. A value that does not read is no consent: the feature fails closed.
+//!
+//! **Polish holds one consent per destination** (owner decision, 2026-10-05): a dictation mode may
+//! polish on a model of its own ([`crate::modes::ModelPin`]), so "the AI setting's model in the
+//! cloud, the Notes mode on this machine" needs both. Its setting is a list
+//! ([`consents_to_setting`]); a call passes when any of them covers the model reached, by the same
+//! rule as one consent ([`LlmConsent::covers`]). The single consent an earlier build stored reads
+//! as a list of one, and is written back as a list at the next change, so nothing is asked again.
+//! (A build before this one reading the list finds no consent it knows and fails closed.) Voice
+//! edit and a meeting's summary keep one consent each: each sends only to the AI setting's model,
+//! so there is only ever one destination to agree to.
 
 use ink_core::{CancelToken, Endpoint, Llm, LlmError, LlmInfo, LlmRequest, LlmResponse, Store};
 use serde_json::{Value, json};
@@ -51,6 +60,22 @@ impl Feature {
         Self::ALL.into_iter().find(|f| f.name() == name)
     }
 
+    /// Whether it holds one consent per destination (a list), rather than one consent.
+    pub const fn per_destination(self) -> bool {
+        matches!(self, Self::Polish)
+    }
+
+    /// Its consents as stored under [`setting_key`](Self::setting_key): none, one, or (for a
+    /// feature [per destination](Self::per_destination)) several. `Err` for a value that does not
+    /// read, which callers treat as no consent and report.
+    pub fn read(self, value: Option<&str>) -> Result<Vec<LlmConsent>, UnreadableConsent> {
+        if self.per_destination() {
+            consents_from_setting(value)
+        } else {
+            LlmConsent::from_setting(value).map(|c| c.into_iter().collect())
+        }
+    }
+
     /// The store setting holding its consent.
     pub const fn setting_key(self) -> &'static str {
         match self {
@@ -75,6 +100,64 @@ pub enum LlmConsent {
         name: String,
     },
 }
+
+/// Where a model sends the words: this machine, or one endpoint elsewhere. What a consent is
+/// given for, and what a dictation mode's own model is pinned to when the user picks it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Destination {
+    /// A model on this machine (in this process, or a server on a loopback address).
+    OnDevice,
+    /// A model elsewhere, by its endpoint ([`Endpoint::Remote`]'s value).
+    Cloud(String),
+}
+
+impl Destination {
+    /// Where `info`'s model sends.
+    pub fn of(info: &LlmInfo) -> Self {
+        match &info.endpoint {
+            Endpoint::InProcess | Endpoint::Loopback(_) => Self::OnDevice,
+            Endpoint::Remote(endpoint) => Self::Cloud(endpoint.clone()),
+        }
+    }
+
+    /// Whether `info`'s model sends here: on-device is any model on this machine (another local
+    /// port is still this machine), a cloud destination only its own endpoint.
+    pub fn covers(&self, info: &LlmInfo) -> bool {
+        match (self, &info.endpoint) {
+            (Self::OnDevice, endpoint) => endpoint.is_local(),
+            (Self::Cloud(endpoint), Endpoint::Remote(to)) => endpoint == to,
+            (Self::Cloud(_), _) => false,
+        }
+    }
+
+    /// The stored form: `{"to":"on_device"}` or `{"to":"cloud","endpoint":…}`.
+    pub fn to_value(&self) -> Value {
+        match self {
+            Self::OnDevice => json!({"to": "on_device"}),
+            Self::Cloud(endpoint) => json!({"to": "cloud", "endpoint": endpoint}),
+        }
+    }
+
+    /// Reads [`to_value`](Self::to_value)'s form, and nothing else.
+    pub fn from_value(v: &Value) -> Option<Self> {
+        let obj = v.as_object()?;
+        match obj.get("to").and_then(Value::as_str)? {
+            "on_device" if obj.len() == 1 => Some(Self::OnDevice),
+            "cloud" if obj.len() == 2 => obj
+                .get("endpoint")
+                .and_then(Value::as_str)
+                .filter(|e| !e.trim().is_empty())
+                .map(|e| Self::Cloud(e.to_owned())),
+            _ => None,
+        }
+    }
+}
+
+/// How a cloud engine the shell registered is named as an endpoint: this, then its id. The shell
+/// gives no address, so the id is all the endpoint says, and another cloud engine could register
+/// under the same id later: a consent for one is kept to the model it was given for by name too
+/// ([`LlmConsent::covers`]).
+pub const SHELL_ENGINE_ENDPOINT: &str = "shell engine ";
 
 /// The setting's value when no consent is given (or it was withdrawn).
 pub const NO_CONSENT: &str = "none";
@@ -104,12 +187,23 @@ impl LlmConsent {
     }
 
     /// Whether this consent lets the feature send to `info`'s model. On-device consent covers any
-    /// model on this machine; a cloud consent covers only models at the same endpoint.
+    /// model on this machine; a cloud consent covers only models at the same endpoint, and for a
+    /// cloud engine the shell registered ([`SHELL_ENGINE_ENDPOINT`]: an id, not an address) only
+    /// the model of the name agreed to.
     pub fn covers(&self, info: &LlmInfo) -> bool {
-        match (self, &info.endpoint) {
-            (Self::OnDevice, endpoint) => endpoint.is_local(),
-            (Self::Cloud { endpoint, .. }, Endpoint::Remote(to)) => endpoint == to,
-            (Self::Cloud { .. }, _) => false,
+        match self {
+            Self::Cloud { endpoint, name } if endpoint.starts_with(SHELL_ENGINE_ENDPOINT) => {
+                self.destination().covers(info) && *name == display_name(info)
+            }
+            _ => self.destination().covers(info),
+        }
+    }
+
+    /// Where it lets the words go.
+    pub fn destination(&self) -> Destination {
+        match self {
+            Self::OnDevice => Destination::OnDevice,
+            Self::Cloud { endpoint, .. } => Destination::Cloud(endpoint.clone()),
         }
     }
 
@@ -132,13 +226,16 @@ impl LlmConsent {
 
     /// The stored form: a JSON object.
     pub fn to_setting(&self) -> String {
+        self.to_value().to_string()
+    }
+
+    fn to_value(&self) -> Value {
         match self {
             Self::OnDevice => json!({"to": "on_device"}),
             Self::Cloud { endpoint, name } => {
                 json!({"to": "cloud", "endpoint": endpoint, "name": name})
             }
         }
-        .to_string()
     }
 
     /// Reads the stored form. `Ok(None)` for no consent (nothing stored, or [`NO_CONSENT`]);
@@ -151,48 +248,90 @@ impl LlmConsent {
             return Ok(None);
         }
         let v: Value = serde_json::from_str(value).map_err(|_| UnreadableConsent)?;
+        Self::from_value(&v).map(Some)
+    }
+
+    fn from_value(v: &Value) -> Result<Self, UnreadableConsent> {
         let obj = v.as_object().ok_or(UnreadableConsent)?;
         let text = |k: &str| obj.get(k).and_then(Value::as_str);
         match text("to") {
-            Some("on_device") if obj.len() == 1 => Ok(Some(Self::OnDevice)),
+            Some("on_device") if obj.len() == 1 => Ok(Self::OnDevice),
             Some("cloud") if obj.len() == 3 => {
                 let endpoint = text("endpoint")
                     .filter(|e| !e.trim().is_empty())
                     .ok_or(UnreadableConsent)?;
-                Ok(Some(Self::Cloud {
+                Ok(Self::Cloud {
                     endpoint: endpoint.to_owned(),
                     name: text("name").ok_or(UnreadableConsent)?.to_owned(),
-                }))
+                })
             }
             _ => Err(UnreadableConsent),
         }
     }
 }
 
-/// **Worker.** `feature`'s consent as stored, read at the moment of use. One that cannot be read
-/// is none (logged by name, never by value): the feature fails closed.
-pub fn stored(store: &dyn Store, feature: Feature) -> Option<LlmConsent> {
+/// A per-destination feature's consents ([`Feature::per_destination`]) as stored: [`NO_CONSENT`]
+/// for none, else a JSON list of consents. Also reads one consent alone (what a build before
+/// consents per destination stored), as a list of one. Two consents for one destination read as
+/// the first. Anything else does not read.
+pub fn consents_from_setting(value: Option<&str>) -> Result<Vec<LlmConsent>, UnreadableConsent> {
+    let Some(value) = value else {
+        return Ok(Vec::new());
+    };
+    if value == NO_CONSENT {
+        return Ok(Vec::new());
+    }
+    let v: Value = serde_json::from_str(value).map_err(|_| UnreadableConsent)?;
+    let read = match &v {
+        Value::Object(_) => vec![LlmConsent::from_value(&v)?],
+        Value::Array(list) => list
+            .iter()
+            .map(LlmConsent::from_value)
+            .collect::<Result<_, _>>()?,
+        _ => return Err(UnreadableConsent),
+    };
+    let mut consents: Vec<LlmConsent> = Vec::with_capacity(read.len());
+    for c in read {
+        if !consents.iter().any(|have| have.same_destination(&c)) {
+            consents.push(c);
+        }
+    }
+    Ok(consents)
+}
+
+/// The stored form of a per-destination feature's consents: [`NO_CONSENT`] when there are none.
+pub fn consents_to_setting(consents: &[LlmConsent]) -> String {
+    if consents.is_empty() {
+        return NO_CONSENT.to_owned();
+    }
+    Value::Array(consents.iter().map(LlmConsent::to_value).collect()).to_string()
+}
+
+/// **Worker.** `feature`'s consents as stored, read at the moment of use ([`Feature::read`]).
+/// Ones that cannot be read are none (logged by name, never by value): the feature fails closed.
+pub fn stored(store: &dyn Store, feature: Feature) -> Vec<LlmConsent> {
     let key = feature.setting_key();
     match store.setting(key) {
-        Ok(value) => LlmConsent::from_setting(value.as_deref()).unwrap_or_else(|e| {
+        Ok(value) => feature.read(value.as_deref()).unwrap_or_else(|e| {
             log::error!("consent: {key}: {e}; nothing is sent");
-            None
+            Vec::new()
         }),
         Err(e) => {
             log::error!("consent: {key} could not be read ({e}); nothing is sent");
-            None
+            Vec::new()
         }
     }
 }
 
-/// A feature's model, bound to the user's consent for that feature: every call goes through
+/// A feature's model, bound to the user's consents for that feature: every call goes through
 /// [`Llm::complete_if`], so the model that answers is checked against where the user agreed the
-/// words may go. Refused, nothing is sent ([`LlmError::NotAllowed`]).
+/// words may go: allowed when any of them covers it. Refused, nothing is sent
+/// ([`LlmError::NotAllowed`]).
 pub struct Consented<'a> {
     /// The model.
     pub inner: &'a dyn Llm,
-    /// `None`: never agreed, so no model is allowed.
-    pub consent: Option<&'a LlmConsent>,
+    /// Empty: never agreed, so no model is allowed.
+    pub consents: &'a [LlmConsent],
 }
 
 impl Llm for Consented<'_> {
@@ -206,7 +345,7 @@ impl Llm for Consented<'_> {
         cancel: &CancelToken,
     ) -> Result<LlmResponse, LlmError> {
         self.inner.complete_if(request, cancel, &|info| {
-            self.consent.is_some_and(|c| c.covers(info))
+            self.consents.iter().any(|c| c.covers(info))
         })
     }
 }
@@ -261,6 +400,30 @@ mod tests {
             !c.covers(&info("shell", "on-device", Endpoint::InProcess)),
             "consent for a provider is not consent for this machine either"
         );
+    }
+
+    /// Another cloud engine registered under an id a consent was given for is not the one agreed
+    /// to: the shell's endpoint is only its id, so the name agreed to must match too. A provider's
+    /// consent (an address) covers any model there: a mode may pick another model at it.
+    #[test]
+    fn a_cloud_shell_engine_consent_is_kept_to_the_model_agreed_to() {
+        let c = LlmConsent::for_model(&cloud("shell engine cloud-a"));
+        assert!(c.covers(&cloud("shell engine cloud-a")));
+        assert!(!c.covers(&info(
+            "shell",
+            "Another model",
+            Endpoint::Remote("shell engine cloud-a".into())
+        )));
+        let provider = LlmConsent::for_model(&info(
+            "anthropic",
+            "model-a",
+            Endpoint::Remote("https://api.anthropic.com".into()),
+        ));
+        assert!(provider.covers(&info(
+            "anthropic",
+            "model-b",
+            Endpoint::Remote("https://api.anthropic.com".into())
+        )));
     }
 
     #[test]
@@ -327,5 +490,131 @@ mod tests {
                 "{bad}"
             );
         }
+    }
+
+    /// Polish's consents, one per destination: the single consent an earlier build stored reads
+    /// as a list of one; a list reads back; one destination is held once; anything else is
+    /// refused. The others keep one consent, and refuse a list.
+    #[test]
+    fn polish_holds_a_consent_per_destination_and_reads_the_old_single_one() {
+        let cloud = LlmConsent::Cloud {
+            endpoint: "https://api.example.com/v1".into(),
+            name: "Example".into(),
+        };
+        let both = vec![LlmConsent::OnDevice, cloud.clone()];
+        let stored = consents_to_setting(&both);
+        assert_eq!(consents_from_setting(Some(&stored)), Ok(both.clone()));
+        assert_eq!(Feature::Polish.read(Some(&stored)), Ok(both.clone()));
+        // Migration: what one consent per feature wrote.
+        assert_eq!(
+            Feature::Polish.read(Some(&cloud.to_setting())),
+            Ok(vec![cloud.clone()])
+        );
+        assert_eq!(Feature::Polish.read(None), Ok(Vec::new()));
+        assert_eq!(Feature::Polish.read(Some(NO_CONSENT)), Ok(Vec::new()));
+        assert_eq!(consents_to_setting(&[]), NO_CONSENT);
+        let twice = r#"[{"to":"on_device"},{"to":"on_device"},{"to":"cloud","endpoint":"https://api.example.com/v1","name":"Example"},{"to":"cloud","endpoint":"https://api.example.com/v1","name":"Newer"}]"#;
+        assert_eq!(Feature::Polish.read(Some(twice)), Ok(both));
+        for bad in [
+            "[1]",
+            r#"[{"to":"everywhere"}]"#,
+            r#""on""#,
+            "3",
+            "[",
+            r#"[{"to":"on_device"},{}]"#,
+        ] {
+            assert_eq!(
+                Feature::Polish.read(Some(bad)),
+                Err(UnreadableConsent),
+                "{bad}"
+            );
+        }
+        assert_eq!(
+            Feature::Edit.read(Some(&stored)),
+            Err(UnreadableConsent),
+            "voice edit holds one consent"
+        );
+        assert_eq!(
+            Feature::Meetings.read(Some(&cloud.to_setting())),
+            Ok(vec![cloud])
+        );
+        assert!(Feature::Polish.per_destination());
+        assert!(!Feature::Edit.per_destination() && !Feature::Meetings.per_destination());
+    }
+
+    /// Any consent in the list lets a call through, by the same rule as one consent: on-device
+    /// for any model on this machine, a cloud consent for its own endpoint only.
+    #[test]
+    fn a_call_passes_when_any_consent_covers_the_model_it_reaches() {
+        use ink_core::mock::MockLlm;
+        let a = "https://api.a.example/v1";
+        let consents = [LlmConsent::Cloud {
+            endpoint: a.into(),
+            name: "A".into(),
+        }];
+        let call = |endpoint: Endpoint, consents: &[LlmConsent]| {
+            let model = MockLlm::new(endpoint, "ok");
+            Consented {
+                inner: &model,
+                consents,
+            }
+            .complete(
+                &LlmRequest {
+                    system: String::new(),
+                    user: "words".into(),
+                    max_tokens: 8,
+                    temperature: 0.0,
+                    json_schema: None,
+                },
+                &CancelToken::new(),
+            )
+            .is_ok()
+        };
+        assert!(call(Endpoint::Remote(a.into()), &consents));
+        assert!(!call(
+            Endpoint::Remote("https://api.b.example/v1".into()),
+            &consents
+        ));
+        assert!(!call(Endpoint::InProcess, &consents));
+        let both = [consents[0].clone(), LlmConsent::OnDevice];
+        assert!(call(Endpoint::InProcess, &both));
+        assert!(call(
+            Endpoint::Loopback("http://127.0.0.1:9/v1".into()),
+            &both
+        ));
+        assert!(!call(
+            Endpoint::Remote("https://api.b.example/v1".into()),
+            &both
+        ));
+        assert!(!call(Endpoint::InProcess, &[]), "none: nothing is allowed");
+    }
+
+    #[test]
+    fn a_destination_reads_back_and_covers_as_a_consent_does() {
+        for d in [
+            Destination::OnDevice,
+            Destination::Cloud("https://api.example.com/v1".into()),
+        ] {
+            assert_eq!(Destination::from_value(&d.to_value()), Some(d));
+        }
+        for bad in [
+            json!({"to": "cloud"}),
+            json!({"to": "cloud", "endpoint": " "}),
+            json!({"to": "on_device", "endpoint": "x"}),
+            json!("on_device"),
+        ] {
+            assert_eq!(Destination::from_value(&bad), None, "{bad}");
+        }
+        let here = Destination::OnDevice;
+        assert!(here.covers(&info(
+            "x",
+            "m",
+            Endpoint::Loopback("http://127.0.0.1:1".into())
+        )));
+        assert!(!here.covers(&cloud("shell engine x")));
+        let there = Destination::Cloud("shell engine x".into());
+        assert!(there.covers(&cloud("shell engine x")));
+        assert!(!there.covers(&cloud("shell engine y")));
+        assert_eq!(Destination::of(&cloud("shell engine x")), there);
     }
 }

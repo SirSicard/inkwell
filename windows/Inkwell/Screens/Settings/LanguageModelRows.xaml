@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The language model (CloudModel), as Settings > AI shows it and the first run's Polish step shows
+     it under "Other providers or models…": the provider picker, the server's address, the key, the
+     model, Use and Test, and what is in use. In Settings the picker also holds this PC's own model
+     (LocalLlmModel): its line, Download, Cancel or Remove, the download's progress and the free
+     space, then Use and Try it. -->
+<UserControl
+    x:Class="Inkwell.Screens.LanguageModelRows"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:Inkwell.Screens">
+    <StackPanel Spacing="8">
+        <!-- The pickers and the address: as wide as before where there is room, narrower (never
+             clipped) in Settings at its narrowest; a column's MaxWidth keeps them at the left. -->
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" MaxWidth="260" />
+            </Grid.ColumnDefinitions>
+            <ComboBox
+                x:Name="ProviderBox"
+                MinWidth="0"
+                HorizontalAlignment="Stretch"
+                AutomationProperties.Name="Language model provider"
+                SelectionChanged="OnProviderChosen" />
+        </Grid>
+        <StackPanel x:Name="ProviderDetails" Spacing="8">
+            <Grid x:Name="ServerRow">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" MaxWidth="320" />
+                </Grid.ColumnDefinitions>
+                <TextBox
+                    x:Name="ServerBox"
+                    AutomationProperties.Name="Server address"
+                    Header="Server address"
+                    TextChanged="OnServerChanged" />
+            </Grid>
+            <!-- A grid, not a horizontal StackPanel: a StackPanel offers its children unlimited
+                 width, and a PasswordBox grows with what is pasted into it, so a long key pushed the
+                 buttons out of the first run's sheet. Here the key takes the width the buttons
+                 leave, up to MaxWidth in Settings' wider page. -->
+            <!-- At the narrowest, the buttons go under the key. -->
+            <local:LineOrStackPanel MaxWidth="560" Fill="0" FillMinimum="200" Spacing="8">
+                <PasswordBox
+                    x:Name="KeyBox"
+                    AutomationProperties.Name="API key"
+                    Header="API key" />
+                <StackPanel VerticalAlignment="Bottom" Orientation="Horizontal" Spacing="8">
+                    <Button
+                        x:Name="SaveKeyButton"
+                        Click="OnSaveKey"
+                        Content="Save key" />
+                    <Button
+                        x:Name="DeleteKeyButton"
+                        Click="OnDeleteKey"
+                        Content="Delete key" />
+                </StackPanel>
+            </local:LineOrStackPanel>
+            <TextBlock x:Name="KeyStatus" Style="{StaticResource InkCaptionStyle}" />
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" MaxWidth="320" />
+                </Grid.ColumnDefinitions>
+                <ComboBox
+                    x:Name="ModelBox"
+                    MinWidth="0"
+                    HorizontalAlignment="Stretch"
+                    AutomationProperties.Name="Model"
+                    Header="Model"
+                    IsEditable="True"
+                    SelectionChanged="OnModelChosen" />
+            </Grid>
+        </StackPanel>
+        <!-- This PC's own model, while it is in the picker (Settings only). -->
+        <StackPanel x:Name="LocalPanel" Spacing="6" Visibility="Collapsed">
+            <local:LineOrStackPanel Fill="0" FillMinimum="160" Spacing="8">
+                <TextBlock x:Name="LocalName" Style="{StaticResource InkBodyStyle}" FontWeight="SemiBold" />
+                <Border x:Name="LocalInstalled" Padding="8,2" CornerRadius="8" HorizontalAlignment="Left" Background="{ThemeResource InkChipBrush}">
+                    <TextBlock Style="{StaticResource InkCaptionStyle}" Text="Installed" />
+                </Border>
+            </local:LineOrStackPanel>
+            <TextBlock x:Name="LocalLine" Style="{StaticResource InkCaptionStyle}" />
+            <TextBlock x:Name="LocalSource" Style="{StaticResource InkCaptionStyle}" />
+            <ProgressBar x:Name="LocalProgress" MaxWidth="360" HorizontalAlignment="Stretch" Maximum="1" />
+            <TextBlock x:Name="LocalStatus" Style="{StaticResource InkCaptionStyle}" />
+            <TextBlock x:Name="LocalFreeSpace" Style="{StaticResource InkCaptionStyle}" />
+            <local:WrapPanel RowSpacing="8" Spacing="8">
+                <Button x:Name="LocalDownload" Click="OnLocalDownload" Content="Download" />
+                <Button x:Name="LocalRetry" Click="OnLocalDownload" Content="Retry" />
+                <Button x:Name="LocalCancel" Click="OnLocalCancel" Content="Cancel" />
+                <Button x:Name="LocalRemove" Click="OnLocalRemove" Content="Remove&#x2026;" />
+            </local:WrapPanel>
+        </StackPanel>
+        <TextBlock x:Name="UseNote" Style="{StaticResource InkCaptionStyle}" />
+        <!-- Use's label is long ("Stop using a language model"): it wraps inside the button, and Test
+             goes under it, at the narrowest. -->
+        <local:WrapPanel RowSpacing="8" Spacing="8">
+            <Button
+                x:Name="UseButton"
+                Click="OnUse"
+                Style="{StaticResource InkAccentButtonStyle}">
+                <Button.ContentTemplate>
+                    <DataTemplate>
+                        <TextBlock Text="{Binding}" TextWrapping="Wrap" />
+                    </DataTemplate>
+                </Button.ContentTemplate>
+            </Button>
+            <Button
+                x:Name="TestButton"
+                Click="OnTest"
+                Content="Test" />
+        </local:WrapPanel>
+        <!-- The first run puts polish's consent step here when this Use asked (StepSlot); empty in Settings. -->
+        <StackPanel x:Name="FirstRunStepSlot" Visibility="Collapsed" />
+        <TextBlock x:Name="TestStatus" Style="{StaticResource InkCaptionStyle}" />
+        <TextBlock x:Name="CloudStatus" Style="{StaticResource InkCaptionStyle}" />
+    </StackPanel>
+</UserControl>

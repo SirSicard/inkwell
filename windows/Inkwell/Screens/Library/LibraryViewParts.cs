@@ -54,6 +54,17 @@ public sealed class LedgerItem(LedgerLine line)
 
     public bool IsYou => Line.Speaker.IsYou;
 
+    /// <summary>The diarizer's label of a far-end line: the speaker the user can name.</summary>
+    public string? Label => Line.Label;
+
+    /// <summary>A far-end speaker the diarizer told apart: their name is a button that names them.</summary>
+    public bool IsNameable => !IsYou && Label is not null;
+
+    /// <summary>The far end as a whole (no label): their name is plain text.</summary>
+    public bool IsPlainThem => !IsYou && Label is null;
+
+    public string NameLabel => $"Name {Who}";
+
     public override string ToString() => RecordDocument.LineLabel(Line);
 }
 

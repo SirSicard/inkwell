@@ -723,6 +723,7 @@ pub(crate) fn transcribe(
         channel,
         context: ctx.context.map(str::to_owned),
         cancel: ctx.cancel.clone(),
+        live: false,
     };
     let transcript = match ctx.engine.transcribe(audio, &options) {
         Ok(t) => t,

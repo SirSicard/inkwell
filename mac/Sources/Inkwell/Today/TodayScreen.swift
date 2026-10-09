@@ -19,10 +19,8 @@ struct TodayScreen: View {
     @Environment(ScreenModels.self) private var screens
     @Environment(WindowPresence.self) private var presence
     @State private var showAllNeeds = false
-    @FocusState private var searchFocused: Bool
-    /// The content's width: two columns (the canvas's 1.3 : 1) from 624 pt, else one.
-    @State private var width: CGFloat = 0
-    /// The visible height: the counts sit at the foot of the screen, as the canvas has them.
+    /// The visible height: the counts sit at the foot of the screen, as the canvas has them. Only
+    /// the height: the scroll axis can't widen the ScrollView (the columns' width: TodayColumnsLayout).
     @State private var height: CGFloat = 0
 
     private var calendar: Calendar { library.calendar }
@@ -36,22 +34,10 @@ struct TodayScreen: View {
                     LiveCard(meeting: meeting)
                 }
                 needsYou(now)
-                if width >= 624 {
-                    let left = (width - 18) * 1.3 / 2.3
-                    HStack(alignment: .top, spacing: 18) {
-                        card(lastMeeting(now)).frame(width: left, alignment: .leading)
-                        VStack(alignment: .leading, spacing: 18) {
-                            card(upNextSection(now))
-                            card(owedSoon(now))
-                        }
-                        .frame(width: width - 18 - left, alignment: .leading)
-                    }
-                } else {
-                    VStack(alignment: .leading, spacing: 18) {
-                        card(lastMeeting(now))
-                        card(upNextSection(now))
-                        card(owedSoon(now))
-                    }
+                TodayColumnsLayout {
+                    lastMeeting(now).sectionCard()
+                    upNextSection(now).sectionCard()
+                    owedSoon(now).sectionCard()
                 }
                 Spacer(minLength: 0)
                 stats
@@ -62,19 +48,7 @@ struct TodayScreen: View {
             .frame(maxWidth: .infinity, minHeight: height, alignment: .topLeading)
         }
         .scrollContentBackground(.hidden)
-        .onGeometryChange(for: CGSize.self) { $0.size } action: { size in
-            width = max(size.width - 72, 0)
-            height = size.height
-        }
-        .searchable(text: searchText, placement: .toolbar, prompt: "Search everything said")
-        .searchFocused($searchFocused)
-        .onChange(of: router.searchPending, initial: true) { _, pending in
-            // Find (⌘F) chose this field.
-            if pending {
-                searchFocused = true
-                router.searchPending = false
-            }
-        }
+        .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
         .onAppear {
             library.refreshToday()
             screens.owed.load()
@@ -89,14 +63,6 @@ struct TodayScreen: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             upNext.refresh()
         }
-    }
-
-    /// The toolbar's search is the Library's: typing on Today opens the Library's matches.
-    private var searchText: Binding<String> {
-        Binding(get: { library.query }, set: { words in
-            library.query = words
-            if !words.trimmingCharacters(in: .whitespaces).isEmpty { router.open(.library) }
-        })
     }
 
     // MARK: Hero
@@ -116,9 +82,14 @@ struct TodayScreen: View {
                     .minimumScaleFactor(0.5)
                     .accessibilityAddTraits(.isHeader)
                 Text(statusLine)
+                    .accessibilityLabel(statusLine(spoken: true))
                     .font(Typography.caption)
                     .foregroundStyle(Theme.secondaryText)
                     .padding(.top, 4)
+                if let line = SpeechModels.todayLine(screens.catalogue.speech) {
+                    SpeechModelLine(line: line)
+                        .padding(.top, 6)
+                }
             }
             Spacer(minLength: 0)
             RecordControls()
@@ -127,22 +98,25 @@ struct TodayScreen: View {
         .frame(minHeight: 240, alignment: .bottom)
     }
 
-    /// "Listening for calls · Hold fn to dictate": the core's state and the key dictation uses now.
-    private var statusLine: String {
-        let key = DictationModel.key(screens.dictation.key)?.name ?? screens.dictation.key
-        let listening = RecordControls.listeningText(recording: store.meeting != nil, listening: store.listening)
-        return [listening, "Hold \(key) to dictate"]
-            .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
-            .joined(separator: " · ")
+    private var statusLine: String { statusLine(spoken: false) }
+
+    private func statusLine(spoken: Bool) -> String {
+        Self.statusLine(
+            listening: RecordControls.listeningText(recording: store.meeting != nil, listening: store.listening),
+            key: screens.dictation.key,
+            offersDictation: screens.catalogue.speech.offersDictation,
+            spoken: spoken)
     }
 
-    /// A section on its card.
-    private func card(_ content: some View) -> some View {
-        content
-            .padding(.vertical, 20)
-            .padding(.horizontal, 22)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .paperCard()
+    /// "Listening for calls · Hold fn to dictate": the core's state and the key dictation uses now,
+    /// unless no speech model could type what it hears (the line under it says so). The key as its
+    /// cap reads in Settings (DictationModel.cap); `spoken`, as VoiceOver reads it, by its name.
+    static func statusLine(listening: String, key: String, offersDictation: Bool, spoken: Bool = false) -> String {
+        let shown = spoken ? DictationModel.key(key)?.name ?? key : DictationModel.cap(key)
+        let hold = offersDictation ? "Hold \(shown) to dictate" : ""
+        return [listening, hold]
+            .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+            .joined(separator: " · ")
     }
 
     // MARK: Needs you
@@ -371,22 +345,100 @@ struct TodayScreen: View {
             met.map { "This week · \($0.records) \($0.records == 1 ? "meeting" : "meetings") · \(LibraryFormat.duration(ms: $0.durationMs))" }
                 ?? (library.weekLoad == .failed ? "This week · couldn't be counted" : nil),
         ].compactMap { $0 }
-        // Side by side when they fit, one under the other when not: never a line broken mid-count.
-        return ViewThatFits(in: .horizontal) {
-            HStack(spacing: 28) {
-                ForEach(lines, id: \.self) { Text($0).lineLimit(1) }
-                Spacer(minLength: 0)
+        // The counts lead to Stats, where the rest of them are.
+        return Button { router.open(.stats) } label: {
+            // Side by side when they fit, one under the other when not: never a line broken
+            // mid-count.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 28) {
+                    ForEach(lines, id: \.self) { Text($0).lineLimit(1) }
+                    Text("Stats \u{203A}").lineLimit(1)
+                    Spacer(minLength: 0)
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(lines, id: \.self) { Text($0) }
+                    Text("Stats \u{203A}")
+                }
             }
-            VStack(alignment: .leading, spacing: 4) {
-                ForEach(lines, id: \.self) { Text($0) }
-            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .buttonStyle(.plain)
         .font(PaperType.meta)
         .foregroundStyle(Theme.secondaryText)
         .padding(.top, 8)
         .padding(.horizontal, 14)
-        .accessibilityElement(children: .combine)
+        .pointerStyle(.link)
+        // Its words without the arrow, which VoiceOver would read out.
+        .accessibilityLabel(lines.isEmpty ? "Stats" : lines.joined(separator: ". "))
+        .accessibilityHint("Opens Stats")
+    }
+}
+
+/// Today's last meeting, up next and owed soon: from `twoColumns` of width, the first on the left
+/// and the rest under one another on the right, the canvas's 1.3 : 1; narrower, all of them under
+/// one another. One set of views either way.
+///
+/// Chosen from the width proposed, measuring and placing alike, never from a width measured and
+/// written back. Today read the ScrollView's width into state and gave the columns fixed widths
+/// from it, but that width counts an always-shown (legacy) scroller the content does not get: the
+/// columns overflowed by the scroller's 17 pt, a ScrollView grows to hold content wider than it, and
+/// the wider ScrollView widened the columns again, a pass at a time without end whenever the
+/// content needed scrolling (600 pt tall or less with nothing on Today; the default 700 with Needs
+/// you showing): the main run loop never came back. With overlay scrollers it held, but a narrowed window kept the old width,
+/// the right column cut off. It is always the width offered: a card that can't fit its column
+/// overflows it rather than widen the ScrollView.
+struct TodayColumnsLayout: Layout {
+    static let twoColumns: CGFloat = 624
+    static let spacing: CGFloat = 18
+
+    private struct Arrangement {
+        var size: CGSize
+        var places: [(origin: CGPoint, proposal: ProposedViewSize)]
+    }
+
+    private func arrange(_ proposed: CGFloat?, _ subviews: Subviews) -> Arrangement {
+        let width = proposed.flatMap { $0.isFinite ? $0 : nil }
+        guard let width, width >= Self.twoColumns, subviews.count > 1 else { return stacked(width, subviews) }
+        let left = (width - Self.spacing) * 1.3 / 2.3
+        let right = width - Self.spacing - left
+        let first = ProposedViewSize(width: left, height: nil)
+        var places = [(origin: CGPoint.zero, proposal: first)]
+        let rest = ProposedViewSize(width: right, height: nil)
+        var y: CGFloat = 0
+        for subview in subviews.dropFirst() {
+            places.append((CGPoint(x: left + Self.spacing, y: y), rest))
+            y += subview.sizeThatFits(rest).height + Self.spacing
+        }
+        let height = max(subviews[0].sizeThatFits(first).height, y - Self.spacing)
+        return Arrangement(size: CGSize(width: width, height: height), places: places)
+    }
+
+    private func stacked(_ width: CGFloat?, _ subviews: Subviews) -> Arrangement {
+        let proposal = ProposedViewSize(width: width, height: nil)
+        var places: [(origin: CGPoint, proposal: ProposedViewSize)] = []
+        var y: CGFloat = 0
+        var widest: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(proposal)
+            places.append((CGPoint(x: 0, y: y), proposal))
+            y += size.height + Self.spacing
+            widest = max(widest, size.width)
+        }
+        return Arrangement(size: CGSize(width: width ?? widest, height: max(0, y - Self.spacing)), places: places)
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        arrange(proposal.width, subviews).size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let arrangement = arrange(proposal.width, subviews)
+        for (subview, place) in zip(subviews, arrangement.places) {
+            subview.place(
+                at: CGPoint(x: bounds.minX + place.origin.x, y: bounds.minY + place.origin.y),
+                anchor: .topLeading, proposal: place.proposal)
+        }
     }
 }
 
@@ -450,6 +502,56 @@ struct OwedSoonRow: View {
                 }
                 .font(PaperType.meta)
                 .foregroundStyle(due.isOverdue ? PaperPalette.alertText : Theme.secondaryText)
+            }
+        }
+        .accessibilityElement(children: .contain)
+    }
+}
+
+/// Under Today's greeting while no speech model is installed: what that means, and the download
+/// of the recommended set (or how far it has got, or why it failed). The first run's last step
+/// shows it too, in its body size.
+struct SpeechModelLine: View {
+    let line: String
+    var lineFont = Typography.caption
+    @Environment(ScreenModels.self) private var screens
+
+    var body: some View {
+        let catalogue = screens.catalogue
+        VStack(alignment: .leading, spacing: 8) {
+            Text(line)
+                .font(lineFont)
+                .foregroundStyle(Theme.text)
+                .fixedSize(horizontal: false, vertical: true)
+            switch catalogue.speechDownload {
+            case .notStarted:
+                HStack(spacing: 10) {
+                    Button(catalogue.recommendedMB.map { "Download speech models (\($0) MB)" } ?? "Download speech models") {
+                        catalogue.downloadRecommended()
+                    }
+                    .buttonStyle(PaperButtonStyle())
+                    // Where the files come from, as the first run says it.
+                    let hosts = CatalogueModel.sources(catalogue.models.filter { CatalogueModel.recommended.contains($0.id) })
+                    if !hosts.isEmpty {
+                        Text("From \(hosts)")
+                            .font(Typography.caption)
+                            .foregroundStyle(Theme.secondaryText)
+                    }
+                }
+            case .downloading(let percent):
+                Text(percent.map { "Downloading speech models · \($0) %" } ?? "Downloading speech models…")
+                    .font(Typography.caption)
+                    .foregroundStyle(Theme.secondaryText)
+                    .monospacedDigit()
+            case .failed(let why):
+                HStack(spacing: 10) {
+                    Text("The download failed: \(why)")
+                        .font(Typography.caption)
+                        .foregroundStyle(Theme.alert)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("Try again") { catalogue.downloadRecommended() }
+                        .buttonStyle(PaperButtonStyle())
+                }
             }
         }
         .accessibilityElement(children: .contain)

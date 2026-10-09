@@ -34,9 +34,20 @@ public final class InkClock: NSObject {
     /// screen, where no view is on screen to draw).
     var linkCount: Int { link == nil ? 0 : 1 }
 
-    override init() {
+    /// The screen a link starts on when its first view's window has none.
+    private let anyScreen: () -> NSScreen?
+
+    override convenience init() {
+        self.init(anyScreen: { NSScreen.main ?? NSScreen.screens.first })
+    }
+
+    /// A clock whose links start on `anyScreen` when a view's window has no screen (tests stand in
+    /// for a Mac whose displays are asleep or gone).
+    init(anyScreen: @escaping () -> NSScreen?) {
+        self.anyScreen = anyScreen
         super.init()
-        // A link belongs to one screen; when the screens change, it moves to the main one.
+        // A link belongs to one screen; when the screens change, it moves to the main one (or
+        // starts there, for views that went live with no screen).
         NotificationCenter.default.addObserver(
             self, selector: #selector(screensChanged(_:)),
             name: NSApplication.didChangeScreenParametersNotification, object: nil)
@@ -80,7 +91,7 @@ public final class InkClock: NSObject {
     }
 
     private func startLink(on screen: NSScreen?) {
-        guard link == nil, let screen = screen ?? NSScreen.main ?? NSScreen.screens.first else { return }
+        guard link == nil, let screen = screen ?? anyScreen() else { return }
         let displayLink = screen.displayLink(target: self, selector: #selector(fire(_:)))
         displayLink.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 60, preferred: 60)
         displayLink.add(to: .main, forMode: .common)
@@ -95,7 +106,11 @@ public final class InkClock: NSObject {
     // AppKit posts it on the main thread; the hop covers a sender that ever does not.
     @objc private nonisolated func screensChanged(_ note: Notification) {
         let restart: @MainActor @Sendable () -> Void = { [weak self] in
-            guard let self, self.link != nil else { return }
+            // Views on it, not a link: views that went live with no screen (or lost it to a change
+            // that left none) have no link, and nothing else ever starts one for them. This covers
+            // views that went live with no screen at all. It is not proven to be what hung the
+            // milestone glow tests for 40 minutes: their waits are bounded now, which covers that.
+            guard let self, self.clientCount > 0 else { return }
             self.stopLink()
             self.startLink(on: nil)
         }

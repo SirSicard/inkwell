@@ -106,6 +106,10 @@ public static class PermissionCards
         return state == CardState.Unknown ? "Open Settings" : "Allow";
     }
 
+    /// <summary>A card's line when its request could not be carried out (Settings did not open).</summary>
+    public const string RequestFailedLine =
+        "Windows Settings didn't open. Open it from the Start menu: Privacy & security > Microphone.";
+
     /// <summary>What shows in place of a button.</summary>
     public static string StateLabel(CardState state) => state switch
     {
@@ -146,6 +150,15 @@ public sealed class PermissionsModel : ObservableModel
 
     /// <summary>A check is on its way.</summary>
     public bool Checking { get; private set; }
+
+    /// <summary>
+    /// The card whose request the core could not carry out (Settings did not open), until the next
+    /// request or the card reads allowed; null when none.
+    /// </summary>
+    public PermissionCard? RequestFailed { get; private set; }
+
+    /// <summary>The card that asked last: a failed request names no card, and only one asks at a time.</summary>
+    private PermissionCard? requested;
 
     public CardState State(PermissionCard card) => states.TryGetValue(card, out var state) ? state : CardState.Checking;
 
@@ -192,6 +205,12 @@ public sealed class PermissionsModel : ObservableModel
         }
         if (card.CorePermission() is PermissionName permission)
         {
+            requested = card;
+            if (RequestFailed is not null)
+            {
+                RequestFailed = null;
+                Changed();
+            }
             send(new CoreCommand.PermissionRequest(permission));
         }
         else
@@ -204,7 +223,7 @@ public sealed class PermissionsModel : ObservableModel
     public static bool Handles(CommandFailed failed)
     {
         ArgumentNullException.ThrowIfNull(failed);
-        return failed.Command == "permissions.check";
+        return failed.Command is "permissions.check" or "permission.request";
     }
 
     public void Apply(InkEvent e)
@@ -216,6 +235,16 @@ public sealed class PermissionsModel : ObservableModel
                 states[PermissionCard.HearYou] = Card(checkedEvent.Microphone);
                 states[PermissionCard.HearTheOthers] = Card(checkedEvent.SystemAudio);
                 states[PermissionCard.TypeForYou] = Card(checkedEvent.Accessibility);
+                if (RequestFailed is PermissionCard failedCard && State(failedCard) == CardState.Allowed)
+                {
+                    RequestFailed = null;
+                }
+                Changed();
+                break;
+            // The request did not happen (Settings did not open): said on the card that asked, not
+            // only logged, so the button is not seen to do nothing.
+            case CommandFailed { Command: "permission.request" }:
+                RequestFailed = requested ?? PermissionCard.HearYou;
                 Changed();
                 break;
             // permission.requested needs nothing: the answer comes from Windows Settings, and the

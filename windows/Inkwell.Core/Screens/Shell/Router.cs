@@ -10,6 +10,7 @@ public enum Route
     Today,
     Library,
     Owed,
+    Stats,
     Live,
     Settings,
 }
@@ -32,6 +33,7 @@ public static class Routes
         Route.Today => "Today",
         Route.Library => "Library",
         Route.Owed => "Owed",
+        Route.Stats => "Stats",
         Route.Live => "Live",
         Route.Settings => "Settings",
         _ => throw new ArgumentOutOfRangeException(nameof(route)),
@@ -43,6 +45,7 @@ public static class Routes
         Route.Today => "", // Brightness (a sun)
         Route.Library => "", // Library
         Route.Owed => "", // CheckboxComposite
+        Route.Stats => "", // AreaChart
         Route.Live => "", // (audio wave: Diagnostic)
         Route.Settings => "", // Setting
         _ => throw new ArgumentOutOfRangeException(nameof(route)),
@@ -50,7 +53,7 @@ public static class Routes
 
     public static SidebarSection Section(this Route route) => route switch
     {
-        Route.Today or Route.Library or Route.Owed => SidebarSection.Main,
+        Route.Today or Route.Library or Route.Owed or Route.Stats => SidebarSection.Main,
         Route.Live => SidebarSection.Recording,
         _ => SidebarSection.App,
     };
