@@ -4,13 +4,33 @@ All notable changes to Inkwell will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [1.0.0] - 2026-10-09
 
-### Fixed
+Inkwell 1.0 is a new app: native on the Mac (macOS 26 or later, Apple silicon) and on Windows (Windows 11 24H2 or later, x64), over one Rust core, and it takes meeting notes as well as dictation. The 0.2 app's updater cannot install it, so download it from the release; the first run offers to import your 0.2 history, dictionary, snippets, voice commands, modes and settings. Intel Macs and Linux get no 1.0: Inkwell 0.2 is their last version, kept on the `legacy/0.2` branch, where its own fixes are recorded.
 
-- **The recording overlay no longer jumps sideways when Live Preview is on.** Turning it on moved the ink blob 231 points to the left, off the spot it had occupied in every previous version, because the wider window was positioned by its own edge. The words now appear in a strip above the blob and the blob itself does not move at all.
-- **Inkwell was writing your dictations into its log file.** One line recorded the sentence before and after filler-word removal as plain text, in a log that survives clearing your history. It records lengths now, like every other line. If you have used Inkwell since 0.2.7, the existing log on your machine still contains that text: Settings, Troubleshooting, Open Log Folder, and delete `Inkwell.log`.
-- **AI Polish now says why it failed.** When the provider rejected a request, the reason was discarded and every dictation silently fell back to unpolished text with no way to find out why. The error is now reported.
+### Added
+
+- **Meetings.** Your microphone and the other side of the call are recorded as two streams, transcribed live, and transcribed again at the end by the more accurate model, which replaces the live transcript in one step. The far end's speakers are told apart and can be named. With a language model, each meeting gets a summary whose decisions and actions cite the line they came from, and a list of commitments. Your notes sit beside the live transcript, and Ask answers questions about what has been said so far.
+- **Recording is per app and your choice.** When an app holds the microphone, Inkwell asks, records it always, or never, as you set for that app. For the first minute, Stop and delete ends a meeting and deletes it as if it had never been made. A meeting interrupted by a crash is repaired and finished at the next launch.
+- **The Library.** Every dictation and meeting, searchable through everything said, with a player for both sides on one timeline. Records can be deleted one by one, or by age with a retention setting.
+- **Owed.** The promises still open across your meetings, with "looks done" when a later meeting says one is done.
+- **Today.** Your next meeting from the calendar (Mac), what needs you, and today's counts.
+- **Stats, rebuilt.** Dictation, meeting and promise counts from your library, a streak, a heatmap, milestones, a weekly review and a share card of the numbers you choose.
+- **Language models without a key.** Apple's on-device model on the Mac, and on Windows Qwen3-4B-Instruct-2507, downloaded only when you ask. Your own key for OpenAI, Groq, Anthropic, OpenRouter or an OpenAI-compatible server still works, with a step-by-step guide to a free Groq key.
+- **Consent per feature.** Polish, voice edit, summaries and Ask each ask where your words will go before the first send, and again if that destination changes. Local only is on by default and refuses any endpoint off this machine.
+- **Modes edited in Settings**, each with its own polish instructions and optionally its own language model.
+- **Settings > Sound.** One microphone choice for dictation and meetings, a mic test, and device changes followed as they happen.
+- **Any key as the dictation key**: a right-hand modifier (or Fn on the Mac) on its own, a function key or a chord, checked as you record it. A meeting can be started and stopped with a shortcut of its own.
+
+### Changed
+
+- **New speech engines, chosen by measurement on public English sets.** Qwen3-ASR 1.7B for dictation and the meeting final pass (Metal on the Mac; Vulkan, or the CPU, on Windows), Parakeet TDT v3 for live words, Nemotron for the far end's speakers and Silero VAD for voice activity. Models download when first needed, from pinned revisions with checked hashes. 0.2's model list is not carried over.
+- **Updates.** On the Mac through Sparkle, signed twice and checked against the app's key; it asks before its first automatic check. On Windows, Settings > About > Check Now, with each update's size and SHA-256 checked before it installs.
+- **Windows is installed per user**, with no administrator password. The Windows build is not code-signed yet: SmartScreen warns before the installer runs, and the release lists each file's SHA-256 to check it against.
+
+### Removed
+
+- Linux and Intel Mac builds. Inkwell 0.2 stays available for them.
 
 ## [0.2.9] - 2026-08-27
 
@@ -188,6 +208,7 @@ Rehaul. The product is now explicitly free and open source forever, macOS first,
 - Homepage dropdown menus clipped by card overflow.
 - macOS Gatekeeper warning text updated with correct `xattr -cr` instructions.
 
+[1.0.0]: https://github.com/SirSicard/inkwell/releases/tag/v1.0.0
 [0.2.8]: https://github.com/SirSicard/inkwell/releases/tag/v0.2.8
 [0.2.7]: https://github.com/SirSicard/inkwell/releases/tag/v0.2.7
 [0.2.6]: https://github.com/SirSicard/inkwell/releases/tag/v0.2.6

@@ -55,8 +55,8 @@ the real core.
       asks first ("Turn on polish?", naming Apple's on-device model); Cancel leaves it off.
 - [ ] Polish step, own key (a test key of your own, never committed; Settings > AI's Local only
       reads On before): "Use Groq's free model" is closed, and Continue and Skip work without
-      opening it. Opened: the sentence says Groq's free tier needs no credit card, with a
-      console.groq.com link; under it "Paste your Groq key" (the placeholder fits) and Save, then
+      opening it. Opened: the guide says Groq's Free plan costs $0 and has rate limits, its Rate
+      Limits page a link, then its steps with a console.groq.com/keys link; under it "Paste your Groq key" (the placeholder fits) and Save, then
       Use Groq. No model field and no provider picker: those are under "Other providers or
       models…", which shows Settings > AI's rows without the Local only switch, and "Back to
       Groq's free model" returns. Use stays greyed until the key is saved (the field clears). Use:
