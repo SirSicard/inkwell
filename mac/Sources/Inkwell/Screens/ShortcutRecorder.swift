@@ -4,7 +4,9 @@
 // records, the next key press is captured (a modifier alone when it comes up with nothing else
 // pressed, a function key, or modifiers and a key), named as the core names it, and sent to the
 // core's hotkey.check: the core is the one judge of what it can watch. Only a key it accepts is
-// saved, in the spelling it answers; a refusal is shown with its reason and the old key stays.
+// saved, in the spelling it answers; a refusal is shown with its reason, the old key stays, and the
+// recorder goes on listening for another key (stopping there left the refusal on screen while every
+// later press did nothing, which read as every key being refused).
 // Capture waits for both dictation and meeting suspension acknowledgements. The captured press
 // must be released before an accepted key is saved and hooks resume. Escape and focus loss cancel.
 import AppKit
@@ -283,9 +285,8 @@ final class ShortcutRecorderModel {
             cancel()
             announce("Recording cancelled. The key is unchanged.")
         case .unknownKey:
-            recording = nil
-            show("Inkwell doesn\u{2019}t know that key (keypad and media keys, for one). Try another.", for: target)
-            resume()
+            show("Inkwell doesn\u{2019}t know that key (keypad and media keys, for one). Try another.", for: target, then: Self.listeningOn)
+            capture = ShortcutCapture()
         case .captured(let token):
             recording = nil
             checking = (target, token)
@@ -324,11 +325,16 @@ final class ShortcutRecorderModel {
             }
             endCheck()
             if checked.ok, let canonical = checked.canonical {
-                save(canonical, for: target, shown: describe(canonical))
+                if save(canonical, for: target, shown: describe(canonical)) {
+                    resume()
+                    return
+                }
             } else {
-                show("Can\u{2019}t use \(describe(token).cap): \(checked.reason ?? "this Mac can\u{2019}t watch it").", for: target)
+                show("Can\u{2019}t use \(describe(token).cap): \(checked.reason ?? "this Mac can\u{2019}t watch it").", for: target, then: Self.listeningOn)
             }
-            resume()
+            // Refused, by the core or here: the next press is the next try. The check was answered
+            // only once every key was up, so nothing from this try is still held.
+            listen(target)
         case .commandFailed(let failed) where failed.id != nil && failed.id == ref:
             if let (target, _) = checking {
                 endCheck()
@@ -374,35 +380,46 @@ final class ShortcutRecorderModel {
         timeout = nil
     }
 
-    private func show(_ text: String, for target: Target) {
+    /// Said after a refusal while the recorder goes on listening.
+    private static let listeningOn = "Press another key, or Escape to cancel."
+
+    /// `then` is said after `text`, not shown: what happens next.
+    private func show(_ text: String, for target: Target, then: String? = nil) {
         messages[target] = Message(text: text, isProblem: true)
-        announce(text)
+        announce(then.map { "\(text) \($0)" } ?? text)
+    }
+
+    /// A key was refused: recording goes on for `target`, dictation and the meeting shortcut still
+    /// paused, the refusal still shown.
+    private func listen(_ target: Target) {
+        recording = target
+        capture = ShortcutCapture()
     }
 
     /// The two keys are never one: the core would refuse the edit key, and a key that dictates and
-    /// edits at once does neither well.
-    private func save(_ canonical: String, for target: Target, shown key: DictationKey) {
+    /// edits at once does neither well. Whether it saved.
+    private func save(_ canonical: String, for target: Target, shown key: DictationKey) -> Bool {
         if target != .meeting, canonical == meeting.key, meeting.key != "off" {
-            show("\(key.cap) is the meeting key. Pick another, or change the meeting key first.", for: target)
-            return
+            show("\(key.cap) is the meeting key. Pick another, or change the meeting key first.", for: target, then: Self.listeningOn)
+            return false
         }
         switch target {
         case .meeting:
             if canonical == dictation.key || canonical == dictation.editKey {
-                show("\(key.cap) is the dictation or edit key. Pick another.", for: target)
-                return
+                show("\(key.cap) is the dictation or edit key. Pick another.", for: target, then: Self.listeningOn)
+                return false
             }
             meeting.setKey(canonical)
         case .dictation:
             if canonical == dictation.editKey {
-                show("\(key.cap) is the edit key. Pick another, or change the edit key first.", for: target)
-                return
+                show("\(key.cap) is the edit key. Pick another, or change the edit key first.", for: target, then: Self.listeningOn)
+                return false
             }
             dictation.setKey(canonical)
         case .edit:
             if canonical == dictation.key {
-                show("\(key.cap) is the dictation key. Pick another.", for: target)
-                return
+                show("\(key.cap) is the dictation key. Pick another.", for: target, then: Self.listeningOn)
+                return false
             }
             saveEditKey(canonical)
         }
@@ -415,5 +432,6 @@ final class ShortcutRecorderModel {
             messages[target] = nil
             announce(saved)
         }
+        return true
     }
 }
