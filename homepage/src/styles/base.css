@@ -205,7 +205,7 @@ html:not(.js) .js-only { display: none !important; }
   .split.is-narrow-shot { grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); }
 }
 
-/* ── Screenshots (placeholders until the real captures; see src/data/shots.ts) ───────────────── */
+/* ── Screenshots (the list and the files: src/data/shots.ts) ────────────────────────────────── */
 
 .shot { margin: 0; }
 .shot img { display: block; width: 100%; height: auto; border-radius: var(--r-window); border: 1px solid var(--rule); background: var(--card); }
@@ -226,6 +226,7 @@ html:not(.js) .js-only { display: none !important; }
 .shots { display: grid; gap: 1.25rem; }
 .stats-card { width: min(100%, 22rem); justify-self: center; }
 .stats-card .shot img { border-radius: 28px; }
+.stats-shot { margin-top: 1.75rem; }
 
 /* ── Buttons ──────────────────────────────────────────────────────────────────────────────────── */
 
@@ -384,6 +385,13 @@ html:not(.js) .js-only { display: none !important; }
 .band-note + .band-note { margin-top: 0.75rem; }
 .band-note b { color: var(--text); font-weight: 600; }
 .band-shot { margin-top: 2.5rem; max-width: 56rem; }
+/* The transcript strip, with the captured Drops beside it on wide screens and below it on tablets. */
+.meet-lead { display: grid; gap: 2rem; margin-bottom: 2.75rem; }
+.meet-lead .transcript { margin-bottom: 0; }
+.drops { display: grid; gap: 1.25rem; align-content: center; }
+@media (min-width: 46rem) and (max-width: 59.99rem) { .drops { grid-template-columns: 1fr 1fr; } }
+@media (min-width: 60rem) { .meet-lead { grid-template-columns: minmax(0, 46rem) minmax(0, 1fr); gap: 3rem; align-items: center; } }
+@media (max-width: 45.99rem) { .drops, .stats-shot { display: none; } }
 .band-more, .privacy-more { margin-top: 2rem; max-width: 56rem; border-bottom: 1px solid var(--rule); }
 .privacy-more .specs { margin-top: 0.25rem; }
 .models-more { border-bottom: 1px solid var(--rule); }
@@ -507,7 +515,8 @@ pre code { font-size: 0.8rem; overflow-wrap: normal; white-space: pre; color: va
   .section-head p { font-size: 1.0625rem; }
   .specs { gap: 0.9rem; }
   .specs dd, .phases p, .options p, .band-note, .choices p { font-size: 0.9375rem; }
-  .transcript { margin-bottom: 1.75rem; padding: 1rem; }
+  .transcript { padding: 1rem; }
+  .meet-lead { margin-bottom: 1.75rem; }
   .line { grid-template-columns: 3.5rem 1fr; font-size: 0.9375rem; }
   .phases { gap: 1.25rem; }
   .band-note { margin-top: 1.5rem; }

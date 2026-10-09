@@ -1,6 +1,7 @@
 // Writes the screenshot PLACEHOLDERS listed in src/data/shots.ts to public/shots/: a flat Glow card
 // per shot and theme at the size the real capture is served at, labelled with the shot's id, so the
-// layout is final before the captures exist. Skips any file that is no longer a placeholder.
+// layout is final before the captures exist. Skips any shot that is no longer a placeholder (the
+// real ones come from scripts/encode-shots.mjs).
 //   node scripts/make-shots.mjs
 // Needs Playwright's Chromium and ImageMagick (`magick`) for the WebP encode.
 import { chromium } from '@playwright/test';

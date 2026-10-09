@@ -25,7 +25,7 @@ src/components/           one file per section: Hero, Dictation, Meetings, Libra
                           Models, Privacy, Consent, Install, CodeSigning, Colophon; plus
                           SiteHeader, Downloads and Shot
 src/data/glow.ts          the page's copy of Glow's tokens (tests/glow.test.mjs keeps it in step)
-src/data/shots.ts         the screenshots: PLACEHOLDERS until the real captures, with the list
+src/data/shots.ts         the screenshots, with the list (W1 is still a placeholder)
 src/lib/constants.ts      APP_VERSION, every outbound URL, the model list
 src/lib/release.ts        download links, checked against src/data/release.json at build time
 src/lib/release-assets.ts the rules for which release files the page links to (tested)
@@ -35,7 +35,8 @@ src/lib/platform.ts       leads with the visitor's OS; notes for Intel Macs, Lin
 src/lib/theme.ts          the light / system / dark switch, and copy buttons
 src/styles/base.css       tokens and layout
 scripts/                  make-icons.mjs (favicons from the 1.0 app icon), make-og.mjs (the
-                          social card, public/og-1.0.png), make-shots.mjs (the placeholders),
+                          social card, public/og-1.0.png), encode-shots.mjs (the screenshots'
+                          WebPs from the raw captures), make-shots.mjs (the placeholders),
                           snapshot-release.mjs (see below)
 tests/                    node --test
 ```
