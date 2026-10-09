@@ -249,14 +249,18 @@ struct SearchResults: View {
                         library.open(hit.record, seekMs: hit.startMs)
                     } label: {
                         VStack(alignment: .leading, spacing: 3) {
-                            Text(hit.title ?? "Untitled record")
+                            // A match in a record with no title (a dictation) is called by its words, as the
+                            // list calls it, never "Untitled record"; the words aren't then repeated below.
+                            Text(LibraryFormat.hitTitle(hit))
                                 .font(.body.weight(.semibold))
                                 .foregroundStyle(Theme.text)
-                                .lineLimit(1)
-                            Text(hit.snippet)
-                                .font(.system(.callout, design: .serif))
-                                .foregroundStyle(PaperPalette.quiet)
-                                .lineLimit(2)
+                                .lineLimit(hit.title == nil ? 2 : 1)
+                            if hit.title != nil {
+                                Text(hit.snippet)
+                                    .font(.system(.callout, design: .serif))
+                                    .foregroundStyle(PaperPalette.quiet)
+                                    .lineLimit(2)
+                            }
                             Text("\(LibraryFormat.day(LibraryFormat.date(unixMs: hit.startedAtUnixMs), now: now, calendar: library.calendar)) · \(LibraryFormat.stamp(ms: hit.startMs))")
                                 .font(PaperType.meta)
                                 .foregroundStyle(Theme.secondaryText)

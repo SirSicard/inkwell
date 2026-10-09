@@ -98,15 +98,26 @@ enum LibraryFormat {
         return parts.joined(separator: " · ")
     }
 
+    /// A search match's heading: the record's title, else the matched words (a dictation has no
+    /// title), never "Untitled record".
+    static func hitTitle(_ hit: SearchHit) -> String {
+        if let title = hit.title, !title.trimmingCharacters(in: .whitespaces).isEmpty { return title }
+        let words = hit.snippet.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        return words.isEmpty ? "Dictation" : words
+    }
+
     /// A record's heading line: `Today 14:02 · 42 min · Zoom · You, Alex, Robin`.
-    static func headerLine(_ record: RecordRow, people: [String], now: Date, calendar: Calendar) -> String {
+    static func headerLine(
+        _ record: RecordRow, people: [String], now: Date, calendar: Calendar, apps: any AppDirectory = WorkspaceApps()
+    ) -> String {
         let start = date(unixMs: record.startedAtUnixMs)
         var parts = ["\(day(start, now: now, calendar: calendar)) \(time(start, calendar: calendar))"]
         if let length = length(of: record) {
             parts.append(duration(ms: length))
         }
-        if let app = record.sourceApp, !app.isEmpty {
-            parts.append(app)
+        if let app = record.sourceApp, !app.trimmingCharacters(in: .whitespaces).isEmpty {
+            // The app as the user knows it ("Zoom"), never the core's identity for it ("us.zoom.xos").
+            parts.append(AppIdentity.headerName(app, apps: apps))
         }
         if !people.isEmpty {
             parts.append(people.joined(separator: ", "))

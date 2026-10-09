@@ -839,10 +839,25 @@ public sealed class LibraryModel : ObservableModel
         return Filter == chip.Kind ? "Shows every kind" : $"Shows only {chip.InSentence}";
     }
 
-    /// <summary>A match's title.</summary>
+    /// <summary>
+    /// A match's title: the record's, else the matched words (a dictation has no title), never
+    /// "Untitled record".
+    /// </summary>
     public static string HitTitle(SearchHit hit)
     {
         ArgumentNullException.ThrowIfNull(hit);
-        return hit.Title ?? "Untitled record";
+        if (!string.IsNullOrWhiteSpace(hit.Title))
+        {
+            return hit.Title;
+        }
+        var words = string.Join(' ', hit.Snippet.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        return words.Length == 0 ? "Dictation" : words;
+    }
+
+    /// <summary>The match's words under its title, or nothing when the title already is them.</summary>
+    public static string HitSnippet(SearchHit hit)
+    {
+        ArgumentNullException.ThrowIfNull(hit);
+        return string.IsNullOrWhiteSpace(hit.Title) ? "" : hit.Snippet;
     }
 }

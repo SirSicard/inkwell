@@ -175,6 +175,31 @@ final class LibraryFormatTests: XCTestCase {
             LibraryFormat.headerLine(meeting, people: ["You", "Alex", "Robin"], now: now, calendar: calendar),
             "Today 14:00 · 42 min · Zoom · You, Alex, Robin")
     }
+
+    /// A recording stores the app's identity; its header names the app (as the Drop does).
+    func testTheHeaderNamesTheAppNotItsIdentity() {
+        let start = Int64(now.timeIntervalSince1970 * 1000) - 60 * 60_000
+        func header(_ app: String) -> String {
+            let meeting = rows(#"""
+            {"type":"library.records","more":false,"records":[{"record":"m","kind":"meeting","started_at_unix_ms":\#(start),"ended_at_unix_ms":\#(start + 42 * 60_000),"source_app":"\#(app)","revision":2,"has_audio":true}]}
+            """#)[0]
+            return LibraryFormat.headerLine(meeting, people: [], now: now, calendar: calendar, apps: NoApps())
+        }
+        XCTAssertEqual(header("us.zoom.xos"), "Today 14:00 · 42 min · Zoom")
+        XCTAssertEqual(header("com.example.Recorder"), "Today 14:00 · 42 min · Recorder")
+    }
+
+    /// A search match in a dictation (no title) is called by its words, never "Untitled record".
+    func testAMatchInADictationIsCalledByItsWords() throws {
+        let dictation = try JSONDecoder().decode(SearchHit.self, from: Data(#"{"record":"d","snippet":"the launch  moves to\nTuesday","start_ms":0,"started_at_unix_ms":0}"#.utf8))
+        XCTAssertEqual(LibraryFormat.hitTitle(dictation), "the launch moves to Tuesday")
+        let meeting = try JSONDecoder().decode(SearchHit.self, from: Data(#"{"record":"m","snippet":"x","start_ms":0,"started_at_unix_ms":0,"title":"Launch sync"}"#.utf8))
+        XCTAssertEqual(LibraryFormat.hitTitle(meeting), "Launch sync")
+    }
+
+    private struct NoApps: AppDirectory {
+        func app(bundleID: String) -> (name: String, icon: NSImage)? { nil }
+    }
 }
 
 // MARK: - Summary

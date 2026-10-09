@@ -34,7 +34,9 @@ public sealed class HitItem(SearchHit hit, string meta)
 
     public string Title => LibraryModel.HitTitle(hit);
 
-    public string Snippet => hit.Snippet;
+    public string Snippet => LibraryModel.HitSnippet(hit);
+
+    public bool HasSnippet => Snippet.Length > 0;
 
     public string Meta { get; } = meta;
 
