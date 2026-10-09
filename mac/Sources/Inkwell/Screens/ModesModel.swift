@@ -105,6 +105,18 @@ enum AppIdentity {
         return AppLabel(name: word, icon: nil, installed: false, id: trimmed)
     }
 
+    /// `identity` named in a line of text: installed or well-known apps by name, any other bundle
+    /// id by its last part ("com.example.Recorder" as "Recorder"), a word as itself.
+    static func headerName(_ identity: String, apps: any AppDirectory) -> String {
+        let label = label(identity, apps: apps)
+        let trimmed = identity.trimmingCharacters(in: .whitespaces)
+        guard !label.installed, known[trimmed] == nil, isBundleID(trimmed),
+              let last = trimmed.split(separator: ".").last, !last.isEmpty else {
+            return label.name
+        }
+        return String(last)
+    }
+
     /// Whether two identities name the same app, as the editor compares them (the core matches
     /// a mode's app inside the frontmost app's identity, ignoring case).
     static func same(_ a: String, _ b: String) -> Bool {
