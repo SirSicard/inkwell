@@ -1,33 +1,31 @@
 ---
-// "The instrument card": the homepage as the operating card of a small writing
-// instrument. How to play it (the hero), what else it does, what it is made of (the models), what it
-// sends (privacy), how to get it, and what it costs. Every fact comes from the Inkwell README; see
-// ../lib/constants.ts.
+// The homepage for Inkwell 1.0, in Glow: a dark hero (the app's orb, the product and the download),
+// then the page in the visitor's theme, with night bands where the content earns them. Ordered by the
+// jobs: dictation, meetings, the library, stats, models, privacy, consent, download. Every fact comes
+// from the 1.0 README; see ../lib/constants.ts.
+//
+// The grounds alternate in both themes, no two neighbours alike (the tokens are in base.css):
+//   Hero night (orb) · Dictation paper · Meetings night (you and them) · Library paper · Models tint ·
+//   Privacy night (the statement) · Consent paper · Download night (the orb again) · Code signing
+//   paper · Colophon tint. Moving a section means checking its neighbours' grounds.
 import Base from '../layouts/Base.astro';
-import SiteHeader from '../components/SiteHeader.astro';
 import Hero from '../components/Hero.astro';
-import Features from '../components/Features.astro';
+import Dictation from '../components/Dictation.astro';
+import Meetings from '../components/Meetings.astro';
+import Library from '../components/Library.astro';
 import Models from '../components/Models.astro';
 import Privacy from '../components/Privacy.astro';
+import Consent from '../components/Consent.astro';
 import Install from '../components/Install.astro';
-import Cost from '../components/Cost.astro';
 import CodeSigning from '../components/CodeSigning.astro';
 import Colophon from '../components/Colophon.astro';
-import {
-  APP_VERSION,
-  AUTHOR_NAME,
-  AUTHOR_URL,
-  LICENSE_URL,
-  RELEASES_LATEST_URL,
-  SITE_URL,
-} from '../lib/constants';
+import { APP_VERSION, AUTHOR_NAME, AUTHOR_URL, LICENSE_URL, RELEASES_LATEST_URL, SITE_URL } from '../lib/constants';
 
-const title = 'Inkwell: dictation that stays on your desk';
+const title = 'Inkwell: dictation and meeting notes that stay on your machine';
 const description =
-  'Hold a key, speak, let go: the text lands in whatever app you were typing in. Speech recognition runs on your own CPU, so your audio never leaves the machine. Free, MIT licensed, no account.';
+  'Hold a key, speak, let go: the text lands in the app you were typing in. Meetings are recorded as two streams and transcribed on your own Mac or PC. Free, MIT licensed, no account.';
 
-// Only fields that are true. No rating or review: SoftwareApplication rich results want ratings, and
-// there are none to give.
+// Only fields that are true. No rating or review: there are none to give.
 const jsonLd = {
   '@context': 'https://schema.org',
   '@type': 'SoftwareApplication',
@@ -35,7 +33,7 @@ const jsonLd = {
   description,
   url: `${SITE_URL}/`,
   applicationCategory: 'UtilitiesApplication',
-  operatingSystem: 'macOS, Windows 10, Windows 11, Linux',
+  operatingSystem: 'macOS 26 or later (Apple silicon), Windows 11 24H2 or later (x64)',
   softwareVersion: APP_VERSION,
   downloadUrl: RELEASES_LATEST_URL,
   license: LICENSE_URL,
@@ -47,56 +45,56 @@ const jsonLd = {
 
 <Base title={title} description={description} canonicalPath="/" jsonLd={jsonLd}>
   <a class="skip" href="#main">Skip to content</a>
-  <SiteHeader />
+  <Hero />
   <main id="main">
-    <Hero />
-    <Features />
+    <Dictation />
+    <Meetings />
+    <Library />
     <Models />
     <Privacy />
+    <Consent />
     <Install />
-    <Cost />
     <CodeSigning />
   </main>
   <Colophon />
 
   <script>
-    import '../lib/ink-field';
-    import type { InkField } from '../lib/ink-field';
     import { enhanceDownloads } from '../lib/platform';
-    import { hotkeyDemo } from '../lib/hotkey-demo';
-    import { DEMO_SENTENCES } from '../lib/constants';
+    import { themeSwitch, copyButtons } from '../lib/theme';
+    import { startHero } from '../lib/hero';
 
     // Each enhancement stands alone: one failing never takes the others, or the content, down.
     try {
-      enhanceDownloads();
-      document.querySelectorAll<HTMLElement>('[data-detected] .detected-note').forEach((el) => (el.hidden = false));
+      themeSwitch();
     } catch {
-      /* the release page link stays */
+      /* the system theme stays */
     }
-
     try {
-      const root = document.querySelector<HTMLElement>('[data-demo]');
-      const key = root?.querySelector<HTMLButtonElement>('[data-demo-key]');
-      const field = root?.querySelector<HTMLElement>('[data-demo-field]');
-      const caret = root?.querySelector<HTMLElement>('[data-demo-caret]');
-      const status = root?.querySelector<HTMLElement>('[data-demo-status]');
-      const ink = root?.querySelector<InkField>('[data-demo-ink]') ?? null;
-      if (root && key && field && caret && status) {
-        const demo = hotkeyDemo({ root, key, field, caret, status, ink }, DEMO_SENTENCES);
-        // The one orchestrated moment: once, when the key and the field are fully in view, the key goes
-        // down, the ink swells with a voice for about four seconds, and the sentence lands.
-        const io = new IntersectionObserver(
-          (entries) => {
-            if (!entries.some((e) => e.isIntersecting)) return;
-            io.disconnect();
-            window.setTimeout(() => demo.autoplay(), 900);
-          },
-          { threshold: 0.9 },
-        );
-        io.observe(root.querySelector('.controls') ?? root);
-      }
+      enhanceDownloads();
     } catch {
-      /* the demo is decoration over working content */
+      /* both buttons stay equal */
+    }
+    // Long lists sit in <details> to keep the phone page short; wide screens open them.
+    if (window.matchMedia('(min-width: 46rem)').matches) {
+      document.querySelectorAll<HTMLDetailsElement>('details.wide-open').forEach((d) => (d.open = true));
+    }
+    try {
+      copyButtons();
+    } catch {
+      /* the hash stays selectable */
+    }
+    const hero = document.querySelector<HTMLElement>('[data-hero]');
+    if (hero) {
+      // The orb waits until the page has painted and gone quiet: it is decoration over working content.
+      const go = () => {
+        try {
+          startHero(hero);
+        } catch {
+          /* the CSS glow and the still frame stay */
+        }
+      };
+      if ('requestIdleCallback' in window) requestIdleCallback(go, { timeout: 1500 });
+      else setTimeout(go, 300);
     }
   </script>
 </Base>

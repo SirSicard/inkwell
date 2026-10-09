@@ -1,0 +1,42 @@
+---
+// Dictation, from the README's "What it does: Dictation". The default keys are the core's
+// DEFAULT_KEY (core/crates/ink-ffi/src/voice.rs: "fn" on the Mac, right Ctrl on Windows). No
+// screenshot: the hero already shows the Drop dictating, and the captured Drops are in Meetings.
+---
+
+<section class="section" id="dictation" aria-labelledby="dictation-title">
+  <div class="wrap">
+    <div class="section-head">
+      <h2 id="dictation-title">Dictation: hold a key, speak, let&nbsp;go.</h2>
+      <p class="wide-only">Inkwell types what you said where your cursor is, in whatever app you were typing in.</p>
+    </div>
+    <dl class="specs">
+      <div>
+        <dt>Any key you like</dt>
+        <dd>
+          Fn on the Mac, right Ctrl on Windows, or one you pick: a right-hand modifier, a function key or a chord.
+        </dd>
+      </div>
+      <div>
+        <dt>Live words in the Drop</dt>
+        <dd>The Drop, the small recording light, shows provisional words as you speak; the final pass types the text when you let go.</dd>
+      </div>
+      <div>
+        <dt>The first word, kept</dt>
+        <dd>The 300 ms before you press are kept, so the first word isn’t clipped. A hold that never ends stops after 180 seconds and is processed, never thrown away.</dd>
+      </div>
+      <div>
+        <dt>Voice editing</dt>
+        <dd>Select text, hold the edit key and say what to change. It needs a <a href="#language-models">language model</a>.</dd>
+      </div>
+      <div>
+        <dt>Styles, cleanup, snippets, commands</dt>
+        <dd>Formal, Casual or Relaxed punctuation; fillers and stutters removed; phrases that expand to text; spoken commands.</dd>
+      </div>
+      <div>
+        <dt>Polish, off until you agree</dt>
+        <dd>A language model tidies grammar and false starts. If it adds to what you said, or obeys an instruction you dictated, your words go in as said, with a warning.</dd>
+      </div>
+    </dl>
+  </div>
+</section>

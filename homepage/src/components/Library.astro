@@ -1,0 +1,57 @@
+---
+// The Library, search and Ask, Owed, and Stats: the README's sections of those names (Ask is in
+// Meetings, where it is used).
+import Shot from './Shot.astro';
+---
+
+<section class="section" id="library" aria-labelledby="library-title">
+  <div class="wrap">
+    <div class="section-head">
+      <h2 id="library-title">Everything you said, searchable. And what you&nbsp;owe.</h2>
+      <p class="wide-only">Every dictation and meeting, newest first, in one Library on your machine.</p>
+    </div>
+    <div class="split">
+      <dl class="specs is-single">
+        <div>
+          <dt>Search</dt>
+          <dd>Filter by kind, or search everything that was said.</dd>
+        </div>
+        <div>
+          <dt>A record</dt>
+          <dd>Your notes beside the transcript, the summary and what is owed, and a player for both sides on one timeline. Every line plays from its moment.</dd>
+        </div>
+        <div>
+          <dt>Owed</dt>
+          <dd>
+            Open promises across your meetings, overdue ones marked. Mark one done, play the moment it was said, or
+            confirm one a later meeting says “looks done”. It needs a language model.
+          </dd>
+        </div>
+        <div>
+          <dt>Retention</dt>
+          <dd>Keep everything (the default), or delete what is older than 7, 30, 90 or 365 days. A delete overwrites the text and removes the audio.</dd>
+        </div>
+      </dl>
+      <div class="shots">
+        <Shot shot="l1" optional sizes="(min-width: 60rem) 34rem, 100vw" />
+        <Shot shot="o1" optional sizes="(min-width: 60rem) 34rem, 100vw" />
+      </div>
+    </div>
+    <div class="split is-narrow-shot stats" id="stats">
+      <div>
+        <h3 class="sub">Stats, counted from your library</h3>
+        <p class="muted sub-lede">
+          Words, speed and time saved (with the assumption printed beside it), a streak and a heatmap, meeting hours
+          and talk time by side, promises kept, milestones and a weekly review. A share card holds only the numbers
+          you tick.
+        </p>
+        <div class="stats-shot">
+          <Shot shot="s1" optional sizes="(min-width: 60rem) 41rem, 100vw" />
+        </div>
+      </div>
+      <div class="stats-card">
+        <Shot shot="s2" optional sizes="(min-width: 60rem) 22rem, 70vw" />
+      </div>
+    </div>
+  </div>
+</section>

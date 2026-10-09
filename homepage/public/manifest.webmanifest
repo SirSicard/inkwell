@@ -1,11 +1,11 @@
 {
   "name": "Inkwell",
   "short_name": "Inkwell",
-  "description": "Local-first dictation for the desktop. Free, MIT licensed, no account.",
+  "description": "Local dictation and meeting notes for the Mac and Windows. Free, MIT licensed, no account.",
   "start_url": "/",
   "display": "browser",
-  "background_color": "#f0ede8",
-  "theme_color": "#f0ede8",
+  "background_color": "#0B0A0F",
+  "theme_color": "#0B0A0F",
   "icons": [
     {
       "src": "/icon-192.png",

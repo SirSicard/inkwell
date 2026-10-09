@@ -1,0 +1,42 @@
+---
+// One screenshot from src/data/shots.ts, in the page's theme: both themes' files are in the HTML,
+// lazy, and CSS shows one, so the hidden one is never fetched. Inside a night band (.band-dark) the
+// CSS shows the dark file whatever the page's theme; a shot that exists in one theme only always
+// shows that one. A real shot offers its 1x and 2x files through srcset; a placeholder has one file.
+import { SHOTS } from '../data/shots';
+
+interface Props {
+  shot: keyof typeof SHOTS;
+  /** Hidden below tablet width, to keep the phone page short. */
+  optional?: boolean;
+  bare?: boolean;
+  caption?: string;
+  /** CSS width the image is shown at, for `sizes`. */
+  sizes?: string;
+}
+const { shot, optional = false, bare = false, caption, sizes } = Astro.props;
+const s = SHOTS[shot];
+const stem = (theme: 'light' | 'dark') =>
+  `/shots/${s.file}${s.themes === 'both' ? `-${theme}` : s.themes === 'dark' ? '-dark' : ''}`;
+const files = (theme: 'light' | 'dark') =>
+  s.placeholder
+    ? { src: `${stem(theme)}.webp` }
+    : {
+        src: `${stem(theme)}-1x.webp`,
+        srcset: `${stem(theme)}-1x.webp ${s.width / 2}w, ${stem(theme)}-2x.webp ${s.width}w`,
+        sizes,
+      };
+const attrs = { width: s.width, height: s.height, alt: s.alt, loading: 'lazy' as const, decoding: 'async' as const };
+---
+
+<figure class:list={['shot', { 'is-optional': optional, 'is-bare': bare }]} data-shot={s.id}>
+  {s.themes === 'both' ? (
+    <>
+      <img class="for-light" {...attrs} {...files('light')} />
+      <img class="for-dark" {...attrs} {...files('dark')} />
+    </>
+  ) : (
+    <img {...attrs} {...files(s.themes)} />
+  )}
+  {caption && <figcaption>{caption}</figcaption>}
+</figure>

@@ -1,0 +1,64 @@
+---
+// Meetings, always dark: you in indigo, them in coral, as two streams are a product truth. From the
+// README's "What it does: Meetings". The transcript strip is invented; its labels are the page's.
+import Shot from './Shot.astro';
+---
+
+<section class="section band-dark glow-streams" id="meetings" aria-labelledby="meetings-title">
+  <div class="wrap">
+    <div class="section-head">
+      <h2 id="meetings-title">Meetings: both sides, kept as two&nbsp;streams.</h2>
+      <p>
+        Your microphone is you; the other side is captured from the meeting app on your machine. Both are
+        transcribed live, and again when the meeting ends.
+      </p>
+    </div>
+
+    <div class="meet-lead">
+      <div class="transcript" role="img" aria-label="A meeting transcript in two colours: your lines in indigo, the other side’s in coral, and a summary line citing the moment a promise was made.">
+        <div class="line is-you"><span class="who">You<time>12:04</time></span><p>Can we move the launch review to Thursday?</p></div>
+        <div class="line is-them"><span class="who">Them<time>12:04</time></span><p>Thursday works. I’ll send the updated checklist by Wednesday.</p></div>
+        <div class="line is-you"><span class="who">You<time>12:05</time></span><p>Great. I’ll book the room.</p></div>
+        <p class="cite"><b>Owed to you:</b> the updated checklist, by Wednesday <span class="chip">12:04</span></p>
+      </div>
+      <div class="drops">
+        <Shot shot="d1m" bare optional caption="The Drop recording a meeting, its words live" sizes="(min-width: 60rem) 23rem, (min-width: 46rem) 45vw, 100vw" />
+        <Shot shot="d1f" bare optional caption="The Drop once the meeting ends: the final pass" sizes="(min-width: 60rem) 23rem, (min-width: 46rem) 45vw, 100vw" />
+      </div>
+    </div>
+
+    <div class="phases">
+      <div>
+        <h3>Before</h3>
+        <p>On the Mac, Today shows your next meeting, and a meeting is named after its calendar event and who was in it. On Windows, by the app it was in.</p>
+      </div>
+      <div>
+        <h3>During</h3>
+        <p>The live transcript in two colours, your notes beside it, and Ask: a language model answers from what has been said so far. The far end’s questions to you are stacked above it.</p>
+      </div>
+      <div>
+        <h3>After</h3>
+        <p>A final pass with the more accurate model replaces the live one in one step, the far end’s speakers told apart. With a language model, a summary cites the line each decision and action came from.</p>
+      </div>
+    </div>
+
+    <details class="more wide-open band-more">
+      <summary>How the other side is captured, and crash recovery</summary>
+      <div class="more-body">
+        <p>
+          On the Mac, a process tap of the meeting app (else everything the Mac plays except Inkwell); on Windows,
+          process loopback for Zoom and the browsers (else the app’s output device). Echo cancellation runs on the mic
+          only, when there is an echo.
+        </p>
+        <p>
+          Audio is written to disk as it records, and after a crash the meeting is finished from what is on disk. A
+          final pass that comes back empty, or with under half the words on either side, is refused.
+        </p>
+      </div>
+    </details>
+
+    <div class="band-shot">
+      <Shot shot="m1" sizes="(min-width: 60rem) 56rem, 100vw" />
+    </div>
+  </div>
+</section>

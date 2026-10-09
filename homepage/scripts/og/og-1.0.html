@@ -1,0 +1,43 @@
+<!doctype html>
+<!-- The 1.0 social card, 1200 × 630: the Glow orb in its meeting look (you in indigo, them in coral),
+     drawn by the page's own port of the app's shader (src/lib/glow-orb.ts), with the two-job
+     headline in Newsreader. Rendered to public/og-1.0.png by scripts/make-og.mjs, which serves this
+     directory's parent so the module and the font load. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<style>
+  @font-face {
+    font-family: "Newsreader Variable";
+    src: url("/node_modules/@fontsource-variable/newsreader/files/newsreader-latin-wght-normal.woff2") format("woff2-variations");
+    font-weight: 200 800;
+  }
+  html, body { margin: 0; }
+  body { width: 1200px; height: 630px; overflow: hidden; background: #0b0a0f; color: #edeaf2; position: relative; font-family: system-ui, -apple-system, sans-serif; }
+  canvas { position: absolute; inset: 0; width: 1200px; height: 630px; }
+  .copy { position: absolute; left: 80px; top: 76px; width: 640px; }
+  .mark { display: flex; align-items: center; gap: 14px; font: 560 34px "Newsreader Variable", serif; letter-spacing: -0.01em; }
+  .mark i { width: 28px; height: 28px; border-radius: 50%; background: radial-gradient(circle at 38% 40%, #fff 0 8%, transparent 26%), radial-gradient(circle at 34% 50%, #6b5cff 0 34%, transparent 62%), radial-gradient(circle at 66% 52%, #ffa34d 0 30%, transparent 60%); }
+  h1 { margin: 64px 0 0; font: 500 68px/1.04 "Newsreader Variable", serif; letter-spacing: -0.02em; }
+  p { margin: 30px 0 0; font-size: 26px; line-height: 1.4; color: #a49fb4; }
+</style>
+</head>
+<body>
+  <canvas id="orb" width="1200" height="630"></canvas>
+  <div class="copy">
+    <div class="mark"><i></i>Inkwell</div>
+    <h1>Dictation and meeting notes that stay on your machine.</h1>
+    <p>For the Mac and Windows. Free and open source.</p>
+  </div>
+  <script type="module">
+    import { createOrbCanvas, palette } from '/src/lib/glow-orb.ts';
+    import { MODES, PRESETS } from '/src/data/glow.ts';
+    const orb = createOrbCanvas(document.getElementById('orb'));
+    orb.resize(1);
+    // A meeting, still: both orbs at their widest apart (the swirl at half a turn), each at a speaking level.
+    orb.draw([{ w: [0, 1, 0, 0], you: 0.55, them: 0.6, x: 905, y: 315, unit: 560, fade: 1 }], palette(PRESETS[0], MODES.dark, true), 2 * Math.PI, false);
+    await document.fonts.ready;
+    document.body.dataset.ready = '1';
+  </script>
+</body>
+</html>

@@ -1,8 +1,8 @@
 ---
-// The document shell: head metadata, icons, the social card and the pre-paint `js` flag. Every page
-// (the homepage and the 404) goes through it.
+// The document shell: head metadata, icons, the social card, and two pre-paint flags: `js`, and the
+// theme the visitor picked (light or dark; none follows the system). Every page goes through it.
 import '../styles/base.css';
-import archivoLatin from '@fontsource-variable/archivo/files/archivo-latin-wdth-normal.woff2?url';
+import newsreaderLatin from '@fontsource-variable/newsreader/files/newsreader-latin-wght-normal.woff2?url';
 import { SITE_URL } from '../lib/constants';
 
 interface Props {
@@ -17,8 +17,9 @@ interface Props {
 
 const { title, description, canonicalPath, noindex = false, jsonLd } = Astro.props;
 const canonical = canonicalPath ? new URL(canonicalPath, SITE_URL).href : undefined;
-const ogImage = new URL('/og.png', SITE_URL).href;
-const ogAlt = 'Inkwell: dictation that stays on your desk. The app window with its ink panel, on paper-coloured ground.';
+// A new file name for 1.0, so X, Slack and WhatsApp fetch it instead of their cached og.png.
+const ogImage = new URL('/og-1.0.png', SITE_URL).href;
+const ogAlt = 'Inkwell: dictation and meeting notes that stay on your machine. The Glow orb in indigo and coral on a near-black ground.';
 ---
 
 <!doctype html>
@@ -26,16 +27,28 @@ const ogAlt = 'Inkwell: dictation that stays on your desk. The app window with i
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <script is:inline>document.documentElement.classList.add('js');</script>
+    {/* Before the first paint: the `js` flag, and the visitor's theme, if they picked one (stored in
+         this browser only; a blocked store just follows the system). */}
+    <script is:inline>
+      (function () {
+        var d = document.documentElement;
+        d.classList.add('js');
+        try {
+          var t = localStorage.getItem('inkwell-theme');
+          if (t === 'light' || t === 'dark') d.setAttribute('data-theme', t);
+        } catch (e) {}
+      })();
+    </script>
     <title>{title}</title>
     <meta name="description" content={description} />
     {canonical && <link rel="canonical" href={canonical} />}
     {noindex && <meta name="robots" content="noindex" />}
     <meta name="application-name" content="Inkwell" />
-    <meta name="theme-color" content="#f0ede8" />
-    <meta name="color-scheme" content="light" />
+    {/* One theme colour for both schemes: the browser's bar always meets the dark hero first. */}
+    <meta name="theme-color" content="#0b0a0f" />
+    <meta name="color-scheme" content="light dark" />
 
-    <link rel="preload" href={archivoLatin} as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href={newsreaderLatin} as="font" type="font/woff2" crossorigin />
 
     <link rel="icon" href="/favicon.ico" sizes="32x32" />
     <link rel="icon" href="/icon.svg" type="image/svg+xml" />

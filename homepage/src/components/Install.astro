@@ -1,118 +1,147 @@
 ---
-// Download and first run, from the README's Install, Quick start and Requirements sections (the default
-// hotkeys were checked against the app's settings at the v0.2.9 tag). The file
-// links are the release's real assets (see ../lib/release.ts). The previous site's "Nothing is code
-// signed yet" was stale: macOS builds are signed and notarised; Windows is not signed yet.
-import { APP_VERSION, BUILD_FROM_SOURCE_URL, RELEASES_URL } from '../lib/constants';
+// Download and install, from the README's "Install", "Permissions", "Coming from 0.2", "Not in 1.0"
+// and "Support the project", and windows/HOMEPAGE-INSTALL.md for Windows (its UI labels were
+// written from Microsoft's documentation and still need checking on a PC: windows/S3.6-CHECKLIST.md).
+// The installer's SHA-256 is GitHub's record of the upload, from the release snapshot; the steps
+// tell people to compare it with the sums file on the release too.
+import Downloads from './Downloads.astro';
+import Shot from './Shot.astro';
+import { DONATION_SUGGESTED, DONATION_URL, RELEASES_LATEST_URL } from '../lib/constants';
 import { DOWNLOADS } from '../lib/release';
+
+const setup = DOWNLOADS.windows.name;
+const sums = DOWNLOADS.windowsSums;
+const hashCommand = `Get-FileHash -Algorithm SHA256 "$HOME\\Downloads\\${setup}"`;
 ---
 
-<section class="install wrap" id="download" aria-labelledby="download-title">
-  <div class="section-head">
-    <h2 id="download-title">Download Inkwell {APP_VERSION}.</h2>
-    <p class="section-intro">
-      Free, with no account and no email address asked for. Every build is also on the
-      <a href={RELEASES_URL}>GitHub releases page</a>, and you can <a href={BUILD_FROM_SOURCE_URL}>build it from
-      source</a>.
-    </p>
-  </div>
+<section class="section band-dark glow-orb" id="download" aria-labelledby="download-title">
+  <div class="wrap">
+    <div class="section-head">
+      <h2 id="download-title">Download Inkwell.</h2>
+      <p>
+        Free: no paid tier, no licence keys, no account. If it saves you time, you can
+        <a href={DONATION_URL}>buy me a coffee</a> ({DONATION_SUGGESTED} suggested, entirely voluntary; nothing in the app is
+        gated behind it).
+      </p>
+    </div>
+    <Downloads left />
 
-  <div class="platforms">
-    <div class="platform" data-platform="macOS">
-      <div class="platform-head">
-        <h3>macOS</h3>
-        <p class="detected-note" hidden>This computer</p>
-        <p>Apple Silicon, the primary platform, and Intel.</p>
-        <ul class="files">
-          <li><a href={DOWNLOADS.macOS.url} translate="no">{DOWNLOADS.macOS.name}</a> <span>{DOWNLOADS.macOS.size}, Apple Silicon</span></li>
-          <li><a href={DOWNLOADS.macOSIntel.url} translate="no">{DOWNLOADS.macOSIntel.name}</a> <span>{DOWNLOADS.macOSIntel.size}, Intel</span></li>
-        </ul>
+    <div class="install-grid">
+      <div>
+        <details class="more" data-platform="mac">
+          <summary>Installing on the Mac <span class="hint">macOS 26 or later, Apple silicon</span></summary>
+          <div class="more-body">
+            <ol>
+              <li>
+                <b>Download</b> <code>{DOWNLOADS.mac.name}</code>, open it and drag Inkwell to Applications. The app is
+                signed with a Developer ID, and the app and the disk image are notarized by Apple, so it opens without a
+                warning.
+              </li>
+              <li>
+                <b>Open Inkwell.</b> It lives in the menu bar. The first run walks through the permissions, the speech
+                models, the import from 0.2 and the optional language model.
+              </li>
+            </ol>
+            <p>While Secure Input is on (in a password field, for example), nothing is typed. The Drop says so, and your words are in the Library.</p>
+          </div>
+        </details>
+
+        <details class="more" data-platform="windows">
+          <summary>Installing on Windows <span class="hint">Windows 11 24H2 or later, x64</span></summary>
+          <div class="more-body">
+            <p>Inkwell installs for your user account alone: no administrator password, nothing system-wide.</p>
+            <ol>
+              <li>
+                <b>Download</b> <code>{setup}</code> from the <a href={RELEASES_LATEST_URL}>latest release</a>. Your
+                browser may say the file “isn’t commonly downloaded”. In Edge, open the download’s <b>…</b> menu, choose
+                <b>Keep</b>, then <b>Show more</b> and <b>Keep anyway</b>. In Chrome, choose <b>Keep</b>.
+              </li>
+              <li>
+                <b>Check the download</b> (recommended). The Windows build is not code-signed yet, so this is how you
+                know the file is the one that was published. In PowerShell:
+                <pre><code>{hashCommand}</code></pre>
+                {DOWNLOADS.windows.sha256 ? (
+                  <div class="hash">
+                    <span class="row">It must print this SHA-256<button type="button" class="copy js-only" data-copy={DOWNLOADS.windows.sha256}>Copy</button></span>
+                    <code>{DOWNLOADS.windows.sha256}</code>
+                  </div>
+                ) : null}
+                The hash must match the one in the release notes{sums ? <>, and in <a href={sums.url}><code>{sums.name}</code></a></> : null} on
+                the same release. If it does not, delete the file and do not run it.
+              </li>
+              <li>
+                <b>Run it.</b> SmartScreen says “Windows protected your PC”, with an unknown publisher. Choose
+                <b>More info</b>, then <b>Run anyway</b>. Inkwell installs in a few seconds, opens, and is in the Start menu.
+              </li>
+            </ol>
+            <p class="warn">
+              <b>Smart App Control</b> has no “Run anyway”: it does not run apps that are not signed, and Microsoft offers
+              no per-app exception. If it blocks the installer, wait for the signed build rather than turning off a
+              protection you chose to keep.
+            </p>
+            {/* W1 (SmartScreen) goes back in once captured on a PC: scripts/encode-shots.mjs, then placeholder: false. */}
+            <p>
+              <b>Microsoft’s terms.</b> Inkwell includes the runtime of Microsoft’s Windows App SDK, the Windows SDK’s
+              .NET projection and the Visual C++ runtime, which Microsoft licenses separately under the Microsoft
+              Software License Terms (shown in full in Inkwell’s Settings > About). By installing or using Inkwell on
+              Windows, you agree to those terms for those components. The first run shows them, with Agree and Quit,
+              before anything else starts.
+            </p>
+            <p>
+              <b>Updates.</b> Inkwell checks for a new version when you ask: Settings > About > <b>Check Now</b>. Updates
+              come from this project’s GitHub releases over HTTPS, and each one’s size and SHA-256 are checked against
+              the release before it installs.
+            </p>
+            <p>
+              <b>Uninstalling.</b> Settings > Apps > Installed apps > Inkwell > <b>Uninstall</b>. Your library (meetings,
+              dictations, notes and downloaded models) stays in <code>%LOCALAPPDATA%\Inkwell</code>; delete that folder too
+              to remove it.
+            </p>
+            <p>An app running as administrator can’t be typed into, and its keys can’t be heard.</p>
+          </div>
+        </details>
+
+        <details class="more">
+          <summary>What Inkwell asks for</summary>
+          <div class="more-body">
+            <dl class="perm">
+              <div><dt>Hear you</dt><dd>Microphone, on both. Without it, nothing you say can be written down.</dd></div>
+              <div><dt>Hear the others</dt><dd>System audio on the Mac; on Windows, no permission to grant. Without it, meetings record only your voice.</dd></div>
+              <div><dt>Type for you</dt><dd>Accessibility on the Mac, also needed for the dictation key; on Windows, no permission to grant. Without it, dictation can’t type into other apps or hear the key.</dd></div>
+              <div><dt>Know your meetings</dt><dd>Calendar on the Mac, optional; not available on Windows in 1.0. Without it, meetings are named by the app they were in.</dd></div>
+            </dl>
+            <p>A permission check never brings up a prompt on its own: Inkwell asks when you press the button for it, and checks again when you come back from the system’s settings.</p>
+          </div>
+        </details>
+
+        <details class="more">
+          <summary>Coming from 0.2</summary>
+          <div class="more-body">
+            <p>
+              The 0.2 app’s updater cannot install 1.0, so download 1.0 from the release. The first run, and Settings,
+              offer to import 0.2’s dictation history, dictionary, snippets, voice commands, modes and settings, with
+              your stored API keys linked rather than copied. The Homebrew cask still installs 0.2 for now.
+            </p>
+          </div>
+        </details>
+
+        <details class="more">
+          <summary>Disk space for the models</summary>
+          <div class="more-body">
+            <p>
+              All the speech models together take about 3.1 GB on the Mac and 3.3 GB on Windows, each downloaded only
+              when you choose it: Qwen3-ASR is 2.5 GB of that. The optional language model on Windows is 2.5 GB more.
+            </p>
+          </div>
+        </details>
       </div>
-      <div class="platform-body">
-        <ol class="steps">
-          <li>
-            Open the disk image, drag Inkwell to Applications and open it. It is signed with a Developer ID and
-            notarised by Apple, so there is no warning to click past.
-          </li>
-          <li>Allow Microphone access when asked.</li>
-          <li>
-            Allow Accessibility access in System Settings, under Privacy &amp; Security. Inkwell pastes with a
-            synthetic keystroke, which macOS blocks until you grant this. It is the one people miss: without it,
-            dictation transcribes and nothing appears.
-          </li>
-        </ol>
-        <p class="platform-note">
-          Secure Input blocks the paste, so dictating into password fields and some terminals does nothing.
+
+      <div class="side">
+        <p>
+          <b>Not in 1.0:</b> Linux and Intel Macs (0.2 is their last version), Windows on ARM64, a code-signed Windows
+          build, the calendar on Windows, and a Homebrew cask for 1.x.
         </p>
       </div>
-    </div>
-
-    <div class="platform" data-platform="Windows">
-      <div class="platform-head">
-        <h3>Windows</h3>
-        <p class="detected-note" hidden>This computer</p>
-        <p>Windows 10 and 11. The secondary platform, built by CI on every release.</p>
-        <ul class="files">
-          <li><a href={DOWNLOADS.windows.url} translate="no">{DOWNLOADS.windows.name}</a> <span>{DOWNLOADS.windows.size}, recommended</span></li>
-          <li><a href={DOWNLOADS.windowsMsi.url} translate="no">{DOWNLOADS.windowsMsi.name}</a> <span>{DOWNLOADS.windowsMsi.size}</span></li>
-        </ul>
-      </div>
-      <div class="platform-body">
-        <p class="step-single">
-          Run the installer. It is not code signed yet, so SmartScreen says “Windows protected your PC”: click
-          “More info”, then “Run anyway”. Your browser may also flag the download as uncommon.
-        </p>
-        <p class="platform-note">
-          Only macOS is signed today. The source and the workflow that built these files are public, so you
-          can check what you are running.
-        </p>
-      </div>
-    </div>
-
-    <div class="platform" data-platform="Linux">
-      <div class="platform-head">
-        <h3>Linux</h3>
-        <p class="detected-note" hidden>This computer</p>
-        <p>A recent desktop on x86-64. Best effort: built by CI, not regularly tested.</p>
-        <ul class="files">
-          <li><a href={DOWNLOADS.appImage.url} translate="no">{DOWNLOADS.appImage.name}</a> <span>{DOWNLOADS.appImage.size}</span></li>
-          <li><a href={DOWNLOADS.deb.url} translate="no">{DOWNLOADS.deb.name}</a> <span>{DOWNLOADS.deb.size}</span></li>
-        </ul>
-      </div>
-      <div class="platform-body">
-        <ul class="notes">
-          <li>Expect rough edges. Bug reports that name your distribution and desktop are welcome.</li>
-          <li>The global hotkey and the paste keystroke go through X11, so a Wayland session is untested.</li>
-          <li>Per-app modes stay off, because the foreground app can’t be read.</li>
-        </ul>
-      </div>
-    </div>
-  </div>
-
-  <div class="install-after">
-    <div>
-      <h3>First run</h3>
-      <ol class="steps">
-        <li>
-          Finish the short onboarding: pick a microphone, download a model, test the hotkey. The installer holds
-          no speech models; Parakeet V3 (670&nbsp;MB) is the default.
-        </li>
-        <li>
-          The record hotkey starts as <kbd>Cmd+Shift+Space</kbd> on macOS and <kbd>Ctrl+Space</kbd> elsewhere.
-          Change it in Settings, under General; on macOS, pick one that doesn’t collide with Spotlight or
-          input-source switching.
-        </li>
-        <li>Hold the hotkey, speak, let go. The text is pasted where your cursor is.</li>
-      </ol>
-    </div>
-    <div>
-      <h3>Requirements</h3>
-      <dl class="reqs">
-        <div><dt>System</dt><dd>macOS on Apple Silicon or Intel, Windows 10 or 11, or a recent Linux desktop</dd></div>
-        <div><dt>Memory</dt><dd>2&nbsp;GB free with Parakeet V3, less with the small models</dd></div>
-        <div><dt>Disk</dt><dd>About 50&nbsp;MB for the app, plus 240 to 940&nbsp;MB for the model you choose</dd></div>
-        <div><dt>Microphone</dt><dd>Any</dd></div>
-      </dl>
     </div>
   </div>
 </section>

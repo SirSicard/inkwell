@@ -1,0 +1,33 @@
+---
+// The download block, Raycast's way: one button per platform, the requirement under each, and a
+// quiet line for the machines 1.0 leaves on 0.2. The buttons link straight to the release's files
+// (src/lib/release.ts). Without JS both buttons are equal; src/lib/platform.ts leads with the
+// visitor's OS and, for an Intel Mac, Linux or Windows on ARM, says which version fits.
+import { APP_VERSION, LEGACY_RELEASE_URL } from '../lib/constants';
+import { DOWNLOADS } from '../lib/release';
+
+interface Props {
+  /** Left-aligned (the Download section) instead of centred (the hero). */
+  left?: boolean;
+  id?: string;
+}
+const { left = false, id } = Astro.props;
+const arrow = '<svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true" focusable="false"><path d="M9 2.5v9m0 0-3.6-3.6M9 11.5l3.6-3.6M3 15.5h12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"></path></svg>';
+---
+
+<div class:list={['downloads', { 'is-left': left }]} data-downloads id={id}>
+  <div class="download-pair">
+    <div class="is-mac">
+      <a class="btn" href={DOWNLOADS.mac.url}><Fragment set:html={arrow} />Download for Mac</a>
+      <p class="req"><span>macOS 26 or later, Apple Silicon</span><span>Disk image, {DOWNLOADS.mac.size}</span></p>
+    </div>
+    <div class="is-win">
+      <a class="btn" href={DOWNLOADS.windows.url}><Fragment set:html={arrow} />Download for Windows</a>
+      <p class="req"><span>Windows 11 24H2 or later, x64</span><span>Installer, {DOWNLOADS.windows.size}</span></p>
+    </div>
+  </div>
+  <p data-note="intel-mac" hidden>This Mac has an Intel processor. Inkwell 1.0 needs Apple silicon: <a href={LEGACY_RELEASE_URL}>Inkwell 0.2</a> is the version for it.</p>
+  <p data-note="linux" hidden>Inkwell 1.0 is for the Mac and Windows. On Linux, <a href={LEGACY_RELEASE_URL}>Inkwell 0.2</a> is the last version.</p>
+  <p data-note="windows-arm" hidden>This PC looks like Windows on ARM. Inkwell 1.0 for Windows is built for x64 only, and ARM64 is not supported in 1.0.</p>
+  <p class="legacy">Version {APP_VERSION}, free and MIT licensed. Intel Mac or Linux? <a href={LEGACY_RELEASE_URL}>Inkwell 0.2</a> is your last version.</p>
+</div>
